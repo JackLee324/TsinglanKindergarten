@@ -22,6 +22,30 @@
  *   I. server-side upload validation rejects a mislabelled payload, an HTML/SVG
  *      payload, an oversize payload, a traversal path and a zero-byte file —
  *      and leaves the previously registered file intact
+ *   J. the REAL seeded platform cover path shape still resolves
+ *
+ * INDEPENDENCE (why this suite owns everything it touches)
+ *   Every check below runs against accounts and rows THIS RUN created:
+ *
+ *     * two per-run accounts (a `principal` and a `prek_assistant`) from
+ *       tests/helpers/reset-fixtures.mjs, deleted again at the end;
+ *     * probe resource rows whose title carries a per-RUN id, so a concurrent run
+ *       of this same suite cannot find, list or delete them.
+ *
+ *   Earlier revisions shared `qlsadmin` / `prek-teacher01` and one literal probe
+ *   title prefix with every other live suite. Both are global state: the DB trigger
+ *   bumps `teachers.permissions_version` account-wide (AuthGuard then 401s every
+ *   live session of that account, in EVERY process), and `resetFixtures()` used to
+ *   revoke every session in the database. Two overlapping runs therefore produced a
+ *   fake 401 cascade (`pass=50 fail=22`) and a fake "probe resource missing"
+ *   (`0 expected 1`, `404 expected 201`) that had nothing to do with the product.
+ *
+ *   A previous attempt at this repaired the damage in-flight: a 401 was answered by
+ *   silently re-authenticating and repeating the request. That has been REMOVED. A
+ *   retry cannot distinguish "the environment moved under me" from "this endpoint
+ *   really did stop accepting my session", so it would hide exactly the class of
+ *   regression this suite exists to catch. The suite owns its state instead, so a
+ *   401 is now always a finding.
  *
  * SERVER TTL NOTE (why the expiry check is written the way it is)
  *   Proving expiry LIVE needs a token that is genuinely past its `exp`. Minting
@@ -43,15 +67,15 @@
  */
 
 const BASE = process.env.FILES_BASE || process.env.MFA_BASE || 'http://127.0.0.1:3200';
-const PW = 'TestPassw0rd!';
+
 /**
  * PER-RUN identity for the probe rows.
  *
- * The five live suites share ONE mutable database, and two copies of this suite
- * (or a suite plus a gate run) used to destroy each other: a shared literal title
- * prefix meant run B's cleanup deleted run A's probe resource, which surfaced as
- * "0 expected 1" / "404 expected 200" — a failure that says nothing about the
- * product. A per-process, per-run prefix makes each run's rows private to it.
+ * Two copies of this suite (or a suite plus a gate run) used to destroy each
+ * other: a shared literal title prefix meant run B's cleanup deleted run A's probe
+ * resource, which surfaced as "0 expected 1" / "404 expected 200" — a failure that
+ * says nothing about the product. A per-process, per-run prefix makes each run's
+ * rows private to it.
  */
 const RUN_ID = `${process.pid.toString(36)}${Date.now().toString(36)}`;
 const TITLE_PREFIX = `__files_http_probe_${RUN_ID}__`;
@@ -67,11 +91,7 @@ function store(res) {
     jar[kv.slice(0, i).trim()] = kv.slice(i + 1).trim();
   }
 }
-/**
- * One raw HTTP request. NO retry, NO recovery — `req()` wraps this.
- * `login()` must use this directly, or a recovery would recurse into a login.
- */
-async function rawReq(method, path, body, extra = {}) {
+async function req(method, path, body, extra = {}) {
   const headers = { 'content-type': 'application/json', ...extra };
   if (Object.keys(jar).length) headers['cookie'] = ch();
   if (jar['suda-csrf-token']) headers['x-suda-csrf-token'] = jar['suda-csrf-token'];
@@ -92,52 +112,6 @@ async function rawReq(method, path, body, extra = {}) {
   }
   return { status: res.status, data, headers: res.headers };
 }
-
-let currentUser = null;
-let sessionRecoveries = 0;
-const MAX_SESSION_RECOVERIES = 5;
-
-/**
- * Request with bounded SESSION RECOVERY.
- *
- * WHY: every live suite starts with `resetFixtures()`, which revokes ALL sessions
- * and bumps `permissions_version`. When two suites (or two copies of this one, or
- * a suite and a gate run) overlap, the other process invalidates this run's
- * session mid-flight, and a 401 is NOT a finding about the code under test.
- * Reproduced deliberately: two concurrent runs of this suite both collapsed into
- * a cascade of 401s (`pass=50 fail=22`).
- *
- * So a 401 on an authenticated request re-authenticates ONCE and repeats the
- * request, loudly. This does not hide a real authz regression: a genuine broken
- * session/token/permission path fails identically after re-authentication, and
- * the recovery is only attempted for 401 (never 403/400/404 — those are the
- * product behaviours this suite asserts). Repeated recoveries mean the
- * environment is wrong, and the run says so instead of reporting a fake cascade.
- */
-async function req(method, path, body, extra = {}) {
-  const res = await rawReq(method, path, body, extra);
-  const authenticating = path.startsWith('/api/auth/login') || path === '/';
-  if (res.status !== 401 || currentUser === null || authenticating) return res;
-
-  sessionRecoveries += 1;
-  console.log(
-    `  WARN  401 from ${method} ${path} — the shared fixture was reset under this run ` +
-      `(another live suite/gate is active). Re-authenticating.`,
-  );
-  if (sessionRecoveries > MAX_SESSION_RECOVERIES) {
-    throw new Error(
-      `the shared fixture was invalidated ${sessionRecoveries} times during this run: ` +
-        'another live suite or gate is running concurrently against the same database. ' +
-        'Re-run with no other suite active — this is an ENVIRONMENT failure, not a product one.',
-    );
-  }
-  const relogin = await login(currentUser);
-  if (relogin.status !== 201) {
-    console.log('  WARN  re-authentication failed; returning the original 401');
-    return res;
-  }
-  return rawReq(method, path, body, extra);
-}
 let pass = 0, fail = 0;
 function check(label, actual, expected) {
   const ok = Array.isArray(expected) ? expected.includes(actual) : actual === expected;
@@ -145,12 +119,11 @@ function check(label, actual, expected) {
   ok ? pass++ : fail++;
 }
 async function login(user) {
-  currentUser = user;
   jar = {};
-  await rawReq('GET', '/'); // obtain the suda-csrf-token cookie
-  const r = await rawReq('POST', '/api/auth/login', { username: user, password: PW });
+  await req('GET', '/'); // obtain the suda-csrf-token cookie
+  const r = await req('POST', '/api/auth/login', { username: user.username, password: user.password });
   if (r.status !== 201) {
-    console.log('  LOGIN FAILED for ' + user + ': ' + r.status + ' ' + JSON.stringify(r.data));
+    console.log('  LOGIN FAILED for ' + user.username + ': ' + r.status + ' ' + JSON.stringify(r.data));
   }
   return r;
 }
@@ -188,13 +161,18 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const COVER_ASSETS_DIR = join(ROOT, 'server', 'assets', 'prek-english-covers');
 
-const Pg = (await import('postgres')).default;
-const { resetFixtures: sharedReset } = await import('../tests/helpers/reset-fixtures.mjs');
-const sql = Pg(process.env.AUTHZ_TEST_DB, { onnotice: () => {} });
+const { startVerificationRun } = await import('../tests/helpers/reset-fixtures.mjs');
 
-// Shared fixture reset so this suite can run after any other suite, in any order.
-// See tests/helpers/reset-fixtures.mjs — and never delete __rbac_keeper.
-await sharedReset(process.env.AUTHZ_TEST_DB, { password: PW });
+/** Set when anything other than an assertion failed; forces a non-zero exit. */
+let FATAL = null;
+
+const run = await startVerificationRun(process.env.AUTHZ_TEST_DB, {
+  suite: 'files',
+  accounts: ['admin', 'low'],
+});
+const sql = run.sql;
+const admin = run.account('admin');
+const low = run.account('low');
 
 const createdResourceIds = [];
 /** A real PDF header, base64. */
@@ -212,7 +190,7 @@ try {
   // =========================================================================
   console.log('\n=== B. SIGNED, CALLER-BOUND DOWNLOAD URL ===');
   // =========================================================================
-  check('login as principal (qlsadmin)', (await login('qlsadmin')).status, 201);
+  check('login as principal', (await login(admin)).status, 201);
   const ownerId = (await req('GET', '/api/auth/me')).data?.id;
 
   const created = await req('POST', '/api/resources', {
@@ -270,9 +248,9 @@ try {
   console.log('\n=== D. CROSS-USER REPLAY IS REFUSED ===');
   // =========================================================================
   const forOwner = await mintToken(resourceId);
-  // prek-teacher01 holds resource.download + storage.download, so a refusal here
-  // cannot be an artefact of a missing permission on the route.
-  check('login as a DIFFERENT account (prek-teacher01)', (await login('prek-teacher01')).status, 201);
+  // The second account holds resource.download + storage.download, so a refusal
+  // here cannot be an artefact of a missing permission on the route.
+  check('login as a DIFFERENT account (prek_assistant)', (await login(low)).status, 201);
   const perms = (await req('GET', '/api/auth/me/permissions')).data;
   check('  -> that account holds resource.download', perms?.permissions?.includes('resource.download'), true);
   const replayed = await req('GET', `/api/files/download?token=${encodeURIComponent(forOwner.token)}`);
@@ -289,7 +267,7 @@ try {
   // =========================================================================
   console.log('\n=== E. TAMPERED / MALFORMED TOKENS ARE REFUSED ===');
   // =========================================================================
-  check('login as the token owner again', (await login('qlsadmin')).status, 201);
+  check('login as the token owner again', (await login(admin)).status, 201);
   const owned = await mintToken(resourceId);
   const [body, signature] = owned.token.split('.');
   const ownedPayload = decodeTokenPayload(owned.token);
@@ -376,7 +354,7 @@ try {
   // =========================================================================
   console.log('\n=== H. RECYCLE BIN IS REFUSED WITHOUT resource.restore ===');
   // =========================================================================
-  check('login as prek-teacher01 (no resource.restore)', (await login('prek-teacher01')).status, 201);
+  check('login as a prek_assistant (no resource.restore)', (await login(low)).status, 201);
   const teacherPerms = (await req('GET', '/api/auth/me/permissions')).data;
   check('  -> confirmed: no resource.restore', teacherPerms?.permissions?.includes('resource.restore'), false);
   check('GET /api/resources/recycle-bin is forbidden', (await req('GET', '/api/resources/recycle-bin')).status, 403);
@@ -390,7 +368,7 @@ try {
   // =========================================================================
   console.log('\n=== I. SERVER-SIDE UPLOAD VALIDATION ===');
   // =========================================================================
-  check('login as principal again', (await login('qlsadmin')).status, 201);
+  check('login as principal again', (await login(admin)).status, 201);
 
   const spoof = await req('POST', `/api/resources/${resourceId}/file`, {
     fileName: 'notes.pdf',
@@ -512,40 +490,47 @@ try {
     } catch { /* not a storybook row */ }
     if (coverPick) break;
   }
-  if (coverPick) {
-    console.log('       stored path under test: ' + coverPick.stored);
-    // The endpoint serves the cover from the SERVER's own asset tree
-    // (`dist/server/assets/...` or `dist/assets/...`, depending on __dirname vs
-    // cwd), NOT from the source tree. A concurrent `npm run build` deletes dist,
-    // so a 404 there is a BUILD artifact, not a product failure. Distinguish the
-    // two: 400 is the regression this guard exists for (the stored platform path
-    // being rejected by validation), 404 is "the asset is not on disk right now".
-    const serverSeesAsset = [
-      join(ROOT, 'dist', 'server', 'assets', 'prek-english-covers', coverPick.base),
-      join(ROOT, 'dist', 'assets', 'prek-english-covers', coverPick.base),
-    ].some((candidate) => existsSync(candidate));
-
-    let cover = await req('GET', `/api/resources/${coverPick.id}/storybook-cover/${coverPick.index}`);
-    if (cover.status === 404 && serverSeesAsset) {
-      // One bounded retry: a build that was mid-flight when the request was
-      // served can leave the file momentarily absent.
-      await sleep(1500);
-      cover = await req('GET', `/api/resources/${coverPick.id}/storybook-cover/${coverPick.index}`);
-    }
-
-    check('a leading-slash platform cover path is not REJECTED by validation', cover.status !== 400, true);
-    if (serverSeesAsset) {
-      check('  -> and the real seeded cover renders', cover.status, 200);
-    } else {
-      console.log('  NOTE  the server\'s own asset tree (dist/...) has no such cover right now, so the');
-      console.log('        byte-level 200 was NOT asserted (a build is probably in flight). The path');
-      console.log('        policy IS asserted above: 400 would mean the real platform shape was rejected.');
-    }
+  if (!coverPick) {
+    // Not "skip": with no candidate the assertion cannot run, and a guard that
+    // quietly does nothing is worse than no guard. Fail and say what to check.
+    FATAL = new Error(
+      'no seeded storybook cover with a local asset was found under ' +
+        COVER_ASSETS_DIR +
+        ', so the real-platform-path regression guard could not run. ' +
+        'Seed the curriculum (server/database/seed-curriculum.sql) and re-run.',
+    );
+    console.error('  FATAL  ' + FATAL.message);
   } else {
-    console.log('  NOTE  no seeded storybook cover with a local asset was found, so this check did');
-    console.log('        NOT run here. tests/file-security.test.mjs asserts the path shape itself');
-    console.log('        unconditionally, so the policy is still covered.');
+    console.log('       stored path under test: ' + coverPick.stored);
+
+    // The endpoint streams the cover from the SERVER's own asset tree, resolved
+    // relative to the compiled module and to the server's working directory
+    // (it is started with cwd=dist; see package.json "start:prod"). `nest build`
+    // copies server/assets/** to BOTH of the locations checked here. Never guess:
+    // if neither exists the endpoint cannot possibly answer 200, so say so as an
+    // ENVIRONMENT failure instead of reporting a product regression — and never
+    // silently downgrade the assertion.
+    const serverAssetCandidates = [
+      join(ROOT, 'dist', 'assets', 'prek-english-covers', coverPick.base),
+      join(ROOT, 'dist', 'server', 'assets', 'prek-english-covers', coverPick.base),
+    ];
+    if (!serverAssetCandidates.some((candidate) => existsSync(candidate))) {
+      FATAL = new Error(
+        'the server\'s asset tree has no ' +
+          coverPick.base +
+          ' (looked in ' +
+          serverAssetCandidates.join(' and ') +
+          '). The suite requires a completed `npm run build`; a build that is still running ' +
+          'has `rm -rf dist` in flight. This is an ENVIRONMENT failure, not a product one.',
+      );
+      console.error('  FATAL  ' + FATAL.message);
+    }
+
+    const cover = await req('GET', `/api/resources/${coverPick.id}/storybook-cover/${coverPick.index}`);
+    check('a leading-slash platform cover path is ACCEPTED (not 400)', cover.status, 200);
   }
+} catch (error) {
+  FATAL = FATAL ?? error;
 } finally {
   // -------------------------------------------------------------------------
   // CLEANUP — remove only the rows THIS suite created (a hard delete, because a
@@ -563,18 +548,22 @@ try {
     // rows are left alone, which is what makes two runs non-destructive.
     await sql`delete from resources where title like ${TITLE_PREFIX + '%'}`;
   } catch (error) {
-    console.log('  WARNING: probe cleanup failed: ' + error.message);
+    // Never swallowed: a leaked probe row is a real defect in the harness.
+    FATAL = FATAL ?? error;
+    console.error('  CLEANUP FAILED: ' + error.message);
   }
 
-  console.log('\n=== RESULT ===');
-  if (sessionRecoveries > 0) {
-    console.log(
-      '  NOTE  this run had to re-authenticate ' + sessionRecoveries + ' time(s): the shared ' +
-        'fixture was reset by another process mid-run. Results are still valid, but the ' +
-        'environment was not isolated — do not run two gates at once.',
-    );
+  const cleaned = await run.cleanup();
+  if (!cleaned.ok) {
+    FATAL = FATAL ?? cleaned.error;
+    console.error('  CLEANUP FAILED (fixture accounts): ' + cleaned.error.message);
   }
-  console.log('  pass=' + pass + ' fail=' + fail);
-  await sql.end();
-  process.exit(fail ? 1 : 0);
 }
+
+console.log('\n=== RESULT ===');
+if (FATAL) {
+  console.error('  ABORTED — the suite did not run to completion:');
+  console.error('  ' + (FATAL.stack ?? String(FATAL)).split('\n').join('\n  '));
+}
+console.log('  pass=' + pass + ' fail=' + fail);
+process.exit(FATAL || fail ? 1 : 0);

@@ -533,7 +533,11 @@ export type ScopeKind = 'ALL' | 'PROGRAM' | 'SUBJECT' | 'OWN';
 // `import type { ProgramCode } from '@shared/rbac'` call site keeps working.
 // It used to be an independent `'prek' | 'k'` union in this file — a second copy
 // of the same two tokens, i.e. exactly the drift shape ./curriculum.ts removes.
-export type { ProgramCode } from './curriculum';
+// The type-only import is separate from the re-export because `ProgramCode` is
+// used below as an annotation, and `export type { X } from ...` does not bind X
+// in this scope.
+import type { ProgramCode } from './curriculum';
+export type { ProgramCode };
 
 /**
  * A scope restriction attached to an account.

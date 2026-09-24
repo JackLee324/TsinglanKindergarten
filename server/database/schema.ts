@@ -238,6 +238,27 @@ export const resources = pgTable("resources", {
   deletedAt: customTimestamptz("deleted_at", { precision: 3 }),
   deletedBy: uuid("deleted_by"),
   purgeAfter: customTimestamptz("purge_after", { precision: 3 }),
+  // Added by migration 0008 — GENERATED ALWAYS AS (...) STORED, i.e. computed by
+  // PostgreSQL from the file columns and impossible to set or drift by hand.
+  //
+  // It exists because all 347 seeded rows have NULL file columns, so every one of
+  // them rendered an enabled "下载" button that then failed. Before this column the
+  // only way to tell a real file from an empty row was to re-derive the predicate
+  // in each query — and a hand-maintained boolean (`has_file`) would have been
+  // wrong the first time someone cleared `file_path` without clearing the flag.
+  //
+  // The predicate is deliberately "path AND bucket non-blank" rather than "any
+  // file column set": `file_name`/`file_size`/`file_type` can survive an
+  // interrupted upload on their own, and treating those as a downloadable file is
+  // exactly the misleading state this column removes. No row can be INSERTed or
+  // UPDATEd with this column named, so it cannot disagree with them.
+  // The `coalesce(..., false)` matters: both file columns are NULL on the 347
+  // seeded rows, and a bare `NULL AND NULL` would make this a three-valued flag
+  // whose NULL means "unknown" — which `has_stored_file = false` does not match.
+  // With the coalesce the column is total: NULL input means "no file".
+  hasStoredFile: boolean("has_stored_file").generatedAlwaysAs(
+    sql`(coalesce(btrim(file_path), '') <> '' AND coalesce(btrim(file_bucket_id), '') <> '')`,
+  ),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)

@@ -19,6 +19,10 @@ export { ROLE_CODES } from './rbac';
 // the six folder tokens, after curriculum.data.ts and resources.dto.ts), and the
 // subject/sub-subject/theme vocabulary was declared nowhere at all — each layer
 // spelled it itself. Do NOT re-declare any of these tokens in this file.
+// The type-only import is separate from the re-export because `FolderType` is
+// used below as an annotation, and `export type { X } from ...` does not bind X
+// in this scope.
+import type { FolderType } from './curriculum';
 export type { FolderType, CurriculumNode, ThemeDefinition } from './curriculum';
 export {
   CURRICULUM,

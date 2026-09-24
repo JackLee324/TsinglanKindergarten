@@ -206,6 +206,10 @@ export const translations = {
     'resource.noResources': '暂无资源',
     'resource.noResourcesDesc': '该资料夹下暂无已发布资源，敬请期待',
     'resource.publishedCount': '已发布资源',
+    // 资源只有元数据、没有关联存储文件时的诚实标注（迁移 0008 的 has_stored_file）。
+    // 全库 347 条种子数据都处于该状态，所以这是常态而不是异常。
+    'resource.noFile': '暂无文件',
+    'resource.noFileHint': '该资源只有课程元数据，尚未上传文件，因此无法下载',
     'storybook.weeklyStorybooks': '本周绘本封面',
 
     // 英文 Theme 子标签
@@ -551,6 +555,10 @@ export const translations = {
     'resource.noResources': 'No resources yet',
     'resource.noResourcesDesc': 'No published resources in this folder. Check back later.',
     'resource.publishedCount': 'Published',
+    // Honest label when a resource is metadata only (migration 0008's
+    // has_stored_file). All 347 seeded rows are in this state.
+    'resource.noFile': 'No file',
+    'resource.noFileHint': 'This resource holds curriculum metadata only; no file has been uploaded, so it cannot be downloaded',
     'storybook.weeklyStorybooks': 'Weekly Storybooks',
 
     // English Theme tags

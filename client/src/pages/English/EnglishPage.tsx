@@ -15,20 +15,67 @@ import {
 import { PageHeader } from '@client/src/components/ui/page-header';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import { resources as resourcesApi } from '@client/src/api';
+import type { ThemeDefinition } from '@shared/curriculum';
+import { themeDbValue, themeDefinitions } from '@shared/curriculum';
+
+/**
+ * The six K English Big Unit themes.
+ *
+ * The LIST is no longer written here. It used to be a local `THEMES` array whose
+ * `name` was sent straight to `GET /api/resources?theme=Myself`, while the
+ * database stores the Chinese theme labels (`主题1：我自己`). The comparison
+ * matched nothing, so all 44 K English rows were unreachable and every theme card
+ * showed "0 个资源" with a successful (empty) response.
+ *
+ * `themeDefinitions()` returns the canonical list from `@shared/curriculum`, the
+ * same declaration the SubjectPage theme filter and the server's boundary
+ * normaliser use. The `tags` (sub-subject chip labels) are the only per-card
+ * presentation left here, keyed by canonical theme token.
+ * Card order, labels, badges and layout are unchanged.
+ */
+const THEME_TAGS: Record<string, string[]> = {
+  myself: ['reading_comprehension', 'language_skills', 'math'],
+  the_five_senses: ['reading_comprehension', 'language_skills'],
+  community_neighborhood: ['reading_comprehension', 'language_skills', 'math'],
+  the_natural_world: ['reading_comprehension', 'language_skills'],
+  pbl_unit: ['reading_comprehension', 'language_skills', 'math'],
+  around_the_world: ['reading_comprehension', 'language_skills', 'math'],
+};
 
 interface ThemeItem {
-  name: string;
+  theme: ThemeDefinition;
+  /** Value to filter by — the exact string `resources.theme` stores. */
+  filterValue: string;
+  /** Route slug for `/k/english/:theme` (unchanged from the previous builder). */
+  slug: string;
   tags: string[];
 }
 
-const THEMES: ThemeItem[] = [
-  { name: 'Myself', tags: ['reading_comprehension', 'language_skills', 'math'] },
-  { name: 'The Five Senses', tags: ['reading_comprehension', 'language_skills'] },
-  { name: 'Community & Neighborhood', tags: ['reading_comprehension', 'language_skills', 'math'] },
-  { name: 'The Natural World', tags: ['reading_comprehension', 'language_skills'] },
-  { name: 'PBL Unit', tags: ['reading_comprehension', 'language_skills', 'math'] },
-  { name: 'Around the World', tags: ['reading_comprehension', 'language_skills', 'math'] },
-];
+const ENGLISH_PROGRAM = 'k' as const;
+const ENGLISH_SUBJECT = 'english';
+
+/** Slug builder for this page's routes — same output as the previous inline one. */
+const slugFor = (theme: ThemeDefinition): string =>
+  theme.nameEn
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+
+const THEMES: ThemeItem[] = themeDefinitions(ENGLISH_PROGRAM, ENGLISH_SUBJECT).map((theme) => {
+  const filterValue = themeDbValue(ENGLISH_PROGRAM, ENGLISH_SUBJECT, theme.key);
+  if (filterValue === null) {
+    // A theme in the canonical vocabulary with no stored value would produce a
+    // filter that can only ever match nothing. Fail rather than render a card
+    // that quietly shows zero.
+    throw new Error(`EnglishPage: canonical theme "${theme.key}" has no stored value`);
+  }
+  const tags = THEME_TAGS[theme.key];
+  if (!tags) {
+    throw new Error(`EnglishPage: no tag presentation for the canonical theme "${theme.key}"`);
+  }
+  return { theme, filterValue, slug: slugFor(theme), tags };
+});
 
 const EnglishPage: React.FC = () => {
   const { t } = useTranslation();
@@ -47,13 +94,15 @@ const EnglishPage: React.FC = () => {
               const resp = await resourcesApi.getResources({
                 program: 'k',
                 subject: 'english',
-                theme: theme.name,
+                // The STORED value, not the English display name: sending
+                // 'Myself' is what returned 0 for all 44 rows.
+                theme: theme.filterValue,
                 status: 'published',
                 pageSize: 1,
               });
-              countMap[theme.name] = resp.total;
+              countMap[theme.filterValue] = resp.total;
             } catch {
-              countMap[theme.name] = 0;
+              countMap[theme.filterValue] = 0;
             }
           }),
         );
@@ -79,16 +128,11 @@ const EnglishPage: React.FC = () => {
 
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3" data-ai-section-type="card-list">
         {THEMES.map((theme: ThemeItem) => {
-          const count = counts[theme.name] ?? 0;
-          const themeSlug = theme.name
-            .toLowerCase()
-            .replace(/[^a-z0-9\s-]/g, '')
-            .replace(/\s+/g, '-')
-            .replace(/-+/g, '-');
+          const count = counts[theme.filterValue] ?? 0;
           return (
             <Card
-              key={theme.name}
-              onClick={() => navigate(`/k/english/${themeSlug}`)}
+              key={theme.theme.key}
+              onClick={() => navigate(`/k/english/${theme.slug}`)}
               className="group cursor-pointer border-border shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-lg"
             >
               <CardContent className="p-6">
@@ -101,7 +145,7 @@ const EnglishPage: React.FC = () => {
                   </Badge>
                 </div>
                 <h3 className="text-lg font-semibold text-foreground">
-                  {theme.name}
+                  {theme.theme.nameEn}
                 </h3>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {theme.tags.map((tag: string) => (

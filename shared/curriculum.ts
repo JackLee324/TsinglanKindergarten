@@ -357,17 +357,31 @@ export const CURRICULUM: ProgramDefinition[] = [
 //   at :83-87 which produces 'myself', 'the-five-senses', 'community-neighborhood',
 //   'the-natural-world', 'pbl-unit', 'around-the-world').
 //
-// Pre-K / montessori — VERIFIED, but currently UNREACHABLE BY DESIGN OF THE ROUTES:
-//   no route sends a `theme` for Pre-K, so these are display values only. They are
-//   registered so that (a) the detector can group by them, and (b) a Pre-K theme
-//   filter can be built later without re-introducing a second vocabulary.
-//   dbValues read from the live database (23 distinct values, 245 rows).
+// Pre-K — VERIFIED, but currently NOT FILTERED BY ANY ROUTE. No shipped route sends
+//   a `theme` for Pre-K, so these entries are used for grouping and for a future
+//   Pre-K theme filter; they exist so a second vocabulary never has to be invented.
+//   Every `dbValue` below was read from the live database.
 //
-//   HONEST LIMIT: every Pre-K montessori theme is registered with ITSELF as the
-//   only accepted spelling, so a token that is not in the list is rejected. That
-//   is a completeness claim about the DATA, not about a spec — 23 values is what
-//   the database contains today. See MIGRATION_REPORT_B4.md.
+//   HONEST LIMIT: each Pre-K theme is registered with ITSELF as its only accepted
+//   spelling (there is no second spelling in the data or the code), so anything
+//   else is rejected. That is a completeness claim about the DATA, not about a
+//   spec — the list is exactly what the database contains today.
+//   See MIGRATION_REPORT_B4.md.
 // =============================================================================
+
+/** prek/virtue — the monthly virtue themes. 10 rows, all `curriculum_outline`. */
+const PREK_VIRTUE_THEMES: ThemeDefinition[] = [
+  { key: 'courtesy', name: '礼貌', nameEn: 'Courtesy', dbValues: ['礼貌'] },
+  { key: 'orderliness', name: '整洁', nameEn: 'Orderliness', dbValues: ['整洁'] },
+  { key: 'gratitude', name: '感恩', nameEn: 'Gratitude', dbValues: ['感恩'] },
+  { key: 'generosity', name: '慷慨', nameEn: 'Generosity', dbValues: ['慷慨'] },
+  { key: 'unity', name: '团结', nameEn: 'Unity', dbValues: ['团结'] },
+  { key: 'patience', name: '耐心', nameEn: 'Patience', dbValues: ['耐心'] },
+  { key: 'honesty', name: '诚实', nameEn: 'Honesty', dbValues: ['诚实'] },
+  { key: 'service', name: '服务', nameEn: 'Service', dbValues: ['服务'] },
+  { key: 'joyfulness', name: '快乐', nameEn: 'Joyfulness', dbValues: ['快乐'] },
+  { key: 'reserved_virtue', name: '预留美德主题', nameEn: 'Reserved Virtue Theme', dbValues: ['预留美德主题'] },
+];
 
 const PREK_MONTESSORI_THEMES: ThemeDefinition[] = [
   { key: 'practical_life_grace_courtesy', name: '优雅与礼仪', nameEn: 'Grace & Courtesy', dbValues: ['优雅与礼仪'] },
@@ -448,6 +462,7 @@ const K_ENGLISH_THEMES: ThemeDefinition[] = [
 export const THEME_SETS: ThemeSet[] = [
   { program: 'k', subject: 'english', themes: K_ENGLISH_THEMES },
   { program: 'prek', subject: 'montessori', themes: PREK_MONTESSORI_THEMES },
+  { program: 'prek', subject: 'virtue', themes: PREK_VIRTUE_THEMES },
 ];
 
 // =============================================================================

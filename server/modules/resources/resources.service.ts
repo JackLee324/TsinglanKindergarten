@@ -61,8 +61,109 @@ import {
   sanitizeFileName,
   FALLBACK_FILENAME,
 } from '@server/common/files/file-validation';
+import {
+  normalizeSubSubject,
+  normalizeTheme,
+  themeDbValue,
+} from '@shared/curriculum';
 
 const ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
+
+/**
+ * A request's curriculum address, resolved to canonical tokens.
+ *
+ * `subSubject` and `theme` are the two values the client used to send in its own
+ * spelling (`practical-life`, `Myself`) while the database stored
+ * `practical_life` / `主题1：我自己`. Comparing those directly matched ZERO rows
+ * and returned a successful, empty page — verified: the live database holds 80
+ * rows at `prek/montessori/practical_life`, 43 at `prek/montessori/english_language`
+ * and 44 at `k/english` with a non-null theme, and none of them was reachable.
+ *
+ * `theme` is carried in TWO forms because they answer different questions:
+ *   * `themeToken` — the canonical slug, for comparing and for echoing back;
+ *   * `themeStoredValue` — the exact string to put in `WHERE theme = …`, which is
+ *     what makes the fix backward compatible: no row is rewritten, the query is
+ *     simply translated into the spelling the rows already use.
+ */
+interface ResolvedScope {
+  program?: ProgramCode;
+  subject?: string;
+  subSubject?: string;
+  themeToken?: string;
+  themeStoredValue?: string;
+}
+
+/**
+ * Normalise the curriculum part of an incoming request, ONCE, at the boundary.
+ *
+ * Throws BadRequestException on a value it does not recognise. That is the whole
+ * point: the previous code accepted anything, matched nothing, and returned
+ * `{items: [], total: 0}` with HTTP 200, so a teacher saw "暂无资源" for a folder
+ * that holds 80 resources and the API said nothing was wrong. An unknown value is
+ * a caller error and must be reported as one.
+ *
+ * An ABSENT value stays absent (a filter that was not requested is not a filter).
+ * An EMPTY STRING is treated as absent, because the client's Select controls emit
+ * `''` for "all" (SubjectPage's semester/week selects do exactly this).
+ */
+function resolveScope(params: {
+  program?: string;
+  subject?: string;
+  subSubject?: string;
+  theme?: string;
+}): ResolvedScope {
+  const raw = (v: string | undefined): string | undefined => {
+    if (v === undefined || v === null) return undefined;
+    const s = String(v).trim();
+    return s === '' ? undefined : s;
+  };
+
+  const program = raw(params.program) as ProgramCode | undefined;
+  const subject = raw(params.subject);
+  const subSubject = raw(params.subSubject);
+  const theme = raw(params.theme);
+
+  const out: ResolvedScope = { program, subject };
+
+  if (subSubject === undefined) return resolveTheme(out, theme);
+
+  // A sub-subject without its subject cannot be resolved: 'math' exists under
+  // prek/montessori AND under k/english, so guessing would pick one arbitrarily.
+  if (program === undefined || subject === undefined) {
+    throw new BadRequestException(
+      `无法解析子科目 "${subSubject}"：缺少 program 或 subject 上下文。`,
+    );
+  }
+
+  const canonical = normalizeSubSubject(program, subject, subSubject);
+  if (canonical === null) {
+    throw new BadRequestException(
+      `未知的子科目 "${subSubject}"（program=${program}, subject=${subject}）。` +
+        '可用的规范标识见 GET /api/curriculum/structure。',
+    );
+  }
+  out.subSubject = canonical;
+  return resolveTheme(out, theme);
+}
+
+/** Second half of resolveScope: translate the theme into its stored spelling. */
+function resolveTheme(scope: ResolvedScope, theme: string | undefined): ResolvedScope {
+  if (theme === undefined) return scope;
+  if (scope.program === undefined || scope.subject === undefined) {
+    throw new BadRequestException(
+      `无法解析主题 "${theme}"：缺少 program 或 subject 上下文。`,
+    );
+  }
+  const token = normalizeTheme(scope.program, scope.subject, theme);
+  const stored = themeDbValue(scope.program, scope.subject, theme);
+  if (token === null || stored === null) {
+    throw new BadRequestException(
+      `未知的主题 "${theme}"（program=${scope.program}, subject=${scope.subject}）。` +
+        '可用的规范标识见 GET /api/curriculum/structure。',
+    );
+  }
+  return { ...scope, themeToken: token, themeStoredValue: stored };
+}
 
 /**
  * Retention window for the recycle bin.
@@ -124,6 +225,17 @@ export interface RegisteredFile {
   detectedKind: string;
   fileBucketId: string;
   filePath: string;
+  /**
+   * The database's own verdict on whether the row now points at a real file
+   * (`resources.has_stored_file`, migration 0008), read back from the row the
+   * UPDATE just wrote rather than inferred from the request.
+   *
+   * Reporting it here matters for the same reason it matters on the list
+   * responses: the upload UI has just told the teacher "uploaded", and it must be
+   * able to say whether that produced a downloadable resource. It is read from
+   * `.returning(...)`, so it cannot disagree with what was stored.
+   */
+  hasFile: boolean;
 }
 
 
@@ -558,6 +670,12 @@ export class ResourcesService {
     const pageSize = params.pageSize ?? 20;
     const offset = (page - 1) * pageSize;
 
+    // Boundary: resolve program/subject/sub-subject/theme to canonical tokens
+    // BEFORE any comparison. Everything below this line may safely assume
+    // `scope.subSubject` is a stored value and `scope.themeStoredValue` is the
+    // exact string `resources.theme` holds. An unknown value throws 400 here.
+    const scope = resolveScope(params);
+
     const isAdmin = await this.isAdminTeacher(currentTeacherId);
 
     // Soft delete is excluded for EVERY caller, administrators included: a deleted
@@ -570,18 +688,18 @@ export class ResourcesService {
     if (!isAdmin) {
       const permConditions = await this.buildPermissionCondition(
         currentTeacherId,
-        params.program as ProgramCode | undefined,
-        params.subject,
-        params.subSubject,
+        scope.program,
+        scope.subject,
+        scope.subSubject,
       );
       if (permConditions === null) {
         // 明确指定了科目但无权限：返回 403
-        if (params.program && params.subject) {
+        if (scope.program && scope.subject) {
           await this.logAudit({
             action: 'permission_denied',
             teacherId: currentTeacherId,
-            program: params.program,
-            subject: params.subject,
+            program: scope.program,
+            subject: scope.subject,
             success: false,
             errorMessage: '无科目查看权限',
             ipAddress: ip,
@@ -594,22 +712,22 @@ export class ResourcesService {
       }
       conditions.push(permConditions);
       // 按请求参数过滤 program/subject/subSubject
-      if (params.program) {
-        conditions.push(eq(resources.program, params.program));
-        if (params.subject) {
-          conditions.push(eq(resources.subject, params.subject));
+      if (scope.program) {
+        conditions.push(eq(resources.program, scope.program));
+        if (scope.subject) {
+          conditions.push(eq(resources.subject, scope.subject));
         }
-        if (params.subSubject) {
-          conditions.push(eq(resources.subSubject, params.subSubject));
+        if (scope.subSubject) {
+          conditions.push(eq(resources.subSubject, scope.subSubject));
         }
       }
-    } else if (params.program) {
-      conditions.push(eq(resources.program, params.program));
-      if (params.subject) {
-        conditions.push(eq(resources.subject, params.subject));
+    } else if (scope.program) {
+      conditions.push(eq(resources.program, scope.program));
+      if (scope.subject) {
+        conditions.push(eq(resources.subject, scope.subject));
       }
-      if (params.subSubject) {
-        conditions.push(eq(resources.subSubject, params.subSubject));
+      if (scope.subSubject) {
+        conditions.push(eq(resources.subSubject, scope.subSubject));
       }
     }
     if (params.folderType) {
@@ -621,8 +739,11 @@ export class ResourcesService {
     if (params.weekNumber !== undefined) {
       conditions.push(eq(resources.weekNumber, params.weekNumber));
     }
-    if (params.theme) {
-      conditions.push(eq(resources.theme, params.theme));
+    if (scope.themeStoredValue) {
+      // Compare against the STORED spelling, not the requested one. This is what
+      // makes `theme=myself` find the rows that hold `主题1：我自己` without any of
+      // those rows being rewritten — see resolveScope().
+      conditions.push(eq(resources.theme, scope.themeStoredValue));
     }
 
     // 状态过滤逻辑
@@ -719,6 +840,7 @@ export class ResourcesService {
         fileName: item.fileName ?? undefined,
         fileSize: item.fileSize ?? undefined,
         fileType: item.fileType ?? undefined,
+        hasFile: item.hasStoredFile ?? false,
         version: item.version,
         status: item.status as Resource['status'],
         uploaderId: item.uploaderId,
@@ -757,16 +879,19 @@ export class ResourcesService {
     const pageSize = params.pageSize ?? 20;
     const offset = (page - 1) * pageSize;
 
+    // Same boundary normalisation as listResources(): a guest request is a request.
+    const scope = resolveScope(params);
+
     // Public/guest listing: published AND not soft-deleted.
     const conditions = [this.activeOnly()];
 
-    if (params.program) {
-      conditions.push(eq(resources.program, params.program));
-      if (params.subject) {
-        conditions.push(eq(resources.subject, params.subject));
+    if (scope.program) {
+      conditions.push(eq(resources.program, scope.program));
+      if (scope.subject) {
+        conditions.push(eq(resources.subject, scope.subject));
       }
-      if (params.subSubject) {
-        conditions.push(eq(resources.subSubject, params.subSubject));
+      if (scope.subSubject) {
+        conditions.push(eq(resources.subSubject, scope.subSubject));
       }
     }
     if (params.folderType) {
@@ -778,8 +903,8 @@ export class ResourcesService {
     if (params.weekNumber !== undefined) {
       conditions.push(eq(resources.weekNumber, params.weekNumber));
     }
-    if (params.theme) {
-      conditions.push(eq(resources.theme, params.theme));
+    if (scope.themeStoredValue) {
+      conditions.push(eq(resources.theme, scope.themeStoredValue));
     }
 
     conditions.push(eq(resources.status, 'published'));
@@ -842,6 +967,7 @@ export class ResourcesService {
       fileName: item.fileName ?? undefined,
       fileSize: item.fileSize ?? undefined,
       fileType: item.fileType ?? undefined,
+      hasFile: item.hasStoredFile ?? false,
       version: item.version,
       status: item.status as Resource['status'],
       uploaderId: item.uploaderId,
@@ -897,6 +1023,7 @@ export class ResourcesService {
       fileName: resource.fileName ?? undefined,
       fileSize: resource.fileSize ?? undefined,
       fileType: resource.fileType ?? undefined,
+      hasFile: resource.hasStoredFile ?? false,
       version: resource.version,
       status: resource.status as Resource['status'],
       uploaderId: resource.uploaderId,
@@ -1118,6 +1245,7 @@ export class ResourcesService {
       fileName: resource.fileName ?? undefined,
       fileSize: resource.fileSize ?? undefined,
       fileType: resource.fileType ?? undefined,
+      hasFile: resource.hasStoredFile ?? false,
       version: resource.version,
       status: resource.status as Resource['status'],
       uploaderId: resource.uploaderId,
@@ -1142,12 +1270,19 @@ export class ResourcesService {
     currentTeacherId: string,
     ip?: string,
   ): Promise<Resource> {
+    // Boundary normalisation, exactly as on the read paths: an UPLOAD is how a row
+    // acquires its spelling in the first place, so letting a create accept
+    // `practical-life` while every read stores `practical_life` would keep
+    // producing the unreachable rows this phase removes. Unknown values throw 400
+    // rather than being written.
+    const scope = resolveScope(dto);
+
     // 科目上传权限校验
     const canUpload = await this.checkSubjectPermission(
       currentTeacherId,
-      dto.program,
-      dto.subject,
-      dto.subSubject,
+      scope.program ?? dto.program,
+      scope.subject ?? dto.subject,
+      scope.subSubject,
       'upload',
     );
     if (!canUpload) {
@@ -1173,13 +1308,15 @@ export class ResourcesService {
       const insertValues = {
         title: dto.title,
         titleEn: dto.titleEn,
-        program: dto.program,
-        subject: dto.subject,
-        subSubject: dto.subSubject,
+        program: scope.program ?? dto.program,
+        subject: scope.subject ?? dto.subject,
+        subSubject: scope.subSubject,
         folderType: dto.folderType,
         semester: dto.semester,
         weekNumber: dto.weekNumber,
-        theme: dto.theme,
+        // The STORED spelling, so a resource created through the UI lands in the
+        // same bucket of rows the theme filter will later look in.
+        theme: scope.themeStoredValue,
         description: dto.description,
         fileBucketId: dto.fileBucketId,
         filePath: dto.filePath,
@@ -1225,6 +1362,7 @@ export class ResourcesService {
         fileName: newResource.fileName ?? undefined,
         fileSize: newResource.fileSize ?? undefined,
         fileType: newResource.fileType ?? undefined,
+        hasFile: newResource.hasStoredFile ?? false,
         version: newResource.version,
         status: newResource.status as Resource['status'],
         uploaderId: newResource.uploaderId,
@@ -1279,7 +1417,18 @@ export class ResourcesService {
     if (dto.description !== undefined) patch.description = dto.description;
     if (dto.semester !== undefined) patch.semester = dto.semester;
     if (dto.weekNumber !== undefined) patch.weekNumber = dto.weekNumber;
-    if (dto.theme !== undefined) patch.theme = dto.theme;
+    if (dto.theme !== undefined) {
+      // The program/subject come from the ROW, not the request: `theme` is only
+      // interpretable inside a subject's vocabulary, and this endpoint does not
+      // accept a program/subject change. Resolving against the row is what keeps
+      // an editor's `theme=myself` stored as the `主题1：我自己` its siblings use.
+      const themeScope = resolveScope({
+        program: resource.program,
+        subject: resource.subject,
+        theme: dto.theme,
+      });
+      patch.theme = themeScope.themeStoredValue;
+    }
     if (dto.fileBucketId !== undefined) patch.fileBucketId = dto.fileBucketId;
     if (dto.filePath !== undefined) patch.filePath = dto.filePath;
     if (dto.fileName !== undefined) patch.fileName = dto.fileName;
@@ -1328,6 +1477,7 @@ export class ResourcesService {
         fileName: updatedResource.fileName ?? undefined,
         fileSize: updatedResource.fileSize ?? undefined,
         fileType: updatedResource.fileType ?? undefined,
+        hasFile: updatedResource.hasStoredFile ?? false,
         version: updatedResource.version,
         status: updatedResource.status as Resource['status'],
         uploaderId: updatedResource.uploaderId,
@@ -1557,6 +1707,7 @@ export class ResourcesService {
         fileName: item.fileName ?? undefined,
         fileSize: item.fileSize ?? undefined,
         fileType: item.fileType ?? undefined,
+        hasFile: item.hasStoredFile ?? false,
         version: item.version,
         status: item.status as Resource['status'],
         uploaderId: item.uploaderId,
@@ -1800,7 +1951,11 @@ export class ResourcesService {
         filePath: bucketRelativePath,
       })
       .where(and(eq(resources.id, resourceId), this.activeOnly()))
-      .returning({ id: resources.id, fileName: resources.fileName });
+      .returning({
+        id: resources.id,
+        fileName: resources.fileName,
+        hasStoredFile: resources.hasStoredFile,
+      });
 
     if (updated.length === 0) {
       throw new NotFoundException('资源不存在');
@@ -1830,6 +1985,9 @@ export class ResourcesService {
       detectedKind: validation.kind,
       fileBucketId: input.fileBucketId,
       filePath: bucketRelativePath,
+      // From the row the UPDATE returned — not from `validation` or `input`, so a
+      // response can never claim a file that the column does not agree with.
+      hasFile: updated[0].hasStoredFile ?? false,
     };
   }
 
@@ -1917,6 +2075,7 @@ export class ResourcesService {
         fileName: updatedResource.fileName ?? undefined,
         fileSize: updatedResource.fileSize ?? undefined,
         fileType: updatedResource.fileType ?? undefined,
+        hasFile: updatedResource.hasStoredFile ?? false,
         version: updatedResource.version,
         status: updatedResource.status as Resource['status'],
         uploaderId: updatedResource.uploaderId,
@@ -1999,6 +2158,7 @@ export class ResourcesService {
         fileName: item.fileName ?? undefined,
         fileSize: item.fileSize ?? undefined,
         fileType: item.fileType ?? undefined,
+        hasFile: item.hasStoredFile ?? false,
         version: item.version,
         status: item.status as Resource['status'],
         uploaderId: item.uploaderId,
@@ -2120,7 +2280,16 @@ export class ResourcesService {
     }
 
     // 检查文件信息
-    if (!resource.fileBucketId || !resource.filePath) {
+    //
+    // `hasStoredFile` is the database's own derivation of "this row points at a
+    // file" (migration 0008: `file_path` AND `file_bucket_id` non-blank). It is
+    // read for the DECISION and the two columns are still re-read for the VALUES,
+    // because the two must never be able to disagree: the flag decides whether a
+    // download is possible, and the columns are what the storage client is handed.
+    // Checking the flag alone would trust a derived value for an authorization-ish
+    // decision; checking the columns alone is what the code did before, and it left
+    // the UI unable to tell an empty row from a real one.
+    if (!resource.hasStoredFile || !resource.fileBucketId || !resource.filePath) {
       await this.logAudit({
         action: 'resource_download_denied',
         teacherId: currentTeacherId,
@@ -2131,7 +2300,14 @@ export class ResourcesService {
         success: false,
         errorMessage: '资源文件不存在',
         ipAddress: ip,
+        detail:
+          '该资源只有元数据，没有关联的存储文件（file_path / file_bucket_id 为空），' +
+          '因此不可下载。',
       });
+      // The message names the actual situation so a teacher is not left thinking
+      // the download is broken. The status stays 404: the FILE does not exist, even
+      // though the resource row does. There is deliberately no fallback that serves
+      // something else, and no placeholder file is ever invented.
       throw new NotFoundException('资源文件不存在');
     }
 

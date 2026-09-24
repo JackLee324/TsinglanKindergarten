@@ -65,6 +65,24 @@ export const ResourceCard: React.FC<ResourceCardProps> = ({
 
   const isNotFilled = resource.title === '待补充' || resource.title === 'Not filled in source';
 
+  /**
+   * Whether this resource can actually be downloaded.
+   *
+   * `hasFile` is computed by the DATABASE (migration 0008: a generated column over
+   * `file_path` and `file_bucket_id`), not by the UI and not by a hand-maintained
+   * flag. Before it existed the download button was enabled on all 347 seeded rows
+   * — every one of which has NULL file columns — so clicking it always failed with
+   * a 404 and the page had no way to say why.
+   *
+   * `false` and `undefined` are treated the same on purpose: a response that does
+   * not carry the field cannot claim the file exists, and offering a download that
+   * is guaranteed to fail is the misleading behaviour being removed. The server
+   * independently refuses with a 404 (资源文件不存在), so this is honesty about the
+   * state, not the enforcement of it.
+   */
+  const hasFile = resource.hasFile === true;
+  const canDownload = hasFile && !!resource.fileName && resource.status === 'published';
+
   const storybooks = React.useMemo(() => {
     if (!resource.description) return [];
     try {
@@ -95,7 +113,9 @@ export const ResourceCard: React.FC<ResourceCardProps> = ({
   }, [resource.weekNumber, language, t]);
 
   const handleDownload = async (): Promise<void> => {
-    if (downloading || !resource.fileName) return;
+    // Guarded by the same predicate that disables the button, so a programmatic
+    // click on a file-less resource cannot start a request that must 404.
+    if (downloading || !canDownload) return;
     setDownloading(true);
     try {
       // Navigate rather than call through axios: the endpoint answers with a 302
@@ -166,20 +186,29 @@ export const ResourceCard: React.FC<ResourceCardProps> = ({
               </div>
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDownload}
-            disabled={downloading || !resource.fileName || resource.status !== 'published'}
-            className="shrink-0"
-          >
-            {downloading ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Download className="size-4" />
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDownload}
+              disabled={downloading || !canDownload}
+              // The label is unchanged (no redesign); when there is no file the
+              // button is disabled and the badge below says why.
+              title={canDownload ? undefined : t('resource.noFileHint')}
+            >
+              {downloading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Download className="size-4" />
+              )}
+              {t('btn.download')}
+            </Button>
+            {!hasFile && (
+              <Badge variant="outline" className="text-xs text-muted-foreground">
+                {t('resource.noFile')}
+              </Badge>
             )}
-            {t('btn.download')}
-          </Button>
+          </div>
         </div>
         {hasStorybooks && (
           <button

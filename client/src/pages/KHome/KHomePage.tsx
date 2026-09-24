@@ -11,33 +11,48 @@ import { curriculum as curriculumApi, resources as resourcesApi } from '@client/
 import type { ProgramStructure, SubjectNode } from '@shared/api.interface';
 
 interface SubjectCardInfo {
+  /** i18n / identity key. May be an alias of the canonical subject token. */
   key: string;
+  /** Canonical subject token, used for API queries. */
+  canonical: string;
   path: string;
   icon: React.ReactNode;
   iconBg: string;
 }
 
+/**
+ * The four K subject cards. `key` is an ALIAS of the canonical subject token and
+ * is kept because it is what `nav.<key>` / `subject.<key>Desc` i18n lookups and
+ * the card identity use; the canonical tokens are `virtue`, `chinese`, `english`
+ * and `physical_education` (see @shared/curriculum). The count request below
+ * sends `sub.canonical`, not `sub.key`.
+ */
 const K_SUBJECTS: SubjectCardInfo[] = [
   {
     key: 'virtue',
+    canonical: 'virtue',
     path: '/k/virtue',
     icon: <Heart className="size-6" />,
     iconBg: 'bg-pink-100 text-pink-500',
   },
   {
     key: 'chinese',
+    canonical: 'chinese',
     path: '/k/chinese',
     icon: <BookOpen className="size-6" />,
     iconBg: 'bg-red-100 text-red-500',
   },
   {
     key: 'english',
+    canonical: 'english',
     path: '/k/english',
     icon: <Languages className="size-6" />,
     iconBg: 'bg-blue-100 text-blue-500',
   },
   {
+    // canonical: physical_education
     key: 'pe',
+    canonical: 'physical_education',
     path: '/k/pe',
     icon: <Dumbbell className="size-6" />,
     iconBg: 'bg-orange-100 text-orange-500',
@@ -65,13 +80,15 @@ const KHomePage: React.FC = () => {
             try {
               const resp = await resourcesApi.getResources({
                 program: 'k',
-                subject: sub.key,
+                // The CANONICAL subject token: the API and the database compare
+                // against `physical_education`, and asking for 'pe' returned 0.
+                subject: sub.canonical,
                 status: 'published',
                 pageSize: 1,
               });
-              countMap[sub.key] = resp.total;
+              countMap[sub.canonical] = resp.total;
             } catch {
-              countMap[sub.key] = 0;
+              countMap[sub.canonical] = 0;
             }
           }),
         );
@@ -109,7 +126,7 @@ const KHomePage: React.FC = () => {
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4" data-ai-section-type="card-list">
         {K_SUBJECTS.map((sub: SubjectCardInfo) => {
           const subjectNode = findSubject(sub.key);
-          const count = counts[sub.key] ?? 0;
+          const count = counts[sub.canonical] ?? 0;
           return (
             <Card
               key={sub.key}

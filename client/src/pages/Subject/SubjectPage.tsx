@@ -17,28 +17,19 @@ import { ResourceCard } from '@client/src/components/resource-card';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import { resources as resourcesApi } from '@client/src/api';
 import type { FolderType, Resource } from '@shared/api.interface';
+import {
+  FOLDER_TYPES,
+  findNode,
+  findTheme,
+  normalizeSubSubject,
+  normalizeTheme,
+  themeDbValue,
+} from '@shared/curriculum';
 
-const FOLDER_KEYS: FolderType[] = [
-  'curriculum_outline',
-  'weekly_plans',
-  'courseware',
-  'materials',
-  'observation',
-  'research_archive',
-];
+const FOLDER_KEYS: FolderType[] = FOLDER_TYPES;
 
 const SEMESTER_OPTIONS = ['S1', 'S2'];
 const WEEK_OPTIONS = Array.from({ length: 20 }, (_, i) => i + 1);
-
-// Theme slug → name mapping (must match EnglishPage THEMES)
-const THEME_SLUG_MAP: Record<string, string> = {
-  myself: 'Myself',
-  'the-five-senses': 'The Five Senses',
-  'community-neighborhood': 'Community & Neighborhood',
-  'the-natural-world': 'The Natural World',
-  'pbl-unit': 'PBL Unit',
-  'around-the-world': 'Around the World',
-};
 
 const SubjectPage: React.FC = () => {
   const { t, language } = useTranslation();
@@ -56,61 +47,85 @@ const SubjectPage: React.FC = () => {
   const segments = pathname.split('/').filter(Boolean);
   const program = segments[0] === 'k' ? 'k' : 'prek';
   const subject = segments[1] ?? '';
-  const subSubject = params.sub;
-  const theme = params.theme;
+  const subSubjectRaw = params.sub;
+  const themeRaw = params.theme;
 
-  const themeName = theme ? THEME_SLUG_MAP[theme] ?? theme : undefined;
+  /**
+   * The two route parameters, resolved to canonical tokens ONCE.
+   *
+   * `sub` arrives in whatever spelling the linking page used (the Montessori and
+   * PE/Chinese card keys) and `theme` arrives as an English route slug. Both used
+   * to be forwarded to the API verbatim, which is why `/prek/montessori/practical-life`
+   * asked the database for a `sub_subject` value that does not exist and showed an
+   * empty folder holding 80 rows.
+   *
+   * `normalizeSubSubject` / `normalizeTheme` accept every spelling that has ever
+   * been linked to (see @shared/curriculum) and return null for anything else.
+   * A null is reported in the console rather than being sent as a query that can
+   * only ever match nothing — the old behaviour made a typo indistinguishable
+   * from an empty folder.
+   */
+  const subSubject = useMemo(() => {
+    if (!subSubjectRaw) return undefined;
+    const token = normalizeSubSubject(program, subject, subSubjectRaw);
+    if (token === null) {
+      logger.error(
+        'Unknown sub-subject in route',
+        `program=${program} subject=${subject} sub=${subSubjectRaw}`,
+      );
+      return undefined;
+    }
+    return token;
+  }, [program, subject, subSubjectRaw]);
+
+  const themeToken = useMemo(() => {
+    if (!themeRaw) return undefined;
+    const token = normalizeTheme(program, subject, themeRaw);
+    if (token === null) {
+      logger.error(
+        'Unknown theme in route',
+        `program=${program} subject=${subject} theme=${themeRaw}`,
+      );
+      return undefined;
+    }
+    return token;
+  }, [program, subject, themeRaw]);
+
+  // What actually goes on the wire: the exact string `resources.theme` stores,
+  // so the 44 existing K English rows are found without any row being rewritten.
+  const themeFilterValue = themeToken
+    ? themeDbValue(program, subject, themeToken) ?? undefined
+    : undefined;
+
+  // Label for the theme route. Themes are labelled in English (the K English
+  // subject keeps its English terms in both UI languages), which is what the
+  // previous THEME_SLUG_MAP produced — the difference is that this name is read
+  // from the canonical definition instead of a second hand-written table.
+  const themeDisplayName = themeToken
+    ? findTheme(program, subject, themeToken)?.nameEn ?? themeRaw ?? ''
+    : undefined;
 
   const displayName = useMemo(() => {
-    if (themeName) return themeName;
+    if (themeDisplayName) return themeDisplayName;
     if (subSubject) {
-      // Try known sub-subject keys, fallback to the raw sub param
-      const knownKeys: Record<string, string> = {
-        'practical-life': 'subject.practicalLife',
-        sensorial: 'subject.sensorial',
-        math: 'nav.montessori.math',
-        'english-language': 'subject.englishLanguage',
-        'chinese-language': 'subject.chineseLanguage',
-        culture: 'subject.culture',
-        'ancient-poetry': 'subject.ancientPoetry',
-        'picture-books': 'subject.pictureBooks',
-        drama: 'subject.drama',
-        stem: 'subject.stem',
-        'pe-special': 'subject.peSpecial',
-        sports: 'subject.sports',
-        'rock-climbing': 'subject.rockClimbing',
-      };
-      const key = knownKeys[subSubject];
-      return key ? t(key as Parameters<typeof t>[0]) : subSubject;
+      const node = findNode(program, subject, subSubject);
+      return node?.i18nNameKey
+        ? t(node.i18nNameKey as Parameters<typeof t>[0])
+        : node?.name ?? subSubject;
     }
     const key = `subject.${subject}`;
     return t(key as Parameters<typeof t>[0]);
-  }, [subject, subSubject, themeName, t]);
+  }, [subject, subSubject, themeDisplayName, program, t]);
 
   const displayDesc = useMemo(() => {
-    if (themeName) return t('subject.englishDesc');
+    if (themeToken) return t('subject.englishDesc');
     if (subSubject) {
-      const descKeys: Record<string, string> = {
-        'practical-life': 'subject.practicalLifeDesc',
-        sensorial: 'subject.sensorialDesc',
-        math: 'subject.mathDesc',
-        'english-language': 'subject.englishLanguageDesc',
-        'chinese-language': 'subject.chineseLanguageDesc',
-        culture: 'subject.cultureDesc',
-        'ancient-poetry': 'subject.ancientPoetryDesc',
-        'picture-books': 'subject.pictureBooksDesc',
-        drama: 'subject.dramaDesc',
-        stem: 'subject.stemDesc',
-        'pe-special': 'subject.peSpecialDesc',
-        sports: 'subject.sportsDesc',
-        'rock-climbing': 'subject.rockClimbingDesc',
-      };
-      const key = descKeys[subSubject];
-      return key ? t(key as Parameters<typeof t>[0]) : '';
+      const node = findNode(program, subject, subSubject);
+      return node?.i18nDescKey ? t(node.i18nDescKey as Parameters<typeof t>[0]) : '';
     }
     const descKey = `subject.${subject}Desc`;
     return t(descKey as Parameters<typeof t>[0]);
-  }, [subject, subSubject, themeName, t]);
+  }, [subject, subSubject, themeToken, program, t]);
 
   const semesterLabel = (s: string): string => {
     if (s === 'S1') return t('semester.s1');
@@ -138,7 +153,10 @@ const SubjectPage: React.FC = () => {
         if (program) paramsObj.program = program;
         if (subject) paramsObj.subject = subject;
         if (subSubject) paramsObj.subSubject = subSubject;
-        if (themeName) paramsObj.theme = themeName;
+        // The STORED spelling, not the route slug. Sending 'Myself' here is what
+        // made all 44 K English resources unreachable; 'themeFilterValue' is the
+        // value those rows actually hold (e.g. 主题1：我自己).
+        if (themeFilterValue) paramsObj.theme = themeFilterValue;
         if (semester) paramsObj.semester = semester;
         if (weekNumber) paramsObj.weekNumber = Number(weekNumber);
 
@@ -155,7 +173,7 @@ const SubjectPage: React.FC = () => {
     return () => {
       mounted = false;
     };
-  }, [activeFolder, program, subject, subSubject, theme, semester, weekNumber]);
+  }, [activeFolder, program, subject, subSubject, themeFilterValue, semester, weekNumber]);
 
   return (
     <div>
@@ -251,7 +269,7 @@ const SubjectPage: React.FC = () => {
                         resource={r}
                         showSemester={!!semester}
                         showWeek={!!weekNumber}
-                        showTheme={!!theme}
+                        showTheme={!!themeToken}
                         showStorybooksDefault={activeFolder === 'weekly_plans'}
                       />
                     ))}
