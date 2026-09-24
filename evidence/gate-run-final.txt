@@ -1,0 +1,16 @@
+=== 自动化测试 ===
+  npm test                 # tests 102 # pass 102 # fail 0 
+=== 类型检查 ===
+  typecheck server         PASS
+  typecheck client         PASS
+=== 构建 ===
+  npm run build            PASS
+=== 前后端 API 契约（静态检查，无需运行服务） ===
+  api-contracts             matched
+=== HTTP 验证套件（需要运行中的服务） ===
+  authz-http               pass=24 fail=0
+  hardening                pass=10 fail=0
+  mfa                      pass=36 fail=0
+  security-headers         pass=20 fail=0
+
+  ✅ 全部通过
