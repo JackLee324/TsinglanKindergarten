@@ -10,6 +10,10 @@ import {
   resolveTrustProxySetting,
   describeTrustProxy,
 } from './common/http/client-ip';
+import {
+  securityHeaders,
+  describeSecurityHeaders,
+} from './common/http/security-headers.middleware';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -60,6 +64,23 @@ async function bootstrap() {
   // header and `req.ip` is the unforgeable socket address.
   app.set('trust proxy', trustProxy);
 
+  // ---------------------------------------------------------------------------
+  // Security response headers (audit finding Q-6)
+  // ---------------------------------------------------------------------------
+  // `configureApp()` does NOT install `helmet`, and neither this project's
+  // `package.json` nor the platform package depends on it (verified). Before this
+  // middleware the application sent NO security headers at all: no nosniff, no
+  // frame protection, no referrer policy, no HSTS, no CSP - and it advertised
+  // itself via `X-Powered-By`.
+  //
+  // Deliberately dependency-free; see security-headers.middleware.ts for why
+  // installing `helmet` is unsafe for this repository's lockfile.
+  //
+  // Registered with `app.use()` BEFORE `app.listen()` because Nest mounts its
+  // router during listen; middleware added afterwards would not run for matched
+  // routes.
+  app.use(securityHeaders);
+
   const host = process.env.SERVER_HOST || 'localhost';
   const port = Number(process.env.SERVER_PORT || '3000');
 
@@ -73,6 +94,7 @@ async function bootstrap() {
   logger.log(`Server running on ${host}:${port}`);
   logger.log(`API endpoints ready at http://${host}:${port}/api`);
   logger.log(`trust proxy: ${describeTrustProxy(trustProxy)}`);
+  logger.log(describeSecurityHeaders());
   logger.log(
     `environment: NODE_ENV=${process.env.NODE_ENV ?? 'undefined'} ` +
       `HTTPS_ENABLED=${process.env.HTTPS_ENABLED ?? 'unset'}`,
