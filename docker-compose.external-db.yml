@@ -1,0 +1,37 @@
+# =============================================================================
+# docker-compose.external-db.yml — 用外部（托管）PostgreSQL 时叠加这个文件
+# =============================================================================
+#
+# 用途：数据库不由 compose 管理（云数据库 / 已有 DBA 管的 PG 实例）时使用。
+#
+#   docker compose -f docker-compose.yml -f docker-compose.external-db.yml \
+#     --env-file .env.deploy up -d --build
+#
+# 它做两件事：
+#   1. 用 `profiles` 把自带的 postgres 服务**移出默认启动集**
+#      （不用 profiles 就得靠 operator 记住别 `up postgres`，那是靠人记性）。
+#   2. 解除 app 对 postgres 的 depends_on，否则 compose 会因为依赖服务
+#      未启动而拒绝启动 app。
+#
+# 外部库需要满足的条件（全部来自 DEPLOYMENT.md《妙搭平台专章》与迁移文件）：
+#   * 连接串以 SUDA_DATABASE_URL 形式提供；
+#   * 连接串里**不要**带 `?schema=xxx`，除非你确实按该后缀创建了角色：
+#     平台按 `schema` 参数推导角色名 `anon_<schema>` / `authenticated_<schema>` /
+#     `service_role_<schema>`（nestjs-datapaas/dist/index.js:692-702 与
+#     790-798 实测确认）；不带该参数则推导为**空后缀**角色 `anon_`、
+#     `authenticated_`、`service_role_` —— 这正是 migration 0004 创建并授权的三个。
+#   * 应用连接角色必须是这三个角色的成员（`GRANT anon_ TO <app_role>` 等），
+#     否则平台每请求的 `SET LOCAL ROLE` 会以 42501 失败，表现为
+#     **登录报"用户名或密码错误"且不写审计**（migration 0004:48-54 有说明）。
+#     `node scripts/db-setup-app-role.mjs` 就是干这件事的。
+#   * 该角色需要有建表等 DDL 权限以运行迁移（通常意味着它是库的 owner）。
+# =============================================================================
+
+services:
+  postgres:
+    # profile 未被激活 => 默认不参与 `up`
+    profiles: ['bundled-db']
+
+  app:
+    # 覆盖掉对 postgres 的等待条件；外部库的就绪由 operator/部署系统保证。
+    depends_on: !reset []

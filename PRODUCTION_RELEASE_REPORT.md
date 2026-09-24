@@ -827,3 +827,47 @@ naming-http              pass=49 fail=0
 4. **审计覆盖度**：独立复核为 42 路由 / 23 条显式权限；本机早期扫描为 40/21（因 look-ahead 窗口把 `resources GET /:id` 重复计了 3 次）。以复核数字为准，差异已记录。
 5. **未实现**：优雅退出的编排层验证（无 k8s）、`rm -rf dist` 与服务并发时的瞬态中断端到端复现、`/assets/*` 由平台 CDN 提供（设计如此，非缺陷）。
 6. Dockerfile / CI 待真实环境首次构建后回归。
+
+---
+
+## 附录 E：独立部署的「角色成员关系」缺失 —— 一个几乎无法定位的故障源
+
+**这是本项目最隐蔽的一个部署缺陷，本轮才被定位。**
+
+迁移 `0004_rls_role_alignment.sql` 创建了 `anon_` / `authenticated_` / `service_role_`
+三个 NOLOGIN 角色，并在**自己的注释里**写明（第 50–51 行）：
+
+```
+--   because `SET LOCAL ROLE x` requires membership:
+--       GRANT anon_           TO <app_db_role>;
+```
+
+也就是说：**迁移明确知道这一步是必需的，但故意不决定"谁是应用角色"**。
+
+| 部署形态 | 谁来做这一步 | 不做的后果 |
+|----------|--------------|------------|
+| 妙搭平台 | 平台自行完成 | — |
+| **独立部署** | **此前无人负责** | 每请求的 `SET LOCAL ROLE` 以 **42501** 失败 → **登录报「用户名或密码错误」，且 `audit_logs` 里查不到任何一行** |
+
+这与本报告早期记录的故障现象完全吻合（正确密码登录失败、且不写审计记录）——
+当时只定位到"匿名角色无匹配策略导致静默返回 0 行"，**根因是缺少角色成员关系授权**。
+
+**已修复**：新增 `scripts/db-setup-app-role.mjs`，不仅执行 `GRANT`，还会**以应用角色实连并真的
+`SET LOCAL ROLE` 一次**做验收。本机实测三个角色全部切换成功。
+
+**同时新增的部署产物**（由部署代理交付，均未在真实环境验证）：
+`docker-compose.yml`（单实例自包含、端口只绑 `127.0.0.1`、`platforms: linux/amd64` 钉死）、
+`docker-compose.external-db.yml`、`.env.deploy.example`、`scripts/deploy-vps.sh`、
+`scripts/verify-live.sh`（公网入口验收：TLS / HSTS / Cookie 属性 / XFF 归因 / CORS / 鉴权边界）。
+
+> `[无法验证]`：**Docker 镜像从未构建，compose 从未校验，CI 从未执行**（本机无 Docker、无 runner）。
+> `verify-live.sh` 的 HTTPS 分支未实测（无域名无证书），HTTP 分支实测通过。
+> 上述文件均为「按代码正确」，**不是「实测正确」**。
+
+### 该代理自查出的两个自身缺陷（已修）
+
+1. `deploy-vps.sh` 的 `verify` 子命令曾在末尾写 `|| true`，把 predeploy 的失败**吞掉**——
+   门禁判 NOT READY 而脚本仍退出 0。这正是本项目明令禁止、且本次会话已多次出现的缺陷类别。
+   已改为传播退出码。
+2. `verify-live.sh` 中 `curl -w '%{http_code}' || echo 000` 在连接失败时会拼出 `000000`。
+   已改为专用 `http_code()` helper。

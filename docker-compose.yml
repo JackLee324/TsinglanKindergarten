@@ -1,0 +1,109 @@
+# =============================================================================
+# docker-compose.yml — 清澜山幼儿园课程资源平台，单实例自包含部署
+# =============================================================================
+#
+# ⚠️  无法在本机验证：这台机器没有 docker（`command -v docker` 为空）。
+#     本文件是"读代码 + 读官方镜像文档"得出的正确形状，不是实测结果。
+#     第一次 `docker compose up` 请当成调试，而不是走个形式。
+#
+# 用法（在仓库根目录）：
+#   cp .env.deploy.example .env.deploy   &&  chmod 600 .env.deploy
+#   #  填入真实密钥（见文件内注释），然后：
+#   docker compose --env-file .env.deploy up -d --build
+#
+# 两种拓扑：
+#   ① 自包含（默认，本文件）：app + 自带 postgres。适合"一台 VPS 一把梭"。
+#   ② 外部数据库：再叠加 docker-compose.external-db.yml（不启动 postgres）。
+#
+# ── 为什么 app 端口只绑 127.0.0.1 ────────────────────────────────────────────
+# 应用自己不做 TLS。生产下 Cookie 强制 Secure（session.service.ts:47-51），
+# 且平台中间件下发的 CSRF cookie 硬编码为 Secure; SameSite=None（实测确认）。
+# 也就是说：**纯 HTTP 直连根本登录不了**，而且明文暴露会话 cookie。
+# 所以 3200 只监听回环，公网入口必须由反代（nginx/Caddy）终结 TLS。
+# 若你确实要临时直连调试，把 ports 改成 "3200:3000" —— 但那不是上线配置。
+#
+# ── 单实例是硬性约束，不是建议 ───────────────────────────────────────────────
+# DEPLOYMENT_PRODUCTION.md 附录把"第一阶段单实例"写成正式架构前提。原因是
+# 登录限流是**进程内**计数（多副本会把实际上限乘以副本数），且迁移用
+# advisory lock 串行化。请不要直接 `--scale app=2`。
+# =============================================================================
+
+name: qls-platform
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    # 与验证环境同主版本（PostgreSQL 16.14），迁移与 RLS 策略都在这条线上校准过。
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-qls}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须在 .env.deploy 里设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-qls_prod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # app 的 depends_on 依赖这条：数据库没就绪就启动应用，
+      # 应用会在启动阶段直接失败（readiness 503 / 迁移报错）。
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    # 不发布端口：数据库只应被 app 通过 compose 内部网络访问。
+    # 需要 psql 调试时用 `docker compose exec postgres psql -U qls qls_prod`。
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # 目标平台必须显式指定：package-lock.json 是 **linux/x64 专用**
+      # （12 条平台门控条目，全部 os=linux cpu=x64，darwin/arm64 为 0 条）。
+      # 在 arm64 机器上不加这行，构建出的原生绑定与 lockfile 记录不一致。
+      platforms:
+        - linux/amd64
+    image: qls-platform:${APP_VERSION:-local}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.deploy
+    environment:
+      # 这两条在这里显式钉住，而不是只写在 .env.deploy 里：
+      #   * SERVER_HOST 默认值是 'localhost'（server/main.ts），容器内不设 0.0.0.0
+      #     则容器外一切探针都失败，而进程日志仍然显示"启动成功"。
+      #   * SERVER_PORT 必须与 HEALTHCHECK 读的是同一个值。
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: '3000'
+    ports:
+      # 只绑回环。公网入口交给反代终结 TLS（见文件头说明）。
+      - '127.0.0.1:${APP_PORT:-3200}:3000'
+    volumes:
+      # 可选：把迁移 SQL 只读挂进来，这样"应用新迁移"不必重建镜像。
+      # ⚠️ 风险：挂载的 SQL 可能与镜像内代码不同版本（镜像里已有一份副本），
+      #    造成"迁移已应用、代码还是旧的"。要么保持注释，要么保证挂的就是这一版。
+      # - ./server/database/migrations:/app/server/database/migrations:ro
+      - ./backups:/app/backups
+    healthcheck:
+      # 与镜像内 HEALTHCHECK 一致的第二道保险，便于 `docker compose ps` 直接看状态。
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          const p=Number(process.env.SERVER_PORT||3000);
+          const r=require('http').get({host:'localhost',port:p,path:'/api/health',timeout:4000},
+            res=>{res.resume();process.exit(res.statusCode===200?0:1)});
+          r.on('error',()=>process.exit(1));
+          r.on('timeout',()=>{r.destroy();process.exit(1)})
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # 优雅停机的宽限期：给 server/main.ts 的 SIGTERM 处理留出时间
+    # （另一个 agent 加的优雅关闭；dumb-init 会把信号直接投递给 node 进程）。
+    stop_grace_period: 30s
+
+volumes:
+  pgdata:
+    # 具名卷，不随 `docker compose down` 删除（只有 `down -v` 才会）。
