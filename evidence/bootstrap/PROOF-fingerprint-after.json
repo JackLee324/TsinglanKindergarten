@@ -1,0 +1,46 @@
+{
+  "teachers": {
+    "rows": 22,
+    "digest": "8ac39e26ca2ce887d57d3589568b37d7"
+  },
+  "teacher_mfa": {
+    "rows": 0,
+    "digest": "empty"
+  },
+  "mfa_recovery_codes": {
+    "rows": 0,
+    "digest": "empty"
+  },
+  "mfa_challenges": {
+    "rows": 0,
+    "digest": "empty"
+  },
+  "sessions": {
+    "rows": 610,
+    "digest": "bb9fc5609905f3ffd813bee5a8dc6cea"
+  },
+  "resources": {
+    "rows": 347,
+    "digest": "92fc10d4fa7193f105699341290c0c06"
+  },
+  "review_records": {
+    "rows": 18,
+    "digest": "72068edb381783c9a9e18aec30bea2e2"
+  },
+  "audit_logs": {
+    "rows": 1468,
+    "digest": "dcce4c351e45209f57b5410d2958d2c4"
+  },
+  "subject_permissions": {
+    "rows": 0,
+    "digest": "empty"
+  },
+  "schema_migrations": {
+    "rows": 8,
+    "digest": "f1bb076070f796483b4e2bf6a9158f96"
+  },
+  "__meta": {
+    "dbSize": "10796055",
+    "at": "2026-09-24T23:35:33.188Z"
+  }
+}

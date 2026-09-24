@@ -1,0 +1,18 @@
+=== 只读保护自证 ===
+
+写前指纹：
+  teachers             rows=    22  digest=8ac39e26ca2ce887d57d3589568b37d7
+  teacher_mfa          rows=     0  digest=empty
+  mfa_recovery_codes   rows=     0  digest=empty
+
+尝试在只读事务内执行一次写入（探针位于仓库外的临时文件）：
+  ✓ 写入被拒绝：SQLSTATE 25006 read_only_sql_transaction
+    驱动返回: cannot execute DELETE in a read-only transaction
+
+写后指纹：
+  teachers             rows=    22  digest=8ac39e26ca2ce887d57d3589568b37d7
+  teacher_mfa          rows=     0  digest=empty
+  mfa_recovery_codes   rows=     0  digest=empty
+
+结论：数据完全未变（指纹一致）；写入尝试被数据库以 25006 拒绝。
+探针临时文件已删除，仓库中未落任何写语句。

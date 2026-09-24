@@ -547,6 +547,23 @@ if helper_json super-admin; then
         note "points at. If you are running contract verification against a fixture"
         note "database, set PREDEPLOY_SUPER_ADMIN_MODE=report — the result is then a"
         note "named waiver rather than a pass."
+        note ""
+        # 告诉操作者"下一步做什么"，而不是只告诉他"你失败了"。
+        # 这个引导脚本是**只读**的：它绝不建账号、绝不写 password_hash、
+        # 绝不绑定 MFA、绝不写库（BEGIN READ ONLY + 前后指纹比对自证）。
+        if [ -f "scripts/bootstrap-super-admin.mjs" ]; then
+          note "NEXT STEP — 该怎么做，逐条（含可直接执行的 SQL 与 curl）："
+          note "  node scripts/bootstrap-super-admin.mjs"
+          note "  它只读，不写任何数据；它会打印现状、精确原因、手工步骤与验收命令。"
+          note "  可执行 SQL 模板：evidence/bootstrap/OPERATOR-SQL.sql.txt"
+          note "  自证只读：node scripts/bootstrap-super-admin.mjs --self-test"
+          note ""
+          note "  ⚠️ 先固定 MFA_ENCRYPTION_KEY 再绑定 MFA：绑定之后再换键会让该账号"
+          note "     永久无法解密 TOTP 密钥、登录 FAIL CLOSED（脚本第 6 节详述）。"
+        else
+          note "NEXT STEP — scripts/bootstrap-super-admin.mjs 缺失，无法给出引导。"
+          note "  该脚本是只读的诊断/指引工具；请从版本库恢复后再运行 predeploy。"
+        fi
       fi
       ;;
     WARN) unverified "super_admin state" "helper reported WARN" ;;

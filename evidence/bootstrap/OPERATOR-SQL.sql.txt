@@ -1,0 +1,157 @@
+-- =============================================================================
+-- OPERATOR SQL — 供人工执行的 SQL 模板（不是可执行脚本，不会被任何工具运行）
+-- =============================================================================
+--
+-- 这个文件不是脚本、不被 import、不被任何自动化执行。它存在于此的唯一原因是：
+-- 让 scripts/bootstrap-super-admin.mjs **自身不含任何写语句** —— 于是"那个脚本
+-- 对数据库只读"这句话可以被静态核对，而不是只能靠信任。
+--
+-- ⚠️ 执行者是你，不是任何工具。执行前请确认：
+--     · 你连的是**目标环境**的库（不是本地验证库）；
+--     · MFA_ENCRYPTION_KEY 已经固定并记录（见诊断脚本第 6 节）——
+--       绑定 MFA 之后再换键会让该账号永久无法解密 TOTP 密钥、登录 FAIL CLOSED。
+--
+-- ── 为什么必须手工 SQL ──────────────────────────────────────────────────────
+-- 已核实不存在自举路径：
+--   · shared/rbac.ts:245-249 canGrantRole()：只有 super_admin 自己才能授予
+--     super_admin，非 super_admin 永远不行（防提权）；
+--   · 触发器 trg_teachers_guard_super_admin（migration 0003）在库层兜底；
+--   · server/modules/auth/seed-teachers.ts 中 super_admin 出现 0 次；
+--   · 全仓无"无 super_admin 时自动提权"的逻辑。
+--
+-- 但**只有密码哈希这一步需要手工**。MFA 走已发布的 API 自助完成
+-- （auth.controller.ts:244-247 的注释说明了这一点）——不要手工写 teacher_mfa。
+-- =============================================================================
+
+
+-- =============================================================================
+-- 步骤 0（只读，先看清现状再动手）
+-- =============================================================================
+
+-- 0.1 列出所有 super_admin 及其"能否登录"的关键字段
+SELECT t.username,
+       t.status,
+       (t.password_hash IS NOT NULL)              AS has_password,
+       COALESCE(m.confirmed, false)               AS mfa_enrolled,
+       t.failed_login_attempts,
+       t.locked_until
+  FROM teachers t
+  LEFT JOIN teacher_mfa m ON m.teacher_id = t.id
+ WHERE t.roles @> ARRAY['super_admin']::varchar[]
+ ORDER BY t.username;
+
+-- 0.2 确认你要用的用户名没被占用（teachers 上唯一约束只有主键，
+--      username 的唯一性由应用层保证，所以这里要自己查）
+SELECT count(*) AS taken FROM teachers WHERE lower(username) = lower('qls-superadmin');
+
+
+-- =============================================================================
+-- 步骤 1 — 方案 A（推荐）：直接新建一个专用的 super_admin 账号
+-- =============================================================================
+-- 触发器事实（已核实）：
+--   trg_teachers_guard_super_admin       = BEFORE UPDATE OR DELETE  → **不含 INSERT**
+--   trg_teachers_protect_last_super_admin = BEFORE UPDATE OR DELETE  → **不含 INSERT**
+-- 所以 INSERT 一个 roles 含 super_admin 的行是**被允许的**，且不需要声明任何权限。
+
+BEGIN;
+
+INSERT INTO teachers (username, name, name_en, email, roles, status, password_hash)
+VALUES (
+  'qls-superadmin',                        -- 登录名，改成你的
+  '系统超级管理员',                          -- 姓名：NOT NULL 且无默认值，必填
+  'System Super Admin',                    -- 英文名，可空
+  'superadmin@example.invalid',            -- 邮箱，可空
+  ARRAY['super_admin']::varchar[],          -- 角色
+  'active',
+  '<粘贴由 bootstrap-super-admin.mjs 第 3.1 节生成的完整 scrypt$... 字符串>'
+)
+RETURNING id, username, roles, status;
+
+COMMIT;
+
+-- 说明：
+--   · 只填 NOT NULL 且无默认值的列（name）；id / _created_at / _updated_at / status
+--     等都有默认值，不要手写；
+--   · password_hash 必须由应用同款 scrypt 参数生成（SCRYPT_N=16384, R=8, P=1,
+--     keylen=32, salt=16 字节，salt 与派生密钥均 base64），格式恰好 6 段：
+--         scrypt$16384$8$1$<b64 salt>$<b64 derivedKey>
+--     手工拼错会静默走到 verifyPassword 的 return false，表现为"用户名或密码错误"，
+--     排查成本极高。生成命令见诊断脚本第 3.1 节。
+--   · 连接身份：表 owner（如 qlsadmin）不受 RLS 约束。若用受限角色，
+--     teachers 上有 INSERT 策略 rls0004_anon_ins_teachers（角色 anon_）可放行，
+--     但仍建议用 owner 或有 INSERT 权限的角色。
+
+
+-- =============================================================================
+-- 步骤 1' — 方案 B（备用）：把已有 principal 账号提升为 super_admin
+-- =============================================================================
+-- 仅在方案 A 不可行时使用。UPDATE 路径**受 guard 触发器约束**，必须在
+-- **同一个事务内**声明 super_admin 权限，否则报 42501 insufficient_privilege。
+-- 这是测试夹具使用的同一机制（tests/helpers/reset-fixtures.mjs: declareSuperAdmin）。
+
+BEGIN;
+
+-- 第三个参数 true = is_local，作用域仅本事务。
+-- ⚠️ 它和下面的 UPDATE **必须在同一事务**；分开发送会丢标记并被拒。
+SELECT set_config('app.rbac_actor_super_admin', 'on', true);
+
+UPDATE teachers
+   SET roles         = ARRAY['super_admin']::varchar[],
+       password_hash = '<粘贴生成的完整 scrypt$... 字符串>'
+ WHERE username = '<已有 principal 的登录名>'
+RETURNING id, username, roles;
+
+COMMIT;
+
+
+-- =============================================================================
+-- 步骤 2（只读，验收）— 确认账号已就位
+-- =============================================================================
+-- 期望：has_password = true、mfa_enrolled = false、status = 'active'。
+-- 此时"能登录"但"只能访问 @MfaExempt 路由"——这是设计，MFA 走 API 自助绑定。
+
+SELECT t.username,
+       t.status,
+       (t.password_hash IS NOT NULL) AS has_password,
+       COALESCE(m.confirmed, false)  AS mfa_enrolled
+  FROM teachers t
+  LEFT JOIN teacher_mfa m ON m.teacher_id = t.id
+ WHERE t.roles @> ARRAY['super_admin']::varchar[]
+ ORDER BY t.username;
+
+
+-- =============================================================================
+-- 步骤 3（只读，最终验收）— MFA 绑定**之后**再跑
+-- =============================================================================
+-- 期望：mfa_enrolled = true 且 recovery codes 有剩余（confirm 时返回 10 个）。
+-- 这两条同时为真，才说明该账号真正"可登录"。
+
+SELECT t.username,
+       t.status,
+       (t.password_hash IS NOT NULL) AS has_password,
+       COALESCE(m.confirmed, false)  AS mfa_enrolled,
+       m.enabled_at,
+       (SELECT count(*) FROM mfa_recovery_codes rc
+         WHERE rc.teacher_id = t.id AND rc.used_at IS NULL) AS recovery_codes_unused
+  FROM teachers t
+  LEFT JOIN teacher_mfa m ON m.teacher_id = t.id
+ WHERE t.roles @> ARRAY['super_admin']::varchar[]
+ ORDER BY t.username;
+
+
+-- =============================================================================
+-- 不要做的事
+-- =============================================================================
+-- ✗ 不要给 __rbac_keeper（或任何 __ 开头的账号）设密码当生产账号用。
+--   它是 tests/helpers/reset-fixtures.mjs 的夹具，刻意不带 password_hash，
+--   用途是让"最后一个 super_admin 不可删除"的触发器在验证运行期间可满足。
+--
+-- ✗ 不要手工写 teacher_mfa / mfa_recovery_codes。
+--   TOTP 密钥以 AES-256-GCM 加密存储（格式 v1:<iv>:<tag>:<ciphertext>），
+--   而且**不需要**手工：@MfaExempt 的 enroll/confirm 端点就是为自助绑定准备的。
+--
+-- ✗ 不要为了"让它跑起来"而关掉强制 MFA 网关。
+--   auth.guard.ts:171-181 是 super_admin 唯一的第二因素保障；
+--   mfa.service.ts:277-284 的 assertMayDisable() 也会拒绝解除绑定。
+--
+-- ✗ 不要把生成的密码哈希、MFA secret、恢复码贴进工单/聊天/提交记录。

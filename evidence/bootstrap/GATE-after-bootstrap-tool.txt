@@ -1,0 +1,234 @@
+
+> fullstack-nestjs-template@2.3.0 predeploy
+> bash ./scripts/predeploy-check.sh
+
+清澜山幼儿园教师课程资源平台 — production readiness gate
+host: liyingjiedeMacBook-Air-2.local   date: 2026-09-24T23:35:43Z
+repo: /Users/jacklee/Desktop/幼儿园/HenryWeb/qls-kindergarten-resource-platform-v1.3.0
+node: v22.23.2   npm: 10.9.8
+target instance (MFA_BASE): http://127.0.0.1:3200
+secrets source: process environment only (no ./.env present)
+verdict is about the environment of THIS process ('npm run predeploy'). The running
+instance's own environment is cross-checked separately below as corroboration only.
+
+     running instance pid=19857 (INFERRED from ps; not part of the verdict)
+       NODE_ENV: production
+       HTTPS_ENABLED: absent from the process environment
+       TRUST_PROXY: absent from the process environment
+       SERVER_HOST: 127.0.0.1
+       SERVER_PORT: 3200
+       SUDA_DATABASE_URL: <set, value withheld>
+       DATABASE_URL: absent from the process environment
+       MFA_ENCRYPTION_KEY: <set, value withheld>
+       DOWNLOAD_TOKEN_SECRET: <set, value withheld>
+       DOWNLOAD_TOKEN_TTL_SECONDS: 10
+       LOGIN_IP_RATE_LIMIT_MAX: 100000
+     process claims to have: NODE_ENV, MFA_ENCRYPTION_KEY, DOWNLOAD_TOKEN_SECRET, SUDA_DATABASE_URL
+
+------------------------------------------------------------------------
+== 1. Production environment
+------------------------------------------------------------------------
+FAIL [01] NODE_ENV is '' but must be 'production'
+     with NODE_ENV != production: cookies are not forced Secure, Nest boots with
+     abortOnError=false, and error bodies stop being sanitised for clients
+     
+     Required variables (names and presence only — no value is ever printed):
+     SUDA_DATABASE_URL: set (from environment)
+PASS [02] database connection string provided via SUDA_DATABASE_URL
+     MFA_ENCRYPTION_KEY: NOT SET  (AES-256-GCM key for TOTP secrets (openssl rand -base64 32))
+     DOWNLOAD_TOKEN_SECRET: NOT SET  (HMAC-SHA256 key for signed download links (>=32 bytes))
+     
+     missing: MFA_ENCRYPTION_KEY DOWNLOAD_TOKEN_SECRET
+FAIL [03] required environment variable(s) not set: MFA_ENCRYPTION_KEY DOWNLOAD_TOKEN_SECRET
+     set them and re-run, or set PREDEPLOY_SKIP_ENV_CHECK=1 to waive this BY NAME
+     (waiving is recorded in the final waiver list; it is never silent)
+
+------------------------------------------------------------------------
+== 2. Database connectivity (a real connection, not a variable check)
+------------------------------------------------------------------------
+     scheme=postgresql host=127.0.0.1 port=55432 database=qls_test_0005 credentials=present
+     connected: database=qls_test_0005 user=qlsadmin public_tables=14
+     server: PostgreSQL 16.14 on x86_64-apple-darwin24.6.0
+     all required tables present: teachers, resources, subject_permissions, review_records, audit_logs, sessions
+     schema_migrations present: true
+PASS [04] database reachable and the required tables exist
+
+------------------------------------------------------------------------
+== 3. Migration state (scripts/migrate.mjs — the real runner)
+------------------------------------------------------------------------
+PASS [05] migrate.mjs status: exit 0
+     
+     > fullstack-nestjs-template@2.3.0 migrate:status
+     > node ./scripts/migrate.mjs status
+     
+     [1mDatabase[0m  qls_test_0005 as qlsadmin
+     [1mServer[0m    PostgreSQL 16.14 on x86_64-apple-darwin24.6.0
+     
+     [1mMigrations[0m
+       [32mapplied[0m  0001_schema_baseline_alignment [2m2026-09-24T01:40:39.284Z[0m
+       [32mapplied[0m  0002_backfill_legacy_usernames [2m2026-09-24T01:40:39.290Z[0m
+       [32mapplied[0m  0003_rbac_database_layer [2m2026-09-24T01:40:39.291Z[0m
+       [32mapplied[0m  0004_rls_role_alignment [2m2026-09-24T01:40:39.297Z[0m
+       [32mapplied[0m  0005_tighten_rls_writes [2m2026-09-24T01:40:39.300Z[0m
+       [32mapplied[0m  0006_mfa [2m2026-09-24T01:55:46.584Z[0m
+       [32mapplied[0m  0007_resource_soft_delete [2m2026-09-24T02:34:38.019Z[0m
+       [32mapplied[0m  0008_resource_file_presence [2m2026-09-24T03:22:30.443Z[0m
+     
+     [32m✓[0m No checksum drift.
+     no checksum drift
+PASS [06] migrate.mjs verify: exit 0
+     [32m✓[0m Checksums verified (8 applied).
+     [34m·[0m 0 pending migration(s).
+
+------------------------------------------------------------------------
+== 4. super_admin account that can actually log in
+------------------------------------------------------------------------
+     1 account(s) hold the super_admin role:
+       - __rbac_keeper: CANNOT LOG IN: no password_hash (login refuses with 401); MFA not enrolled (AuthGuard refuses every route)
+     NOT READY: no super_admin can currently authenticate.
+     Note: the test fixture account `__rbac_keeper` is created WITHOUT a password on purpose
+     (tests/helpers/reset-fixtures.mjs:116-131) — it exists to keep the last-super_admin
+     trigger satisfiable during verification runs. It is not a production login.
+     Remediation (operator action, deliberately NOT performed by this check): create or
+     repair a real super_admin, set its password, then enrol TOTP.
+FAIL [07] no ACTIVE super_admin can authenticate
+     this is a PRODUCTION property, verified against the database this shell
+     points at. If you are running contract verification against a fixture
+     database, set PREDEPLOY_SUPER_ADMIN_MODE=report — the result is then a
+     named waiver rather than a pass.
+     
+     NEXT STEP — 该怎么做，逐条（含可直接执行的 SQL 与 curl）：
+       node scripts/bootstrap-super-admin.mjs
+       它只读，不写任何数据；它会打印现状、精确原因、手工步骤与验收命令。
+       可执行 SQL 模板：evidence/bootstrap/OPERATOR-SQL.sql.txt
+       自证只读：node scripts/bootstrap-super-admin.mjs --self-test
+     
+       ⚠️ 先固定 MFA_ENCRYPTION_KEY 再绑定 MFA：绑定之后再换键会让该账号
+          永久无法解密 TOTP 密钥、登录 FAIL CLOSED（脚本第 6 节详述）。
+
+------------------------------------------------------------------------
+== 5. Privileged-account MFA enforcement
+------------------------------------------------------------------------
+     MFA_ENCRYPTION_KEY: NOT SET
+     TOTP secrets cannot be encrypted at rest; enrolment is refused (not silently downgraded)
+     and every login for an MFA-enabled account fails closed.
+FAIL [08] MFA enforcement or privileged-account enrolment is not satisfied
+     the enforcement code paths are checked separately from enrolment; read the
+     lines above to see which half failed. If the failure is enrolment in a
+     fixture database, set PREDEPLOY_SUPER_ADMIN_MODE=report (named waiver).
+
+------------------------------------------------------------------------
+== 6. Object storage (@lark-apaas/file-service / dataloom)
+------------------------------------------------------------------------
+     platform storage context variables checked: SUDA_APP_ID, SUDA_APP_SECRET, SUDA_PROJECT_ID, SUDA_ENV, LARK_APP_ID, LARK_APP_SECRET, DATALOOM_BUCKET, STORAGE_BUCKET, SUDA_STORAGE_BUCKET
+     present: (none)
+     application fails closed with 503 on missing storage: confirmed
+     RESULT: object storage is NOT configured for this process.
+     Reason: no platform storage context is present, so FileService.getDefaultBucket() has
+     nothing to resolve. Downloads will (correctly) return 503 STORAGE_NOT_CONFIGURED.
+     This cannot be verified from a standalone box: the 妙搭 platform supplies the context at
+     request time. Verify it on the deployed instance instead — see PREDEPLOY notes.
+WARN [09] object storage is NOT configured for this process
+
+------------------------------------------------------------------------
+== 7. HTTPS / secure cookie configuration
+------------------------------------------------------------------------
+     HTTPS_ENABLED=unset   TRUST_PROXY=unset   CSP_MODE=unset
+FAIL [10] HTTPS_ENABLED is 'unset', not 'true'
+     in production this means: cookies are not Secure, and HSTS is only sent if
+     TRUST_PROXY is set (security-headers.middleware.ts:99-104). Session cookies
+     would travel over plaintext.
+     TRUST_PROXY is 'unset' => Express ignores X-Forwarded-For and req.ip
+     is the unforgeable socket address (the SAFE default, audit finding D-10).
+FAIL [11] neither HTTPS_ENABLED nor TRUST_PROXY indicates TLS termination
+     HSTS will be OFF and cookies will not be Secure (security-headers.middleware.ts)
+
+------------------------------------------------------------------------
+== 8. CORS configuration
+------------------------------------------------------------------------
+     source tree: no enableCors() call and no Access-Control-* header is set anywhere in server/ or shared/
+     => CORS is at the restrictive default: a cross-origin browser request gets no CORS grant
+        (that is correct for this app: the SPA is served same-origin from this process)
+     live probe http://127.0.0.1:3200/api/health with Origin: https://cors-probe.invalid -> HTTP 200
+     live response carried no Access-Control-* header — restrictive default confirmed live
+     CORS_LIVE=CONFIRMED
+PASS [12] CORS is at the restrictive default (confirmed in the source AND against the live instance)
+
+------------------------------------------------------------------------
+== 9. Health and readiness of the running instance (http://127.0.0.1:3200)
+------------------------------------------------------------------------
+PASS [13] GET /api/health -> 200
+     {"status":"ok","version":"unknown","uptimeSeconds":1156,"timestamp":"2026-09-24T23:35:44.713Z"}
+PASS [14] GET /api/health/ready -> 200 (status=ready)
+     {"status":"ready","version":"unknown","uptimeSeconds":1156,"timestamp":"2026-09-24T23:35:44.722Z","checks":{"database":{"ok":true,"latencyMs":6},"schema":{"ok":true},"migrations":{"ok":true,"applied":8},"assets":{"ok":true,"source":"compiled","files":34}}}
+     live instance returned no Access-Control-Allow-* header to a foreign Origin
+     header present: x-content-type-options
+     header present: x-frame-options
+     header present: referrer-policy
+     header present: cross-origin-opener-policy
+     header present: cross-origin-resource-policy
+     header present: permissions-policy
+     header present: content-security-policy (report-only mode)
+     report-only does not block; switch to enforcing with CSP_MODE=enforce once
+     violation reports from the real build have been reviewed
+     Strict-Transport-Security absent, consistent with HTTPS_ENABLED not being 'true'
+     live response does not advertise X-Powered-By
+PASS [15] GET / -> 200 and returns an HTML document (5802 bytes)
+
+------------------------------------------------------------------------
+== 10. Production build (dist/)
+------------------------------------------------------------------------
+PASS [16] dist/server/main.js exists (27599 bytes)
+PASS [17] dist/client has 5 client artifact(s)
+     SPA shell is verified over HTTP in check 9 (the platform renders it; it is
+     not a fixed file on disk, and /assets/* is served from the platform CDN)
+PASS [18] the build is current: no source file is newer than dist/server/main.js
+
+------------------------------------------------------------------------
+== 11. Critical security tests (scripts/verify-all.sh)
+------------------------------------------------------------------------
+     GATE_LOCK=FREE (probe lock acquired and released immediately)
+     exclusive gate lock is free; starting scripts/verify-all.sh
+     NOTE: verify-all.sh runs npm run build itself (rm -rf dist first). The
+           running instance serves static assets from dist/, so brief 404s for
+           those assets during the run are expected; API checks are unaffected.
+       gate lock  acquired (exclusive advisory lock on the shared environment)
+     === 自动化测试 ===
+       npm test                 # tests 230 # pass 230 # fail 0 
+     === 类型检查 ===
+       typecheck server         PASS
+       typecheck client         PASS
+     === 构建 ===
+       npm run build            PASS
+     === 前后端 API 契约（静态检查，无需运行服务） ===
+       api-contracts             matched
+     === HTTP 验证套件（需要运行中的服务） ===
+       authz-http               pass=74 fail=0
+       hardening                pass=10 fail=0
+       mfa                      pass=55 fail=0
+       security-headers         pass=20 fail=0
+       files-http               pass=73 fail=0
+       naming-http              pass=49 fail=0
+     
+       ✅ 全部通过
+PASS [19] scripts/verify-all.sh passed (exit 0)
+
+------------------------------------------------------------------------
+== 12. Dependency audit (npm audit)
+------------------------------------------------------------------------
+     auditing against explicit registry override (PREDEPLOY_AUDIT_REGISTRY)
+     severity counts: {"info":0,"low":3,"moderate":57,"high":6,"critical":0,"total":66}
+FAIL [20] npm audit reports 6 HIGH vulnerability(ies)
+
+------------------------------------------------------------------------
+== Summary
+------------------------------------------------------------------------
+checks run      : 20
+failures        : 7
+warnings        : 1
+
+documented, non-blocking waivers (1):
+  - object storage is NOT configured for this process — dataloom needs a per-request platform context that a standalone box cannot have; the app returns 503 STORAGE_NOT_CONFIGURED instead of a fake URL (set PREDEPLOY_REQUIRE_STORAGE=1 to make this blocking)
+
+reason: 7 failing check(s)
+NOT READY FOR PRODUCTION
