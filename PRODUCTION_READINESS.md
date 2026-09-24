@@ -524,21 +524,93 @@ darwin-arm64 条目：0
 
 ---
 
-## N. 下一步（阶段推进计划）
+## N. 阶段推进进度
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| 阶段 1 | 只读完整审计 | ✅ 完成（本文档） |
+| 阶段 1 | 只读完整审计 | ✅ 完成（§A–§M） |
 | 阶段 2 | `PRODUCTION_READINESS.md` | ✅ 完成（本文档） |
-| 阶段 3 | 设计 RBAC / Permission / Scope / super_admin → `RBAC.md` | ⬜ 进行中 |
-| 阶段 4 | 实现可迁移可回滚 migration + 备份/快照工具 | ⬜ |
-| 阶段 5 | 后端授权与安全机制（AuthorizationService / PermissionGuard / MFA / Session / CSRF / 限流 / trust proxy） | ⬜ |
+| 阶段 3 | RBAC / Permission / Scope / super_admin 设计 | ✅ 契约与设计完成 → [`RBAC.md`](RBAC.md) + `shared/rbac.ts`；执行层在阶段 5 |
+| 阶段 4 | 可迁移可回滚 migration + 快照工具 | ✅ 完成并通过实测（§P） |
+| 阶段 5 | 后端授权与安全机制（AuthorizationService / PermissionGuard / MFA / Session / 限流 / trust proxy） | ⬜ 下一步 |
 | 阶段 6 | 文件存储生产化（上传 / 签名下载 / 校验 / 软删除） | ⬜ |
 | 阶段 7 | 修复全部 API 契约错位 | ⬜ |
-| 阶段 8 | 分层测试 + 安全回归测试 | ⬜ |
-| 阶段 9 | 执行 migration + build + 生产启动验证 | ⬜ |
+| 阶段 8 | 分层测试 + 安全回归测试 | ⬜ 部分（migration 10 项已通过） |
+| 阶段 9 | 执行 migration + build + 生产启动验证 | ⬜ 部分（本机已验证，待部署环境复验） |
 | 阶段 10 | 公网安全验收 + 发布闸门 + 最终报告 | ⬜ |
 
 ---
 
-*本文件在阶段 3 起将持续更新；任何"已修复"结论都必须附实测证据（命令 + 输出），否则仍标 ⬜。*
+## P. 阶段 3–4 实测记录
+
+### P-1 角色契约统一（类型系统当场抓出全部漂移点）
+
+把 `RoleCode` 收敛到 `shared/rbac.ts` 后，`tsc` **立即报出全部不一致处**，这正是单一来源生效的证明：
+
+```
+error TS2741: Property 'super_admin' is missing in type
+  '{ principal: string; ... }' but required in type 'Record<RoleCode, string>'
+  → TeacherAdminPage.tsx:42, TeacherFormDialog.tsx:33
+error TS2345: Argument of type '"role.super_admin"' is not assignable
+  → PermissionAdminPage.tsx:374,426  TeacherAdminPage.tsx:238,419  TeacherFormDialog.tsx:228
+```
+已全部修复；`tsc` server + client 均 **exit 0**。
+
+### P-2 migration 框架实测（真实 PostgreSQL 16.14）
+
+`tests/migration.test.mjs` —— **10 项全部通过**：
+
+| # | 测试 | 结果 |
+|---|---|---|
+| 1 | 遗留库 fixture 复现"交付即坏"状态（0 个认证列、347 资源、21 账号） | ✅ |
+| 2 | `status` 正确报告 pending | ✅ |
+| 3 | `up` 补齐全部 6 个认证列 + `wecom_user_id` 可空 + 用户名索引 | ✅ |
+| 4 | **无数据丢失**：迁移前后行数完全一致 | ✅ |
+| 5 | **无重复账号**：遗留账号被回填而非重复创建 | ✅ |
+| 6 | 幂等：再次 `up` 无操作 | ✅ |
+| 7 | **checksum 漂移**：改动已应用的 migration → `up` 失败且 **exit 2** | ✅ |
+| 8 | 恢复文件后 `verify` 通过 | ✅ |
+| 9 | **回滚安全**：`down` 拒绝销毁凭据（21 行含认证数据） | ✅ |
+| 10 | 安全场景下 `down` 可用，且数据完好（21 账号 / 347 资源） | ✅ |
+
+### P-3 迁移前后的行为对照（同一套代码，同一台数据库）
+
+| 指标 | 迁移前 | 迁移后 |
+|---|---|---|
+| `teachers` 认证列 | **0 / 6** | 6 / 6 |
+| 种子结果 | `created=0, skipped=0` + **20 条 ERROR** | **`created=20, skipped=0` + 0 条 ERROR** |
+| 应用启动日志 | `Nest application successfully started`（但零可用账号） | 同上（且 20 个账号真实可用） |
+| 账号总数 | 21 → **41（全部重复）** | **21（无重复）** |
+| 资源总数 | 347 | 347 |
+
+### P-4 阶段 3–4 新增/修改文件
+
+| 文件 | 说明 |
+|---|---|
+| `shared/rbac.ts` | 新增：角色/权限/范围唯一契约源（44 权限、9 角色、scope、防提权、完整性断言） |
+| `RBAC.md` | 新增：授权模型设计文档 |
+| `server/database/migrations/0001_schema_baseline_alignment.sql` | 新增：平台前置 + 6 认证列 + 可空性 + 索引 |
+| `server/database/migrations/0001_schema_baseline_alignment.down.sql` | 新增：数据安全回滚（含拒绝守卫） |
+| `server/database/migrations/0002_backfill_legacy_usernames.sql` | 新增：遗留账号用户名回填（修复重复账号缺陷） |
+| `server/database/migrations/0002_backfill_legacy_usernames.down.sql` | 新增：可精确反演的回滚 |
+| `scripts/migrate.mjs` | 新增：迁移运行器（校验和/锁/事务/status/up/down/verify/baseline） |
+| `scripts/db-snapshot.mjs` | 新增：迁移前后数据与结构快照 + 完整性比对 |
+| `tests/helpers/legacy-fixture.mjs` | 新增：真实遗留库 fixture |
+| `tests/migration.test.mjs` | 新增：10 项迁移测试 |
+| `shared/api.interface.ts` | 修改：角色改为 re-export，消除重复声明 |
+| `server/modules/curriculum/curriculum.data.ts` | 修改：`ROLE_DEFINITIONS` 改为 re-export（原文件漏 `k_assistant`） |
+| `client/src/i18n/translations.ts` | 修改：新增 `role.super_admin`（zh + en） |
+| `client/src/pages/TeacherAdmin/TeacherAdminPage.tsx` | 修改：补 `super_admin` 徽章配色 |
+| `client/src/pages/TeacherAdmin/TeacherFormDialog.tsx` | 修改：同上 |
+| `package.json` | 修改：新增 `migrate` / `migrate:status` / `db:snapshot` / `test` / `predeploy` |
+
+### P-5 阶段 3–4 仍未解决（不计入"已修复"）
+
+- 授权**执行层**尚未实现：仍是各处 `roles.includes(...)`；`AuthorizationService` / `PermissionGuard` / 数据范围执行 / `permissions_version` / `account_permission_overrides` 表 / super_admin 数据库触发器均属**阶段 5**。
+- MFA、文件存储、API 契约错位、RLS 收紧、健康检查、安全响应头、限流分布式化 —— 均未开始。
+- **Docker 与真实反向代理仍无法在本机验证**（本机无 docker）。
+- **未对用户真实数据库执行备份**（本机无其连接）——L-1/L-2 仍需部署环境执行。
+
+---
+
+*本文件持续更新；任何"已修复"结论都必须附实测证据（命令 + 输出），否则仍标 ⬜。*
