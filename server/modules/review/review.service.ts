@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@lark-apaas/fullstack-nestjs-core';
 import { resources, reviewRecords, teachers } from '@server/database/schema';
-import { eq, desc, count, inArray } from 'drizzle-orm';
+import { eq, and, desc, count, inArray, isNull } from 'drizzle-orm';
 import type { Resource, ReviewRecord, ResourceListResponse, FolderType, ResourceStatus, ProgramCode } from '@shared/api.interface';
 import { AuditLoggerService } from '../audit/audit-logger.service';
 
@@ -17,16 +17,24 @@ export class ReviewService {
   async getPendingResources(page: number, pageSize: number): Promise<ResourceListResponse> {
     const offset = (page - 1) * pageSize;
 
+    // Soft delete (migration 0007): a resource in the recycle bin must not sit in
+    // the reviewer's queue. Without this predicate a deleted resource stays
+    // "pending review" forever and the queue can never be emptied.
+    const pending = and(
+      eq(resources.status, 'pending_review'),
+      isNull(resources.deletedAt),
+    );
+
     try {
       const [totalResult, items] = await Promise.all([
         this.db
           .select({ count: count() })
           .from(resources)
-          .where(eq(resources.status, 'pending_review')),
+          .where(pending),
         this.db
           .select()
           .from(resources)
-          .where(eq(resources.status, 'pending_review'))
+          .where(pending)
           .orderBy(desc(resources.createdAt))
           .limit(pageSize)
           .offset(offset),
@@ -66,11 +74,11 @@ export class ReviewService {
   ): Promise<Resource> {
     try {
       return await this.db.transaction(async (tx) => {
-        // 检查资源是否存在且状态为待审核
+        // 检查资源是否存在且状态为待审核（回收站中的资源不可审核）
         const existing = await tx
           .select()
           .from(resources)
-          .where(eq(resources.id, resourceId));
+          .where(and(eq(resources.id, resourceId), isNull(resources.deletedAt)));
 
         if (existing.length === 0) {
           throw new NotFoundException('资源不存在');
@@ -92,7 +100,10 @@ export class ReviewService {
             reviewComment: comment ?? null,
             reviewedAt: now,
           })
-          .where(eq(resources.id, resourceId))
+          // `isNull` again: if the resource was moved to the recycle bin between
+          // the read and this write, the update matches nothing and the caller
+          // gets "资源不存在" instead of publishing a deleted row.
+          .where(and(eq(resources.id, resourceId), isNull(resources.deletedAt)))
           .returning();
 
         if (updated.length === 0) {
@@ -144,11 +155,11 @@ export class ReviewService {
 
   async getReviewHistory(resourceId: string): Promise<ReviewRecord[]> {
     try {
-      // 检查资源是否存在
+      // 检查资源是否存在（回收站中的资源不对外提供审核历史入口）
       const resourceExists = await this.db
         .select({ id: resources.id })
         .from(resources)
-        .where(eq(resources.id, resourceId));
+        .where(and(eq(resources.id, resourceId), isNull(resources.deletedAt)));
 
       if (resourceExists.length === 0) {
         throw new NotFoundException('资源不存在');

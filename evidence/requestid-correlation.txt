@@ -1,28 +1,37 @@
-QLS PLATFORM — FINDING B5 (requestId CORRELATION): RESOLVED
-generated: 2026-09-24T02:31:45Z
+QLS — FINDING B5: CORRECTION (previous closure was TOO BROAD)
+generated: 2026-09-24T02:40:37Z
 
-ORIGINAL FINDING (audit Q-5): the requestId in the response HEADER differed
-from the requestId in the response BODY, making log correlation unreliable.
+I previously announced B5 closed. That was WRONG and is retracted here.
 
-METHOD: send a KNOWN, caller-chosen id and see what comes back.
-  $ curl -H 'x-request-id: deadbeef-1111-2222-3333-444455556666' .../api/resources/00000000-...
-
+What I actually tested (401, unauthenticated request to /api/resources/...):
   header: x-request-id: deadbeef-1111-2222-3333-444455556666
-  header: x-log-trace-id: f806a133-71de-48de-a1bf-fd6e1af457ae
-  body:   {"error":{"code":"UNAUTHORIZED",...,
-           "requestId":"deadbeef-1111-2222-3333-444455556666",...}}
+  body:   {...,"requestId":"deadbeef-1111-2222-3333-444455556666",...}
+  -> identical. This exercises the HttpException branch.
 
-RESULT: header and body carry the IDENTICAL requestId, and the CALLER'S
-supplied value is preserved verbatim - the middleware honours the inbound id
-rather than discarding it and generating its own.
+Why the closure was too broad - exception.filter.ts contains TWO different
+sources for the id, and the 5xx branch uses the OTHER one:
 
-ROOT CAUSE OF THE ORIGINAL OBSERVATION: there are TWO distinct correlation
-ids in every response, and only one of them is the application's:
-  x-request-id     - the application's request id; matches the body
-  x-log-trace-id   - the PLATFORM's own log-trace id, a different value
-They are separate identifiers with separate purposes and are NOT expected to
-be equal. Their coexistence was misread as a mismatch. No defect remains.
+  line  33-35: requestId = res.locals.requestId ?? request.requestId
+       used by: header (l.45), logging (l.111), 4xx body (l.60/74/90)
+  line 109:    const requestId = request.requestId          <-- SHADOWS the above
+       used by: the 5xx body (l.120)
 
-The 401 (rather than 404) for an unauthenticated request to /api/resources/...
-is correct: the global AuthGuard rejects before routing reaches the handler,
-which is the intended fail-closed behaviour.
+The file's own comment (l.22-31) states the platform's request-id middleware
+runs LATER than ours and overwrites req.requestId, so req.requestId and
+res.locals.requestId can differ. Therefore a 500 can still emit a header id
+that differs from the body id - the very defect B5 describes.
+
+STATUS:
+  4xx / HttpException responses - verified consistent (live).
+  5xx / unhandled exceptions    - MAY still be inconsistent. Code-level proof;
+                                  NOT reproduced live (needs a real 500, which
+                                  requires stopping PostgreSQL).
+
+FIX (one line, NOT APPLIED): delete the shadowing declaration at line 109 so
+the 5xx branch reuses the outer authoritative requestId. Left unapplied on
+purpose: I cannot verify a 500 path in this run, and changing code then
+declaring it fixed without evidence is exactly what this brief forbids.
+
+Credit: this was found by the documentation subagent reviewing
+PRODUCTION_READINESS.md against the code, not by me. I had tested only the
+401 branch and generalised from it.

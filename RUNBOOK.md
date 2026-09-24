@@ -278,10 +278,15 @@ node scripts/db-snapshot.mjs --compare snapshots/before.json --against snapshots
 export AUTHZ_TEST_DB="postgres://<user>:<pass>@127.0.0.1:55432/qls_test_0005"
 bash scripts/verify-all.sh
 ```
-它会依次运行（`scripts/verify-all.sh:37-66`）[已证实]：
+它会依次运行（`scripts/verify-all.sh`，写作期间新增了 `security-headers` 一项）[已证实]：
 `npm test` → `type:check:server` → `type:check:client` → `npm run build`
 → `node scripts/verify-api-contracts.mjs` → `verify-authz-http.mjs` →
-`verify-hardening.mjs` → `verify-mfa.mjs`；任一失败整体非 0。
+`verify-hardening.mjs` → `verify-mfa.mjs` → `verify-security-headers.mjs`；
+任一失败整体非 0。
+
+> 仓库中另有 `scripts/probe-file-validation.mjs`、`scripts/verify-seed-failure.sh`、
+> `scripts/backup-rehearse.mjs`、`scripts/db-bootstrap.mjs`（均为写作期间新增），
+> **它们没有被 `verify-all.sh` 调用**，需要时单独执行。 [已证实]
 
 单独运行：
 ```bash
@@ -292,13 +297,16 @@ node scripts/verify-api-contracts.mjs     # 纯静态，无需 DB/服务
 node scripts/verify-authz-http.mjs        # 需服务 + AUTHZ_TEST_DB
 node scripts/verify-hardening.mjs         # 需服务 + AUTHZ_TEST_DB
 node scripts/verify-mfa.mjs               # 需服务 + AUTHZ_TEST_DB（BASE 可用 MFA_BASE 覆盖）
+node scripts/verify-security-headers.mjs  # 需服务；验证 §5.7 的响应头
+node scripts/probe-file-validation.mjs    # 文件校验探针（写作期间新增，未执行过）
+node scripts/verify-seed-failure.sh       # seed 失败行为的验证（写作期间新增，未执行过）
 npm run predeploy                         # bash ./scripts/predeploy-check.sh
 npm run lint                              # eslint + stylelint + type:check
 ```
 > ⚠️ `npm run predeploy` 指向 `scripts/predeploy-check.sh`。
-> **本次未核实该文件是否存在**（`ls scripts/` 时未见到），
+> **本次两次 `ls scripts/` 都没有看到该文件**（`package.json:32` 却引用了它），
 > 执行前请先 `ls scripts/predeploy-check.sh` 确认；不存在则不要把它写进流水线。
-> [无法验证 —— 本次 `ls` 输出中未见该文件]
+> [无法验证 —— 本次两次 `ls` 输出中均未见该文件]
 
 > ⚠️ `npm run lint` 依赖 `eslint` / `stylelint`。
 > `PRODUCTION_READINESS.md` §G-5 记录过"`lint`/`precommit` 指向不存在文件"的历史问题；

@@ -268,13 +268,29 @@ try {
   const keyword = encodeURIComponent(TITLE_PREFIX + ' lesson plan');
   check('the resource is listed before deletion', (await req('GET', `/api/resources?keyword=${keyword}`)).data?.total, 1);
 
+  // The review queue and the dashboard counts live in OTHER services
+  // (review.service.ts / dashboard.service.ts) and are the easiest places to
+  // forget the soft-delete predicate — a deleted resource that stays "pending
+  // review" forever can never be cleared, and dashboard tiles that ignore the
+  // deletion contradict the list right below them. Asserted end-to-end here.
+  check('POST /api/resources/:id/submit-review works', (await req('POST', `/api/resources/${resourceId}/submit-review`)).status, 201);
+  const statsBefore = (await req('GET', '/api/dashboard/stats')).data;
+  const pendingBefore = (await req('GET', '/api/review/pending?pageSize=100')).data;
+  check('it is in the review queue before deletion', (pendingBefore?.items ?? []).some((i) => i.id === resourceId), true);
+  const recentBefore = (await req('GET', '/api/dashboard/recent?limit=50')).data;
+  check('it is in the dashboard recent list before deletion', (recentBefore?.items ?? []).some((i) => i.id === resourceId), true);
+  console.log('       dashboard myResources before delete: ' + statsBefore?.myResources);
+
   check('DELETE /api/resources/:id succeeds (soft delete)', (await req('DELETE', `/api/resources/${resourceId}`)).status, 200);
   check('it disappears from the normal listing', (await req('GET', `/api/resources?keyword=${keyword}`)).data?.total, 0);
   check('it is 404 on direct read', (await req('GET', `/api/resources/${resourceId}`)).status, 404);
   const mine = await req('GET', '/api/resources/mine?pageSize=100');
   check('it disappears from "my resources"', (mine.data?.items ?? []).some((i) => i.id === resourceId), false);
   check('it cannot be downloaded while in the bin', (await req('GET', `/api/resources/${resourceId}/download`)).status, 404);
-  check('the dashboard still answers with the resource deleted', (await req('GET', '/api/dashboard/stats')).status, 200);
+  const statsAfter = (await req('GET', '/api/dashboard/stats')).data;
+  check('the dashboard "my resources" count drops by exactly 1', (statsBefore?.myResources ?? 0) - (statsAfter?.myResources ?? 0), 1);
+  check('it leaves the review queue', ((await req('GET', '/api/review/pending?pageSize=100')).data?.items ?? []).some((i) => i.id === resourceId), false);
+  check('it leaves the dashboard recent list', ((await req('GET', '/api/dashboard/recent?limit=50')).data?.items ?? []).some((i) => i.id === resourceId), false);
 
   const bin = await req('GET', '/api/resources/recycle-bin?pageSize=100');
   check('GET /api/resources/recycle-bin works (route ORDER: declared before :id)', bin.status, 200);
@@ -291,6 +307,8 @@ try {
   check('POST /api/resources/:id/restore succeeds', (await req('POST', `/api/resources/${resourceId}/restore`)).status, 201);
   check('the resource is listed again after restore', (await req('GET', `/api/resources?keyword=${keyword}`)).data?.total, 1);
   check('  -> and is readable again', (await req('GET', `/api/resources/${resourceId}`)).status, 200);
+  check('  -> the dashboard count recovers', (await req('GET', '/api/dashboard/stats')).data?.myResources, statsBefore?.myResources);
+  check('  -> it is back in the review queue', ((await req('GET', '/api/review/pending?pageSize=100')).data?.items ?? []).some((i) => i.id === resourceId), true);
   check('  -> and is downloadable again', (await req('GET', `/api/resources/${resourceId}/download`)).status, 302);
   check('restoring a resource that is not in the bin is refused', (await req('POST', `/api/resources/${resourceId}/restore`)).status, 404);
 

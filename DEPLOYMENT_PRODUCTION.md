@@ -117,20 +117,35 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 
 ### 2.4 `.env.example` 与代码的差异（如实记录）
 
-`.env.example` 中**声明了但代码从不读取**的变量：
+`.env.example` 中**声明了但代码从不读取**的变量（写作期间已在该文件里直接标注为"无效"）：
 
-| 变量 | 实际引用处数量 | 结论 |
+| 变量 | 代码引用处 | 结论 |
 |---|---|---|
-| `LOG_DIR` | 1（仅 `.env.example` 自身） | **无效配置**，设了也没有任何作用 |
-| `LOG_REQUEST_BODY` | 1 | 同上 |
-| `LOG_RESPONSE_BODY` | 1 | 同上 |
+| `LOG_DIR` | **0** | **无效配置**，设了没有任何作用（仅 grep 命中 `.env.example` 自身） |
+| `LOG_REQUEST_BODY` | **0** | 同上 |
+| `LOG_RESPONSE_BODY` | **0** | 同上 |
 
-[已证实：`grep -rn "<VAR>" server/ shared/ client/src/ scripts/ .env.example`]
+[已证实：`grep -rln "<VAR>" server/ shared/ client/src/ scripts/`]
 
-而代码**实际读取但 `.env.example` 未列出**的：`SERVER_HOST`、`SERVER_PORT`、
+`.env.example` 写作期间已补齐的、**代码确实读取**的新变量：
+
+| 变量 | 读取处 |
+|---|---|
+| `DOWNLOAD_TOKEN_SECRET` / `DOWNLOAD_TOKEN_TTL_SECONDS` | `server/common/crypto/download-token.ts`、`server/modules/files/files.controller.ts`、`scripts/verify-files-http.mjs` |
+| `CSP_MODE` | `server/common/http/security-headers.middleware.ts`、`scripts/verify-security-headers.mjs` |
+| `UPLOAD_MAX_BYTES` | `server/common/files/file-validation.ts` |
+| `RESOURCE_RETENTION_DAYS` | `server/modules/resources/resources.service.ts` |
+
+[已证实：grep 逐项确认]
+
+而代码**实际读取但 `.env.example` 仍未列出**的：`SERVER_HOST`、`SERVER_PORT`、
 `NODE_ENV`、`CSRF_STATE_TTL_SECONDS`、`CLIENT_BASE_PATH`、`DATABASE_URL`、
-`SUDA_DATABASE_URL`、`MIGRATION_*`、`DOWNLOAD_TOKEN_SECRET`、
-`DOWNLOAD_TOKEN_TTL_SECONDS`、`CSP_MODE`、`QLS_*`。 [已证实]（`PRODUCTION_READINESS.md` §G-12 记录过同类问题）
+`SUDA_DATABASE_URL`、`MIGRATION_*`、`QLS_*`。 [已证实]（`PRODUCTION_READINESS.md` §G-12 记录过同类问题）
+
+> ⚠️ `.env.example` 中**同名变量重复定义**会产生歧义（`.env` 里后出现的值生效）。
+> 我在写作期间清掉了 `DOWNLOAD_TOKEN_SECRET` / `DOWNLOAD_TOKEN_TTL_SECONDS` /
+> `TRUST_PROXY` / `HTTPS_ENABLED` 的重复条目，只保留一处定义。
+> 后续修改该文件时请保持"一个变量只出现一次"。
 
 > 日志采集**不要**依赖 `LOG_DIR`。本应用没有文件日志配置，
 > Nest `Logger` 全部写 stdout/stderr。见 §10。

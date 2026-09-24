@@ -14,6 +14,7 @@ import {
   desc,
   sql,
   gte,
+  isNull,
 } from 'drizzle-orm';
 import {
   resources,
@@ -23,6 +24,17 @@ import {
 import type { RoleCode } from '@shared/api.interface';
 
 const ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
+
+/**
+ * The soft-delete predicate (migration 0007).
+ *
+ * Every count on this page reads `resources`, and a resource in the recycle bin
+ * must not be counted anywhere: otherwise deleting a resource leaves the "my
+ * resources" and "published" tiles unchanged, and the dashboard contradicts the
+ * list right beneath it. Kept as a named helper so a new query cannot quietly
+ * omit it.
+ */
+const activeOnly = () => isNull(resources.deletedAt);
 
 export interface DashboardStatsResult {
   myResources: number;
@@ -71,7 +83,7 @@ export class DashboardService {
     const myRes = await this.db
       .select({ count: count() })
       .from(resources)
-      .where(eq(resources.uploaderId, teacherId))
+      .where(and(eq(resources.uploaderId, teacherId), activeOnly()))
       .limit(1);
     const myResources = Number(myRes[0]?.count ?? 0);
 
@@ -81,7 +93,7 @@ export class DashboardService {
       const pendingRes = await this.db
         .select({ count: count() })
         .from(resources)
-        .where(eq(resources.status, 'pending_review'))
+        .where(and(eq(resources.status, 'pending_review'), activeOnly()))
         .limit(1);
       pendingReview = Number(pendingRes[0]?.count ?? 0);
     } else {
@@ -92,6 +104,7 @@ export class DashboardService {
           and(
             eq(resources.uploaderId, teacherId),
             eq(resources.status, 'pending_review'),
+            activeOnly(),
           ),
         )
         .limit(1);
@@ -109,6 +122,7 @@ export class DashboardService {
         and(
           eq(resources.uploaderId, teacherId),
           gte(resources.createdAt, monthStart),
+          activeOnly(),
         ),
       )
       .limit(1);
@@ -123,6 +137,7 @@ export class DashboardService {
           subject: resources.subject,
         })
         .from(resources)
+        .where(activeOnly())
         .groupBy(resources.program, resources.subject);
       authorizedSubjects = distinctSubj.length;
     } else {
@@ -137,7 +152,7 @@ export class DashboardService {
         const prekSubj = await this.db
           .select({ subject: resources.subject })
           .from(resources)
-          .where(eq(resources.program, 'prek'))
+          .where(and(eq(resources.program, 'prek'), activeOnly()))
           .groupBy(resources.subject);
         for (const s of prekSubj) roleSubjects.add(`prek:${s.subject}`);
       }
@@ -146,7 +161,7 @@ export class DashboardService {
         const kSubj = await this.db
           .select({ subject: resources.subject })
           .from(resources)
-          .where(eq(resources.program, 'k'))
+          .where(and(eq(resources.program, 'k'), activeOnly()))
           .groupBy(resources.subject);
         for (const s of kSubj) roleSubjects.add(`k:${s.subject}`);
       }
@@ -184,6 +199,7 @@ export class DashboardService {
         and(
           eq(resources.uploaderId, teacherId),
           eq(resources.status, 'published'),
+          activeOnly(),
         ),
       )
       .limit(1);
@@ -202,7 +218,7 @@ export class DashboardService {
         .select({ count: count() })
         .from(resources)
         .where(
-          and(eq(resources.program, 'prek'), eq(resources.status, 'published')),
+          and(eq(resources.program, 'prek'), eq(resources.status, 'published'), activeOnly()),
         )
         .limit(1);
       result.prekCount = Number(prekCountRes[0]?.count ?? 0);
@@ -211,7 +227,7 @@ export class DashboardService {
         .select({ count: count() })
         .from(resources)
         .where(
-          and(eq(resources.program, 'k'), eq(resources.status, 'published')),
+          and(eq(resources.program, 'k'), eq(resources.status, 'published'), activeOnly()),
         )
         .limit(1);
       result.kCount = Number(kCountRes[0]?.count ?? 0);
@@ -223,6 +239,7 @@ export class DashboardService {
           and(
             eq(resources.folderType, 'courseware'),
             eq(resources.status, 'published'),
+            activeOnly(),
           ),
         )
         .limit(1);
@@ -247,7 +264,10 @@ export class DashboardService {
     const roles: string[] = teacherRows[0]?.roles ?? [];
     const isAdmin = ADMIN_ROLES.some((r: string) => roles.includes(r));
 
-    const whereConditions = [];
+    // Soft delete first: it applies to BOTH branches. An administrator's "recent
+    // updates" list must not advertise a resource that has been deleted, and a
+    // teacher's must not either.
+    const whereConditions = [activeOnly()];
     if (isAdmin) {
       // 管理员：看所有最新更新
     } else {
