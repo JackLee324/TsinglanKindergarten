@@ -1,0 +1,42 @@
+QLS — PHASE 6 REPORT INTEGRATION: CORRECTIONS TO MY OWN REPORT
+generated: 2026-09-24T02:43:15Z
+
+1) GATE NUMBERS WERE STALE
+   I reported files-http pass=61 and 151 HTTP assertions total. The suite
+   grew after that measurement. Re-run just now on the current tree:
+     npm test 103/103 · typecheck server+client PASS · build PASS
+   · api-contracts matched · authz-http 24 · hardening 10 · mfa 36
+   · security-headers 20 · files-http 71  ->  161 HTTP assertions.
+
+2) I OVERSTATED THE ANTI-SPOOFING CONTROL
+   I described the magic-byte/declaration-consistency check as proof that
+   a disguised file is REJECTED. It does reject such payloads when handed
+   them, and my probe confirms that. BUT in the real flow the 'head' bytes
+   are CLIENT-SUPPLIED: uploads go browser -> platform bucket directly, and
+   registerFile only ever sees what the caller sends. So the check proves
+   the caller can produce self-consistent bytes - NOT that the stored object
+   is really that type. Authoritative verification requires a server-side
+   read of the stored object, which needs the missing platform integration.
+   Corrected in the report rather than left as a stronger claim than the
+   evidence supports.
+
+3) THE RECYCLE BIN HAS NO UI
+   GET /api/resources/recycle-bin and POST :id/restore exist and are
+   HTTP-asserted, but NO client code calls them and no page exists. The
+   static api-contract gate only checks client->server, so it cannot catch
+   this. Teachers cannot currently restore a deleted resource through the
+   interface, which undercuts the purpose of soft delete.
+
+4) TWO MORE ITEMS FROM THE PHASE-6 REPORT WORTH RECORDING
+   - purgeExpiredResources() is deliberately not exposed over HTTP; it was
+     verified 9/9 with a throwaway harness that was NOT committed. Treat as
+     verified-once, not regression-covered.
+   - Review and dashboard services were updated to exclude soft-deleted
+     rows; the author notes this was the easy miss when adding deleted_at.
+
+5) ABSOLUTE-PATH POLICY - INDEPENDENTLY RE-DERIVED
+   The author re-derived and re-verified the leading-slash decision and
+   confirms a stricter 'reject all absolute paths' rule made every Pre-K
+   English cover return 400, because real stored paths begin with '/'. Now
+   guarded by both a unit test and a live check against a real row. This
+   corroborates the retraction recorded in evidence/file-validation-probe.txt.

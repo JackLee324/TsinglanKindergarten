@@ -182,14 +182,13 @@ export function sanitizeFileName(rawName: unknown): string {
 }
 
 /**
- * Is a STORED path (e.g. `resources.file_path`) suitable for use as a
- * bucket-RELATIVE object key?
+ * Is a STORED path (e.g. `resources.file_path`) a safe BUCKET-RELATIVE key?
  *
  * Rejects:
  *   * NUL and control characters;
  *   * any `..` segment — the actual ascent primitive, in both separator styles;
  *   * any `.` segment (normalisation bait);
- *   * a leading `/` or `\`, i.e. an ABSOLUTE path (see the note below);
+ *   * ANY leading separator (`/` or `\`), i.e. an absolute path;
  *   * a Windows drive prefix (`C:\…`) or UNC prefix (`\\server\share`);
  *   * a leading `~` (home expansion);
  *   * percent-encoded traversal (`%2e%2e`, `%2f`, `%5c`), so a value that is
@@ -197,32 +196,37 @@ export function sanitizeFileName(rawName: unknown): string {
  *   * a trailing separator (an empty basename surprises every consumer);
  *   * empty input and anything longer than the column that stores it.
  *
- * WHY ONE LEADING '/' IS ALLOWED (and two are not)
- * This caused a real, twice-made mistake, so the evidence is recorded here.
+ * WHY A LEADING SEPARATOR IS REJECTED — AND WHAT TO DO ABOUT THE PLATFORM'S
+ * REAL KEY SHAPE (read this before "fixing" either side)
+ * ------------------------------------------------------
+ * A leading separator makes the path ABSOLUTE, and whether that is dangerous
+ * depends entirely on how a consumer combines the value:
  *
- * A first version rejected every leading separator as "absolute". That breaks
- * REAL data in this repository: the seeded curriculum stores storybook covers as
+ *     path.join('/bucket', '/etc/passwd')    -> '/bucket/etc/passwd'   (stays in)
+ *     path.resolve('/bucket', '/etc/passwd') -> '/etc/passwd'          (escapes)
+ *
+ * A predicate that answers "is this value safe?" cannot know which of those a
+ * future caller will write, so it must not answer `true` for a value that is only
+ * safe under one of them. Accepting `/etc/passwd` while rejecting `//etc/passwd`
+ * was an inconsistency, not a policy, and it made the function's name a lie for
+ * anything absolute. Absolute input is therefore refused here, full stop.
+ *
+ * That alone would break REAL data in this repository: the seeded curriculum
+ * stores storybook covers as
  *
  *     /curriculum-resources/prek-english-covers/1876907126277273.jpg
  *
- * (see seed-curriculum.sql), and `getStorybookCoverStream()` passes that value
- * through this function. Rejecting it turned every Pre-K English cover into a
- * 400. A leading slash is the PLATFORM'S NORMAL SHAPE for an object key: the
- * value is handed to a bucket-SCOPED storage client and resolved against the
- * bucket root, never the filesystem (the platform's own `parseFilePath()` strips
- * leading slashes), so an absolute-looking key is harmless there.
+ * (see seed-curriculum.sql) — a leading slash is the PLATFORM'S NORMAL SHAPE for
+ * an object key. The answer is NOT to loosen this predicate; it is to normalise
+ * the platform's shape explicitly, at the boundary, with
+ * `toBucketRelativePath()` below — which is exactly what the platform's own
+ * `parseFilePath()` does (`path.replace(/^\/+/, '')`) before it uses a stored key.
+ * Validation stays strict; normalisation becomes a named, tested, visible step.
  *
- * What IS refused, and is what actually matters:
- *   * `..` segments — the ONLY ascent primitive, checked under both separators,
- *     including when they sit behind a leading slash
- *     (`/uploads/../../etc/passwd` is rejected);
- *   * doubled leading separators (`//host/share`, `\\host\share`) and any
- *     leading backslash: real object keys are POSIX-style and single-rooted;
- *   * control characters, drive letters, `~`, and percent-encoded traversal.
- *
- * Consumers that turn a stored value into a LOCAL filesystem path must still take
- * the BASENAME and sanitise it (see `ResourcesService.coverFileNameFrom`), which
- * is what makes a leading slash irrelevant rather than merely tolerated.
+ * A consumer that turns a stored value into a LOCAL filesystem path must still
+ * take the BASENAME and sanitise it (see `ResourcesService.coverFileNameFrom`):
+ * normalisation makes a leading slash irrelevant, taking the basename is what
+ * makes the value harmless.
  */
 export function isPathTraversalSafe(storedPath: unknown): boolean {
   if (typeof storedPath !== 'string') return false;
@@ -237,12 +241,55 @@ export function isPathTraversalSafe(storedPath: unknown): boolean {
   if (/%2e|%2f|%5c/i.test(storedPath)) return false;
 
   const segments = storedPath.split(/[\\/]+/);
+  // An empty FIRST segment means the value began with a separator, i.e. it is
+  // absolute and not a bucket-relative key. (`//` and `\\\\` are already rejected
+  // above; this catches the single-separator forms `/etc/passwd` and
+  // `\\etc\\passwd`, plus the degenerate `/` and `\\`.)
+  if (segments[0] === '') return false;
   if (segments.some((s) => s === '..' || s === '.')) return false;
   // A trailing separator would make the last segment empty; reject it so callers
   // cannot be surprised by an empty basename.
   if (segments[segments.length - 1] === '') return false;
 
   return true;
+}
+
+/**
+ * Normalise a STORED platform object key into the bucket-relative form that
+ * `isPathTraversalSafe()` accepts — or return `null` when it cannot be made safe.
+ *
+ * WHY THIS IS A SEPARATE, EXPLICIT STEP
+ * The platform's real keys look absolute (`/curriculum-resources/…`), while this
+ * module's contract is that a stored path is bucket-relative. Rather than weaken
+ * the predicate to accommodate one shape, the conversion lives here: named,
+ * unit-tested, and applied only by callers that KNOW the value is an object key
+ * (not a filesystem path). It mirrors the platform's own `parseFilePath()`,
+ * which strips leading slashes before using a stored key.
+ *
+ * Exactly ONE leading separator is removed. That matters:
+ *   * `/curriculum-resources/x.jpg` -> `curriculum-resources/x.jpg`   (accepted)
+ *   * `//host/share/x`              -> `/host/share/x` -> rejected by the
+ *     predicate (still absolute, and UNC-shaped), so a doubled separator is NOT
+ *     silently laundered into a relative key;
+ *   * `\\host\share`                -> still leading-backslash -> rejected;
+ *   * `/`, `\`, `''`, `'..'`, `C:\x`, `~/.ssh`, `a/../b`, `a\u0000b` -> null.
+ *
+ * Returns the normalised key on success, so a caller must USE the return value:
+ * persisting the original string would re-introduce the absolute form.
+ */
+export function toBucketRelativePath(storedPath: unknown): string | null {
+  if (typeof storedPath !== 'string') return null;
+  if (storedPath.length === 0) return null;
+
+  const withoutOneLeadingSeparator = /^[/\\]/.test(storedPath)
+    ? storedPath.slice(1)
+    : storedPath;
+
+  // A value that was only a separator (`/`, `\`) becomes empty here.
+  if (withoutOneLeadingSeparator.length === 0) return null;
+  if (!isPathTraversalSafe(withoutOneLeadingSeparator)) return null;
+
+  return withoutOneLeadingSeparator;
 }
 
 // ---------------------------------------------------------------------------

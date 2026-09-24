@@ -75,31 +75,53 @@ server/database/migrations/
 
 > 当前 **7 个**迁移（`0001`~`0007`）**全部**配有 `.down.sql`。 [已证实]
 
-### 2.3 从零建库：`scripts/db-bootstrap.mjs`（为什么需要它）
+### 2.3 从零建库：`scripts/db-bootstrap.mjs`（**实测过的互相依赖缺陷**）
 
-新库**不能**简单地"先 `init.sql` 再 `migrate up`"，也不能反过来：
+新库**不能**简单地"先 `init.sql` 再 `migrate up`"，也**不能**反过来 —— 两种顺序都被实测证伪：
 
-| 顺序 | 结果 |
+| 顺序 | 实测结果 |
 |---|---|
-| A: `init.sql` → `migrate up` | `0001` 失败：`42P01 relation "teachers" does not exist`。`init.sql` 是基线 DDL 但**不创建**它自己引用的 `user_profile` 类型与 `anon`/`authenticated`/`service_role` 三个角色 → 在干净的集群上根本跑不起来 |
-| B: `migrate up` → `init.sql` | `0001` 的 `ALTER TABLE teachers …` 无表可改，同样失败 |
+| A: `init.sql` → `migrate up` | `0001` 失败：**`42P01 relation "teachers" does not exist`**。`init.sql` 是基线 DDL，但它**不创建**自己引用的 `user_profile` 复合类型与 `anon`/`authenticated`/`service_role` 三个角色 → 在干净的集群上根本跑不起来 |
+| B: `migrate up` → `init.sql` | **同样的 `42P01`** —— `0001` 是对基线 DDL 的**对齐层**，不是自足 schema；没有表可 `ALTER` |
 
-两者**互相依赖**：`init.sql` 需要类型与角色，`0001` 需要表。
-平台从不会暴露这个缺陷（平台会先把库连同类型/角色一起准备好）。
+两者**互为前提**：`init.sql` 需要类型与角色（只有迁移 `0001` 会创建），`0001` 需要表（只有 `init.sql` 会创建）。
+**妙搭平台预先提供好数据库**（含类型与角色），所以这个缺陷在平台上从未暴露 —— 它只在**换机器重建 / 恢复验证**时才浮现。
 
-`scripts/db-bootstrap.mjs` 补上缺失的前导，并按唯一可行的顺序执行：
+**`scripts/db-bootstrap.mjs` 就是补上缺失前导的那个脚本**：
+
 ```
-1. 幂等前导 —— 创建 user_profile 类型与三个 DB 角色
-   （源码**取自 `0001` 文件本身**，因此两者不可能漂移）
-2. init.sql      —— 基线表、索引、RLS policy
-3. migrate up    —— 版本化、带校验和的演进
+1/3  幂等前导  —— 创建 user_profile 类型 + 三个 DB 角色
+      ★ 这两段 DDL 不是复制粘贴，而是**从 0001 文件本身提取**其前两个
+        `DO $$ ... $$;` 块（脚本断言至少找到 2 个块，否则拒绝运行），
+        因此前导与 0001 不可能漂移
+2/3  init.sql  —— 基线表、索引、RLS policy
+3/3  migrate up —— 版本化、带校验和的演进（子进程调用 scripts/migrate.mjs up，
+                  并把 DATABASE_URL/SUDA_DATABASE_URL/MIGRATION_DATABASE_URL 三者都指向同一库）
 ```
-[已证实：文件头与实现说明]
+[已证实：`scripts/db-bootstrap.mjs` 全文]
 
-用法（该脚本由另一个 agent 于写作期间新增，**我未执行**）：
+用法与行为（**我未执行该脚本，以下为源码确证**）：
 ```bash
-node scripts/db-bootstrap.mjs --help      # 先看它自己声明的参数
+# 两种等价传参
+node scripts/db-bootstrap.mjs --url "postgresql://user:pw@host:5432/dbname"
+DATABASE_URL="postgresql://…" node scripts/db-bootstrap.mjs
 ```
+
+| 行为 | 细节 |
+|---|---|
+| **拒绝改已建好的库** | 若 `public` 下已存在 `teachers` **或** `resources`，直接 `REFUSING` 并 **exit 1**（除非 `--force`）。它**从不 DROP 任何东西** |
+| 无连接串 | 打印 `no database URL`，**exit 2** |
+| 缺 `0001` 或 `init.sql` | **exit 2** |
+| `0001` 结构变了（`DO $$` 块少于 2） | **exit 1** 并明确说"拒绝猜哪些块可以提前跑" |
+| `init.sql` 失败 | **精确报错**（`[SQLSTATE] message` + `hint`）并 exit 1，提示"数据库可能已部分建好，请改用迁移"——**绝不吞错** |
+| 迁移失败 | `[bootstrap] migrations failed — database is NOT ready.` 并 exit 1 |
+
+> **它不是什么**（脚本文件头明确声明，务必照此使用）：
+> - ❌ **不是重建生产库的手段**；
+> - ❌ 不是"演进既有数据库"的手段 —— 那是 `node scripts/migrate.mjs up`；
+> - ❌ 不是灾难恢复手段 —— 那是 `pg_restore`（见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md)）。
+> 它的用途只有两个：**搭建全新环境**，以及**为恢复演练准备验证目标库**。
+
 > 平台库（妙搭）**不需要**它 —— 平台已提供类型与角色，直接 `migrate.mjs up` 即可。
 
 ---
