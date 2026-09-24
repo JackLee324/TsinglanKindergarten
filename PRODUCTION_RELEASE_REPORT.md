@@ -30,7 +30,7 @@
 `[已证实]` 原始日志：`evidence/change-inventory.txt`
 
 ```
-70 files changed, 9700 insertions(+), 223 deletions(-)
+87 files changed, 15635 insertions(+), 227 deletions(-)
 deleted files: 0
 ```
 
@@ -101,7 +101,7 @@ deleted files: 0
 
 ```
 === 自动化测试 ===
-  npm test                 # tests 24 # pass 24 # fail 0
+  npm test                 # tests 102 # pass 102 # fail 0
 === 类型检查 ===
   typecheck server         PASS
   typecheck client         PASS
@@ -113,13 +113,20 @@ deleted files: 0
   authz-http               pass=24 fail=0
   hardening                pass=10 fail=0
   mfa                      pass=36 fail=0
+  security-headers         pass=20 fail=0
 
   ✅ 全部通过
 ```
 
+原始日志：`evidence/gate-run-final.txt`
+
+> 说明：本轮中途曾有一次 `npm test` 报 1 项失败，经排查是**与并发编辑同一文件的竞态**
+> （另一个代理正在写文件，构建产物处于中间状态），并非真实缺陷。复查方式是连续运行
+> 该套件三次，均为 102/102，随后重跑整门禁仍全绿。此过程如实记录，未隐藏。
+
 | 项目 | 结果 |
 |------|------|
-| 单元测试 | 24/24 通过 |
+| 单元测试 | **102/102** 通过 |
 | 服务端类型检查 | 通过（`tsc --noEmit`） |
 | 客户端类型检查 | 通过 |
 | 生产构建 | 通过（exit 0） |
@@ -127,7 +134,7 @@ deleted files: 0
 | HTTP 鉴权套件 | 24/24 |
 | HTTP 加固套件 | 10/10 |
 | HTTP MFA 套件 | 36/36 |
-| **合计 HTTP 断言** | **70 条，全部通过** |
+| **合计 HTTP 断言** | **90 条，全部通过** |
 
 ### 3.2 契约门禁不是空转 `[已证实]`
 
@@ -354,6 +361,45 @@ seed 行为，避免因其他启动错误而"因为错误的原因通过"。断�
 
 ---
 
+## 6c. 文件私有存储与回收站（Phase 6）
+
+`[已证实]`（本地逻辑验证）／`[无法验证]`（真实对象存储）
+
+**变更前**：上传由浏览器**直传平台 bucket**，服务端从未见到文件，因此不存在任何
+服务端 MIME/大小/魔数校验；下载返回 `/api/__platform__/storage/download?bucket=…`
+占位 URL，代码中残留 `TODO: 接入真实 dataloom FileService`——**该功能从未生产化**。
+
+**已实现并验证**：
+
+| 能力 | 实现 | 验证方式 |
+|------|------|----------|
+| 文件名消毒 | `file-validation.ts` | 外部对抗性探针 32 项 |
+| 魔数校验 + 声明一致性 | 拒绝 EXE/HTML/文本/ZIP 伪装成 PDF | 探针实测全部拒绝 |
+| 扩展名/MIME 白名单 | 拒绝 `.html`/`.svg`/`.js`/`.exe` | 探针实测 |
+| 大小限制 | 默认 50MB，硬上限 200MB | 探针实测 |
+| 短时签名下载令牌 | `download-token.ts`，HMAC-SHA256，**绑定资源+账号**，默认 300s、硬上限 3600s | 签名先于解析校验；`timingSafeEqual` 带长度前置检查；无硬编码回退密钥 |
+| 软删除/回收站 | 迁移 `0007`，`resources_soft_delete_pairing` CHECK 作为**数据库不变量** | 迁移已应用于真实库，前后快照证明零数据丢失 |
+
+**关于一次我自己造成的回归（如实记录）**：我最初断言
+`isPathTraversalSafe('/etc/passwd')` 应为 `false`，并据此修改了校验器。**该断言是错的**。
+本平台真实存储路径**以 `/` 开头**：
+
+```
+"filePath": "/curriculum-resources/prek-english-covers/1876907126277273.jpg"
+```
+
+它是**bucket key**，由 bucket 作用域的存储客户端相对**桶根**解析，从不接触文件系统。
+真正需要拒绝的是 `..`、`.`、UNC、盘符、`~` 与百分号编码穿越——这些原本就已拒绝。
+该回归由**模块作者独立编写的测试**发现（"accepts ordinary stored paths" 开始失败）。
+我已回滚改动，并把这次误判**写入 `evidence/file-validation-probe.txt` 而非删除**：
+一个前提错误的探针会产出自信而错误的结论，这次仅靠第二套独立测试才暴露。
+
+**`[无法验证]`**：真实对象存储的字节流上传/下载、平台 `createSignedUrl` 的实际返回、
+以及 `.download` 端到端行为，均依赖妙搭 `dataloom`/`file-service`，在本地不可达。
+本地验证的是**校验与授权边界**，不是存储集成本身。
+
+---
+
 ## 7. 鉴权与安全模型（摘要）
 
 完整设计见 `RBAC.md` 与 `PRODUCTION_READINESS.md`；此处仅列已验证结论。
@@ -416,12 +462,13 @@ seed 行为，避免因其他启动错误而"因为错误的原因通过"。断�
 没有可恢复性证据。任何"能上线"的结论都必须先有一次真实的
 `pg_dump` → `pg_restore` 到临时库 → 比对行数的演练。目前**无证据**。
 
-**B2 — 私有存储与上传校验未闭环（阻断级）**
-上传目前由浏览器**直传平台 bucket**，服务端**从未见到文件**，因此不存在
-服务端 MIME/大小/魔数校验。下载返回的是形如
-`/api/__platform__/storage/download?bucket=...&path=...` 的占位 URL，
-代码中残留 `TODO: 接入真实 dataloom FileService`——即该功能**从未生产化**。
-本环境无法验证平台存储集成。
+**B2 — 私有存储集成未在真实平台上验证（阻断级，已部分收敛）**
+服务端校验边界（白名单、魔数、声明一致性、大小、文件名消毒）与「签名短期 +
+绑定调用者」的下载令牌**已实现并通过本地对抗性测试**；软删除/回收站迁移 `0007`
+已在真实库应用且零数据丢失。
+但**真实对象存储的字节流从未验证**：上传仍由浏览器直传平台 bucket，下载仍需
+接入平台 `createSignedUrl`。这些依赖妙搭 `dataloom`/`file-service`，本地不可达，
+**必须由部署环境验证**。
 
 **B3 — 限流为进程内实现（高）**
 多实例部署下限流形同虚设，暴力破解防护失效。
