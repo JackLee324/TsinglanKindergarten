@@ -69,7 +69,13 @@ async function req(method, path, body, extra = {}) {
   });
   store(res);
   let data = null;
-  try { data = await res.json(); } catch { /* a 302 has no JSON body */ }
+  try {
+    data = await res.json();
+  } catch {
+    // A 302 has no body; the storybook-cover endpoint streams an image. Draining
+    // the body keeps the connection reusable instead of leaking it.
+    try { await res.arrayBuffer(); } catch { /* nothing to drain */ }
+  }
   return { status: res.status, data, headers: res.headers };
 }
 let pass = 0, fail = 0;
@@ -113,6 +119,13 @@ async function mintToken(id) {
   if (!token) throw new Error('no token in Location: ' + String(res.headers.get('location')));
   return { token, location: res.headers.get('location') };
 }
+
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const COVER_ASSETS_DIR = join(ROOT, 'server', 'assets', 'prek-english-covers');
 
 const Pg = (await import('postgres')).default;
 const { resetFixtures: sharedReset } = await import('../tests/helpers/reset-fixtures.mjs');
@@ -375,6 +388,43 @@ try {
   check('  -> the soft delete was audited', actions.includes('resource_delete'), true);
   check('  -> the restore was audited', actions.includes('resource_restore'), true);
   console.log('       audit actions: ' + actions.join(', '));
+  // =========================================================================
+  console.log('\n=== J. REAL PLATFORM PATH SHAPES STILL WORK (regression guard) ===');
+  // =========================================================================
+  // The seeded curriculum stores storybook covers as
+  //   "/curriculum-resources/prek-english-covers/<id>.jpg"
+  // — with a LEADING SLASH. An earlier revision of isPathTraversalSafe rejected
+  // every absolute-looking stored path, which turned each of these real covers
+  // into a 400. This check pushes the REAL value from the REAL row through the
+  // REAL endpoint, so the mistake cannot come back unnoticed.
+  const coverRows = await sql`
+    select id, description from resources
+    where description like '%prek-english-covers%' and status = 'published'`;
+  let coverPick = null;
+  for (const row of coverRows) {
+    try {
+      const storybooks = JSON.parse(row.description ?? '{}').storybooks ?? [];
+      for (let i = 0; i < storybooks.length; i += 1) {
+        const stored = String(storybooks[i]?.filePath ?? '');
+        if (!stored.startsWith('/')) continue; // the shape under test
+        const base = stored.split(/[\\/]+/).pop();
+        if (base && existsSync(join(COVER_ASSETS_DIR, base))) {
+          coverPick = { id: row.id, index: i, stored };
+          break;
+        }
+      }
+    } catch { /* not a storybook row */ }
+    if (coverPick) break;
+  }
+  if (coverPick) {
+    console.log('       stored path under test: ' + coverPick.stored);
+    const cover = await req('GET', `/api/resources/${coverPick.id}/storybook-cover/${coverPick.index}`);
+    check('a leading-slash platform cover path is ACCEPTED (not 400)', cover.status, 200);
+  } else {
+    console.log('  NOTE  no seeded storybook cover with a local asset was found, so this check did');
+    console.log('        NOT run here. tests/file-security.test.mjs asserts the path shape itself');
+    console.log('        unconditionally, so the policy is still covered.');
+  }
 } finally {
   // -------------------------------------------------------------------------
   // CLEANUP — remove only the rows THIS suite created (a hard delete, because a

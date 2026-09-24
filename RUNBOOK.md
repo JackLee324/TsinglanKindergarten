@@ -724,8 +724,14 @@ bash scripts/verify-all.sh          # 条件允许时跑完整门禁
 | `MFA_ENCRYPTION_KEY` | ❌ **需要停机窗口**（当前实现无双密钥读取） | §7.1 |
 | 会话失效（"session secret"） | ✅ | §7.2 |
 | 数据库口令 | ✅（有连接池，需重启） | §7.3 |
+| **`DOWNLOAD_TOKEN_SECRET`**（写作期间新增） | ✅ **可在线**，影响仅限默认 300s 的短时链接 | §7.4 |
 | `SESSION_COOKIE_NAME` / TTL | ✅ | §7.2 |
-| 平台凭据（`FORCE_AUTHN_INNERAPI_DOMAIN` 等） | 视平台 | §7.4 |
+| 平台凭据（`FORCE_AUTHN_INNERAPI_DOMAIN` 等） | 视平台 | §7.5 |
+
+> ⚠️ **注意命名混淆风险**：本系统**没有**"session 签名密钥"（会话是不透明随机令牌），
+> 但**有**"下载令牌签名密钥"。历史上模板文档里的 "session secret" 在本项目对应的是
+> **失效全部会话**，不是轮换某把密钥。见 §7.2 与
+> [`DEPLOYMENT_PRODUCTION.md`](DEPLOYMENT_PRODUCTION.md) §3.1。
 
 ### 7.1 轮换 `MFA_ENCRYPTION_KEY`（高危，必须演练）
 
