@@ -1,0 +1,1675 @@
+{
+  "takenAt": "2026-09-24T02:23:04.497Z",
+  "database": "qls_test_0005",
+  "dbUser": "qlsadmin",
+  "serverVersion": "PostgreSQL 16.14 on x86_64-apple-darwin24.6.0",
+  "tables": [
+    "account_permission_overrides",
+    "account_scopes",
+    "audit_logs",
+    "mfa_challenges",
+    "mfa_recovery_codes",
+    "resources",
+    "review_records",
+    "schema_migrations",
+    "sessions",
+    "subject_permissions",
+    "teacher_mfa",
+    "teachers"
+  ],
+  "counts": {
+    "teachers": 22,
+    "resources": 347,
+    "subject_permissions": 0,
+    "review_records": 18,
+    "audit_logs": 407,
+    "sessions": 136
+  },
+  "otherTables": {
+    "account_permission_overrides": 0,
+    "account_scopes": 0,
+    "mfa_challenges": 0,
+    "mfa_recovery_codes": 0,
+    "schema_migrations": 6,
+    "teacher_mfa": 1
+  },
+  "roleDistribution": [
+    {
+      "role": "k_assistant",
+      "accounts": 4
+    },
+    {
+      "role": "prek_assistant",
+      "accounts": 4
+    },
+    {
+      "role": "pe_specialist",
+      "accounts": 4
+    },
+    {
+      "role": "prek_head",
+      "accounts": 3
+    },
+    {
+      "role": "k_head",
+      "accounts": 3
+    },
+    {
+      "role": "principal",
+      "accounts": 2
+    },
+    {
+      "role": "curriculum_director",
+      "accounts": 1
+    },
+    {
+      "role": "super_admin",
+      "accounts": 1
+    }
+  ],
+  "columns": {
+    "account_permission_overrides": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "permission",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "effect",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "reason",
+        "type": "text",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "granted_by",
+        "type": "uuid",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "expires_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      }
+    ],
+    "account_scopes": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "permission",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "kind",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "program",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "subject",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "sub_subject",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "created_by",
+        "type": "uuid",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      }
+    ],
+    "audit_logs": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "action",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "wecom_user_id",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "teacher_name",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "ip_address",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "user_agent",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "resource_id",
+        "type": "uuid",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "resource_title",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "program",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "subject",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "detail",
+        "type": "text",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "success",
+        "type": "boolean",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "error_message",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "_created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      }
+    ],
+    "mfa_challenges": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "token_hash",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "attempts",
+        "type": "smallint",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "max_attempts",
+        "type": "smallint",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "expires_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "consumed_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "ip_address",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "user_agent",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      }
+    ],
+    "mfa_recovery_codes": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "code_hash",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "used_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "used_ip",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      }
+    ],
+    "resources": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "title",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "title_en",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "program",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "subject",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "sub_subject",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "folder_type",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "semester",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "week_number",
+        "type": "integer",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "theme",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "description",
+        "type": "text",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "file_bucket_id",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "file_path",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "file_name",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "file_size",
+        "type": "bigint",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "file_type",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "version",
+        "type": "integer",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "status",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "uploader_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "reviewer_id",
+        "type": "uuid",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "review_comment",
+        "type": "text",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "reviewed_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "_created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_created_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      },
+      {
+        "column": "_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_updated_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      }
+    ],
+    "review_records": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "resource_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "reviewer_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "action",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "comment",
+        "type": "text",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "_created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_created_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      },
+      {
+        "column": "_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_updated_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      }
+    ],
+    "schema_migrations": [
+      {
+        "column": "version",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "name",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "checksum",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "applied_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "execution_ms",
+        "type": "integer",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "applied_by",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      }
+    ],
+    "sessions": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "session_hash",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "last_accessed_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "expires_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "revoked",
+        "type": "boolean",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "ip_address",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "user_agent",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "_created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_created_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      },
+      {
+        "column": "_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_updated_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      },
+      {
+        "column": "permissions_version",
+        "type": "integer",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "revoked_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "revoke_reason",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "device",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      }
+    ],
+    "subject_permissions": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "program",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "subject",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "sub_subject",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "can_view",
+        "type": "boolean",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "can_upload",
+        "type": "boolean",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_created_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      },
+      {
+        "column": "_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_updated_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      }
+    ],
+    "teacher_mfa": [
+      {
+        "column": "teacher_id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "secret_encrypted",
+        "type": "text",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "algorithm",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "digits",
+        "type": "smallint",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "period_seconds",
+        "type": "smallint",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "confirmed",
+        "type": "boolean",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "enabled_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "last_used_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      }
+    ],
+    "teachers": [
+      {
+        "column": "id",
+        "type": "uuid",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "wecom_user_id",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "name",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": false
+      },
+      {
+        "column": "name_en",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "email",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "roles",
+        "type": "ARRAY",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "status",
+        "type": "character varying",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "last_login_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "_created_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_created_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      },
+      {
+        "column": "_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "_updated_by",
+        "type": "USER-DEFINED",
+        "nullable": true,
+        "has_default": true
+      },
+      {
+        "column": "username",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "password_hash",
+        "type": "character varying",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "must_change_password",
+        "type": "boolean",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "failed_login_attempts",
+        "type": "integer",
+        "nullable": false,
+        "has_default": true
+      },
+      {
+        "column": "locked_until",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "password_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": true,
+        "has_default": false
+      },
+      {
+        "column": "permissions_version",
+        "type": "integer",
+        "nullable": false,
+        "has_default": true
+      }
+    ]
+  },
+  "indexes": {
+    "account_permission_overrides": [
+      {
+        "name": "account_permission_overrides_pkey",
+        "def": "CREATE UNIQUE INDEX account_permission_overrides_pkey ON public.account_permission_overrides USING btree (id)"
+      },
+      {
+        "name": "account_permission_overrides_unique",
+        "def": "CREATE UNIQUE INDEX account_permission_overrides_unique ON public.account_permission_overrides USING btree (teacher_id, permission)"
+      },
+      {
+        "name": "idx_apo_teacher",
+        "def": "CREATE INDEX idx_apo_teacher ON public.account_permission_overrides USING btree (teacher_id)"
+      }
+    ],
+    "account_scopes": [
+      {
+        "name": "account_scopes_pkey",
+        "def": "CREATE UNIQUE INDEX account_scopes_pkey ON public.account_scopes USING btree (id)"
+      },
+      {
+        "name": "idx_account_scopes_teacher",
+        "def": "CREATE INDEX idx_account_scopes_teacher ON public.account_scopes USING btree (teacher_id)"
+      }
+    ],
+    "audit_logs": [
+      {
+        "name": "audit_logs_pkey",
+        "def": "CREATE UNIQUE INDEX audit_logs_pkey ON public.audit_logs USING btree (id)"
+      },
+      {
+        "name": "idx_audit_logs_action",
+        "def": "CREATE INDEX idx_audit_logs_action ON public.audit_logs USING btree (action)"
+      },
+      {
+        "name": "idx_audit_logs_created",
+        "def": "CREATE INDEX idx_audit_logs_created ON public.audit_logs USING btree (_created_at)"
+      },
+      {
+        "name": "idx_audit_logs_teacher",
+        "def": "CREATE INDEX idx_audit_logs_teacher ON public.audit_logs USING btree (teacher_id)"
+      },
+      {
+        "name": "idx_audit_logs_wecom",
+        "def": "CREATE INDEX idx_audit_logs_wecom ON public.audit_logs USING btree (wecom_user_id)"
+      }
+    ],
+    "mfa_challenges": [
+      {
+        "name": "idx_mfa_challenges_expires",
+        "def": "CREATE INDEX idx_mfa_challenges_expires ON public.mfa_challenges USING btree (expires_at)"
+      },
+      {
+        "name": "idx_mfa_challenges_teacher",
+        "def": "CREATE INDEX idx_mfa_challenges_teacher ON public.mfa_challenges USING btree (teacher_id)"
+      },
+      {
+        "name": "mfa_challenges_pkey",
+        "def": "CREATE UNIQUE INDEX mfa_challenges_pkey ON public.mfa_challenges USING btree (id)"
+      },
+      {
+        "name": "mfa_challenges_token_hash_key",
+        "def": "CREATE UNIQUE INDEX mfa_challenges_token_hash_key ON public.mfa_challenges USING btree (token_hash)"
+      }
+    ],
+    "mfa_recovery_codes": [
+      {
+        "name": "idx_mfa_recovery_hash",
+        "def": "CREATE UNIQUE INDEX idx_mfa_recovery_hash ON public.mfa_recovery_codes USING btree (code_hash)"
+      },
+      {
+        "name": "idx_mfa_recovery_teacher",
+        "def": "CREATE INDEX idx_mfa_recovery_teacher ON public.mfa_recovery_codes USING btree (teacher_id) WHERE (used_at IS NULL)"
+      },
+      {
+        "name": "mfa_recovery_codes_pkey",
+        "def": "CREATE UNIQUE INDEX mfa_recovery_codes_pkey ON public.mfa_recovery_codes USING btree (id)"
+      }
+    ],
+    "resources": [
+      {
+        "name": "idx_resources_folder",
+        "def": "CREATE INDEX idx_resources_folder ON public.resources USING btree (program, subject, folder_type)"
+      },
+      {
+        "name": "idx_resources_program_subject",
+        "def": "CREATE INDEX idx_resources_program_subject ON public.resources USING btree (program, subject, sub_subject)"
+      },
+      {
+        "name": "idx_resources_semester_week",
+        "def": "CREATE INDEX idx_resources_semester_week ON public.resources USING btree (semester, week_number)"
+      },
+      {
+        "name": "idx_resources_status",
+        "def": "CREATE INDEX idx_resources_status ON public.resources USING btree (status)"
+      },
+      {
+        "name": "idx_resources_uploader",
+        "def": "CREATE INDEX idx_resources_uploader ON public.resources USING btree (uploader_id)"
+      },
+      {
+        "name": "resources_pkey",
+        "def": "CREATE UNIQUE INDEX resources_pkey ON public.resources USING btree (id)"
+      }
+    ],
+    "review_records": [
+      {
+        "name": "idx_review_records_resource",
+        "def": "CREATE INDEX idx_review_records_resource ON public.review_records USING btree (resource_id)"
+      },
+      {
+        "name": "review_records_pkey",
+        "def": "CREATE UNIQUE INDEX review_records_pkey ON public.review_records USING btree (id)"
+      }
+    ],
+    "schema_migrations": [
+      {
+        "name": "schema_migrations_pkey",
+        "def": "CREATE UNIQUE INDEX schema_migrations_pkey ON public.schema_migrations USING btree (version)"
+      }
+    ],
+    "sessions": [
+      {
+        "name": "idx_sessions_expires",
+        "def": "CREATE INDEX idx_sessions_expires ON public.sessions USING btree (expires_at)"
+      },
+      {
+        "name": "idx_sessions_revoked",
+        "def": "CREATE INDEX idx_sessions_revoked ON public.sessions USING btree (revoked) WHERE (revoked = true)"
+      },
+      {
+        "name": "idx_sessions_session_hash",
+        "def": "CREATE UNIQUE INDEX idx_sessions_session_hash ON public.sessions USING btree (session_hash)"
+      },
+      {
+        "name": "idx_sessions_teacher",
+        "def": "CREATE INDEX idx_sessions_teacher ON public.sessions USING btree (teacher_id)"
+      },
+      {
+        "name": "idx_sessions_teacher_active",
+        "def": "CREATE INDEX idx_sessions_teacher_active ON public.sessions USING btree (teacher_id) WHERE (revoked = false)"
+      },
+      {
+        "name": "sessions_pkey",
+        "def": "CREATE UNIQUE INDEX sessions_pkey ON public.sessions USING btree (id)"
+      }
+    ],
+    "subject_permissions": [
+      {
+        "name": "idx_subject_permissions_program",
+        "def": "CREATE INDEX idx_subject_permissions_program ON public.subject_permissions USING btree (program, subject)"
+      },
+      {
+        "name": "idx_subject_permissions_teacher",
+        "def": "CREATE INDEX idx_subject_permissions_teacher ON public.subject_permissions USING btree (teacher_id)"
+      },
+      {
+        "name": "subject_permissions_pkey",
+        "def": "CREATE UNIQUE INDEX subject_permissions_pkey ON public.subject_permissions USING btree (id)"
+      },
+      {
+        "name": "subject_permissions_teacher_program_subject_sub_subject_key",
+        "def": "CREATE UNIQUE INDEX subject_permissions_teacher_program_subject_sub_subject_key ON public.subject_permissions USING btree (teacher_id, program, subject, sub_subject)"
+      }
+    ],
+    "teacher_mfa": [
+      {
+        "name": "teacher_mfa_pkey",
+        "def": "CREATE UNIQUE INDEX teacher_mfa_pkey ON public.teacher_mfa USING btree (teacher_id)"
+      }
+    ],
+    "teachers": [
+      {
+        "name": "idx_teachers_status",
+        "def": "CREATE INDEX idx_teachers_status ON public.teachers USING btree (status)"
+      },
+      {
+        "name": "idx_teachers_username",
+        "def": "CREATE UNIQUE INDEX idx_teachers_username ON public.teachers USING btree (lower((username)::text)) WHERE (username IS NOT NULL)"
+      },
+      {
+        "name": "teachers_pkey",
+        "def": "CREATE UNIQUE INDEX teachers_pkey ON public.teachers USING btree (id)"
+      },
+      {
+        "name": "teachers_wecom_user_id_key",
+        "def": "CREATE UNIQUE INDEX teachers_wecom_user_id_key ON public.teachers USING btree (wecom_user_id)"
+      }
+    ]
+  },
+  "rls": [
+    {
+      "table": "account_permission_overrides",
+      "enabled": false,
+      "forced": false
+    },
+    {
+      "table": "account_scopes",
+      "enabled": false,
+      "forced": false
+    },
+    {
+      "table": "audit_logs",
+      "enabled": true,
+      "forced": false
+    },
+    {
+      "table": "mfa_challenges",
+      "enabled": false,
+      "forced": false
+    },
+    {
+      "table": "mfa_recovery_codes",
+      "enabled": false,
+      "forced": false
+    },
+    {
+      "table": "resources",
+      "enabled": true,
+      "forced": false
+    },
+    {
+      "table": "review_records",
+      "enabled": true,
+      "forced": false
+    },
+    {
+      "table": "schema_migrations",
+      "enabled": false,
+      "forced": false
+    },
+    {
+      "table": "sessions",
+      "enabled": true,
+      "forced": false
+    },
+    {
+      "table": "subject_permissions",
+      "enabled": true,
+      "forced": false
+    },
+    {
+      "table": "teacher_mfa",
+      "enabled": false,
+      "forced": false
+    },
+    {
+      "table": "teachers",
+      "enabled": true,
+      "forced": false
+    }
+  ],
+  "policies": [
+    {
+      "table": "audit_logs",
+      "name": "audit_anon_select",
+      "cmd": "SELECT",
+      "roles": "{anon,authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "audit_logs",
+      "name": "audit_auth_all",
+      "cmd": "ALL",
+      "roles": "{authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "audit_logs",
+      "name": "audit_logs_anon_insert",
+      "cmd": "INSERT",
+      "roles": "{anon}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "audit_logs",
+      "name": "rls0004_anon_ins_audit_logs",
+      "cmd": "INSERT",
+      "roles": "{anon_}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "audit_logs",
+      "name": "rls0004_anon_sel_audit_logs",
+      "cmd": "SELECT",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "audit_logs",
+      "name": "rls0004_anon_upd_audit_logs",
+      "cmd": "UPDATE",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "audit_logs",
+      "name": "rls0004_auth_audit_logs",
+      "cmd": "ALL",
+      "roles": "{authenticated_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "audit_logs",
+      "name": "rls0004_service_audit_logs",
+      "cmd": "ALL",
+      "roles": "{service_role_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "audit_logs",
+      "name": "service_role_bypass_policy_audit",
+      "cmd": "ALL",
+      "roles": "{service_role}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "resources",
+      "name": "resources_anon_select",
+      "cmd": "SELECT",
+      "roles": "{anon,authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "resources",
+      "name": "resources_auth_all",
+      "cmd": "ALL",
+      "roles": "{authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "resources",
+      "name": "rls0004_anon_ins_resources",
+      "cmd": "INSERT",
+      "roles": "{anon_}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "resources",
+      "name": "rls0004_anon_sel_resources",
+      "cmd": "SELECT",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "resources",
+      "name": "rls0004_anon_upd_resources",
+      "cmd": "UPDATE",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "resources",
+      "name": "rls0004_auth_resources",
+      "cmd": "ALL",
+      "roles": "{authenticated_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "resources",
+      "name": "rls0004_service_resources",
+      "cmd": "ALL",
+      "roles": "{service_role_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "resources",
+      "name": "service_role_bypass_policy_resources",
+      "cmd": "ALL",
+      "roles": "{service_role}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "review_records",
+      "name": "review_anon_select",
+      "cmd": "SELECT",
+      "roles": "{anon,authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "review_records",
+      "name": "review_auth_all",
+      "cmd": "ALL",
+      "roles": "{authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "review_records",
+      "name": "rls0004_anon_ins_review_records",
+      "cmd": "INSERT",
+      "roles": "{anon_}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "review_records",
+      "name": "rls0004_anon_sel_review_records",
+      "cmd": "SELECT",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "review_records",
+      "name": "rls0004_anon_upd_review_records",
+      "cmd": "UPDATE",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "review_records",
+      "name": "rls0004_auth_review_records",
+      "cmd": "ALL",
+      "roles": "{authenticated_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "review_records",
+      "name": "rls0004_service_review_records",
+      "cmd": "ALL",
+      "roles": "{service_role_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "review_records",
+      "name": "service_role_bypass_policy_review",
+      "cmd": "ALL",
+      "roles": "{service_role}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "sessions",
+      "name": "rls0004_anon_ins_sessions",
+      "cmd": "INSERT",
+      "roles": "{anon_}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "sessions",
+      "name": "rls0004_anon_sel_sessions",
+      "cmd": "SELECT",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "sessions",
+      "name": "rls0004_auth_sessions",
+      "cmd": "ALL",
+      "roles": "{authenticated_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "sessions",
+      "name": "rls0004_service_sessions",
+      "cmd": "ALL",
+      "roles": "{service_role_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "sessions",
+      "name": "service_role_bypass_policy_sessions",
+      "cmd": "ALL",
+      "roles": "{service_role}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "sessions",
+      "name": "sessions_anon_insert",
+      "cmd": "INSERT",
+      "roles": "{anon}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "sessions",
+      "name": "sessions_anon_select",
+      "cmd": "SELECT",
+      "roles": "{anon}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "sessions",
+      "name": "sessions_anon_update_lifecycle_anon",
+      "cmd": "UPDATE",
+      "roles": "{anon}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "sessions",
+      "name": "sessions_anon_update_lifecycle_anon_",
+      "cmd": "UPDATE",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "sessions",
+      "name": "sessions_auth_all",
+      "cmd": "ALL",
+      "roles": "{authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "subject_permissions",
+      "name": "rls0004_anon_ins_subject_permissions",
+      "cmd": "INSERT",
+      "roles": "{anon_}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "subject_permissions",
+      "name": "rls0004_anon_sel_subject_permissions",
+      "cmd": "SELECT",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "subject_permissions",
+      "name": "rls0004_anon_upd_subject_permissions",
+      "cmd": "UPDATE",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "subject_permissions",
+      "name": "rls0004_auth_subject_permissions",
+      "cmd": "ALL",
+      "roles": "{authenticated_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "subject_permissions",
+      "name": "rls0004_service_subject_permissions",
+      "cmd": "ALL",
+      "roles": "{service_role_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "subject_permissions",
+      "name": "service_role_bypass_policy_sp",
+      "cmd": "ALL",
+      "roles": "{service_role}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "subject_permissions",
+      "name": "sp_anon_select",
+      "cmd": "SELECT",
+      "roles": "{anon,authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "subject_permissions",
+      "name": "sp_auth_all",
+      "cmd": "ALL",
+      "roles": "{authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "teachers",
+      "name": "rls0004_anon_ins_teachers",
+      "cmd": "INSERT",
+      "roles": "{anon_}",
+      "using": null,
+      "withCheck": "true"
+    },
+    {
+      "table": "teachers",
+      "name": "rls0004_anon_sel_teachers",
+      "cmd": "SELECT",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "teachers",
+      "name": "rls0004_auth_teachers",
+      "cmd": "ALL",
+      "roles": "{authenticated_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "teachers",
+      "name": "rls0004_service_teachers",
+      "cmd": "ALL",
+      "roles": "{service_role_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "teachers",
+      "name": "service_role_bypass_policy_teachers",
+      "cmd": "ALL",
+      "roles": "{service_role}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "teachers",
+      "name": "teachers_anon_select",
+      "cmd": "SELECT",
+      "roles": "{anon,authenticated}",
+      "using": "true",
+      "withCheck": null
+    },
+    {
+      "table": "teachers",
+      "name": "teachers_anon_update_login_state_anon",
+      "cmd": "UPDATE",
+      "roles": "{anon}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "teachers",
+      "name": "teachers_anon_update_login_state_anon_",
+      "cmd": "UPDATE",
+      "roles": "{anon_}",
+      "using": "true",
+      "withCheck": "true"
+    },
+    {
+      "table": "teachers",
+      "name": "teachers_auth_all",
+      "cmd": "ALL",
+      "roles": "{authenticated}",
+      "using": "true",
+      "withCheck": null
+    }
+  ],
+  "migrations": [
+    {
+      "version": "0001",
+      "name": "schema_baseline_alignment",
+      "checksum": "01cfc224396d04d0341ff1aea0baad628d3f48923f2c5e646ec344abf855ccb7"
+    },
+    {
+      "version": "0002",
+      "name": "backfill_legacy_usernames",
+      "checksum": "5e98af94ab5749ce191da3c57ba2359d42b3ca8df072224c96d519bc25168f02"
+    },
+    {
+      "version": "0003",
+      "name": "rbac_database_layer",
+      "checksum": "cbf7181e54b599b8230aafc9159212e139f86e8c1f4555196196718c70d11264"
+    },
+    {
+      "version": "0004",
+      "name": "rls_role_alignment",
+      "checksum": "4fe0952033271d16b0c09ac69850bfc7cf273ea5e1189fc7276f5d5b2550d9fd"
+    },
+    {
+      "version": "0005",
+      "name": "tighten_rls_writes",
+      "checksum": "88f4fbaee7385720cea2d5dbc415c9844bf9294d8ad93a90b149c6e7f08d0474"
+    },
+    {
+      "version": "0006",
+      "name": "mfa",
+      "checksum": "1bb611f9d0f0568f527262d64912cfc10fe45e1913ebe3e21cfe3df632728e77"
+    }
+  ],
+  "fingerprint": "9590e5e6a753b719d151f79de3683d3e85b497fd286512acf84196879a06c704"
+}

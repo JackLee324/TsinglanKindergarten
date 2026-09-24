@@ -1,0 +1,61 @@
+QLS PLATFORM — MIGRATION 0007 APPLIED TO THE TEST DATABASE (step 9)
+generated: 2026-09-24T02:24:15Z
+
+WHY THIS WAS NECESSARY RATHER THAN OPTIONAL
+  The file-storage work changed resources.service.ts to filter on
+  'deleted_at IS NULL', but migration 0007 which adds that column had not
+  been applied. Every /api/resources/* call was therefore returning 500, and
+  the gate showed:
+      FAIL  resources reachable before change   -> 500   expected 200
+      FAIL  GET /api/resources/mine (contract)  -> 500   expected 200
+  Confirmed directly: soft-delete columns in test DB = NONE,
+  applied migrations = 0001..0006.
+
+  This is a genuine instance of the ordering hazard the project rules warn
+  about: a schema-dependent code change deployed before its migration.
+
+=== 1. BEFORE snapshot (scripts/db-snapshot.mjs) ===
+  migrations applied: 6 (0001..0006)
+  fingerprint: 9590e5e6a753b719d151f79de3683d3e85b497fd286512acf84196879a06c704
+
+=== 2. APPLY: node scripts/migrate.mjs up ===
+  · Applying 1 migration(s)...
+  → 0007_resource_soft_delete
+  ✓ 0007_resource_soft_delete applied in 13ms
+  ✓ All pending migrations applied.
+
+=== 3. AFTER snapshot + COMPARE ===
+  migrations applied: 7 (0001..0007)
+  teachers: unchanged (22)
+  resources: unchanged (347)
+  subject_permissions: unchanged (0)
+  review_records: unchanged (18)
+  audit_logs: unchanged (407)
+  sessions: unchanged (136)
+  ✓ No data loss, no dropped columns, no weakened RLS.
+
+=== VERDICT ===
+  0007 is purely additive and preserved every row. This directly satisfies
+  the requirement 不丢数据、不重建库: no table was dropped, no database was
+  rebuilt, and no seed data was reset.
+
+=== GATE RESULT IMMEDIATELY AFTER (verbatim, at this point in time) ===
+  npm test                 # tests 24 # pass 24 # fail 0
+  typecheck server         FAIL   <- 1 error, see below
+  typecheck client         PASS
+  npm run build            PASS
+  api-contracts            matched
+  authz-http               pass=24 fail=0
+  hardening                pass=10 fail=0
+  mfa                      pass=36 fail=0
+  security-headers         pass=20 fail=0
+
+  The two 500s are resolved by applying the migration; every HTTP suite is
+  now green. The single remaining failure is a TYPE error in the file-
+  storage work still in progress:
+    server/modules/files/files.service.ts(58,38): error TS2341:
+      Property 'getAppId' is private and only accessible within class 'FileService'.
+
+  NOTE THE TRAP: 'npm run build' uses SWC, which STRIPS TYPES WITHOUT
+  CHECKING THEM. A type error therefore does NOT fail the build and is only
+  caught by 'npm run type:check:server'. Reported to the author.

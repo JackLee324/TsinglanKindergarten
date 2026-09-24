@@ -64,6 +64,7 @@ echo "=== HTTP 验证套件（需要运行中的服务） ==="
 run "authz-http"       node scripts/verify-authz-http.mjs
 run "hardening"        node scripts/verify-hardening.mjs
 run "mfa"              node scripts/verify-mfa.mjs
+run "security-headers"    node scripts/verify-security-headers.mjs
 
 echo
 if [ "$FAILED" -eq 0 ]; then
