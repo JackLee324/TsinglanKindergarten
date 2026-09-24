@@ -7,9 +7,8 @@ import {
   BadRequestException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { createReadStream } from 'fs';
+import { createReadStream, existsSync } from 'fs';
 import { join } from 'path';
-import { existsSync } from 'fs';
 import {
   DRIZZLE_DATABASE,
   FileService,
@@ -66,6 +65,12 @@ import {
   normalizeTheme,
   themeDbValue,
 } from '@shared/curriculum';
+import {
+  describeCoverAssetsResolution,
+  describeMissingCoverAsset,
+  resolveCoverAssets,
+  type CoverAssetsFound,
+} from '@server/modules/health/cover-assets';
 
 const ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
 
@@ -313,6 +318,67 @@ export class ResourcesService {
     const lastSegment = bucketRelative.split(/[\\/]+/).pop() ?? '';
     const sanitized = sanitizeFileName(lastSegment);
     return sanitized === FALLBACK_FILENAME ? `cover-${index}.jpg` : sanitized;
+  }
+
+  /**
+   * Turn a validated cover FILE NAME into an existing file on this machine, or fail
+   * with a diagnostic that says which of the two problems it actually is.
+   *
+   * REPLACES the two hand-written `possiblePaths` guesses that used to live inline in
+   * `getStorybookCoverStream()` and `getPublicStorybookCoverStream()`:
+   *
+   *     join(__dirname, '../../../assets/prek-english-covers/', fileName)  // never right
+   *     join(process.cwd(), 'server/assets/prek-english-covers/', fileName) // cwd-dependent
+   *
+   * Measured consequences of those two lines: the first resolved to `dist/assets/…`
+   * (which does not exist — `nest-cli.json` publishes to `dist/server/assets/…`), so
+   * it could never match in any build; and the endpoint therefore worked ONLY when
+   * the process happened to be started with `cwd=dist`. Started any other way every
+   * cover became a bare 404 — indistinguishable from "this cover was never shipped",
+   * with nothing in the log. The resolution order and its logging now live in
+   * `@server/modules/health/cover-assets`, which is also what the readiness probe
+   * reports, so the probe and this path cannot disagree.
+   *
+   * TWO failures, TWO different answers, because they are different problems:
+   *
+   *   * the asset DIRECTORY is missing       -> 503. The deployment is incomplete;
+   *     no cover can be served and retrying will not help. Reported as "not my
+   *     request's fault" rather than as a 404 that blames the resource.
+   *   * the directory exists, FILE is absent -> 404 with the file NAME in the body,
+   *     plus an ERROR in the log naming the resolved directory. A 404 is correct here
+   *     (that cover is genuinely not in this deployment), but it is now diagnosable.
+   *
+   * The absolute directory path is deliberately NOT put in the response body: the
+   * project's rule for anything that reaches a client is STATE, never filesystem
+   * layout (audit finding G-11). It goes to the log, where an operator can use it.
+   */
+  private resolveLocalCoverFile(fileName: string): string {
+    // Anchored on THIS module's own directory (not on `process.cwd()`), so the
+    // answer does not change with the working directory the server was started from.
+    const resolution = resolveCoverAssets({ moduleDir: __dirname, appRoot: process.cwd() });
+
+    if (!resolution.ok) {
+      this.logger.error(
+        `storybook cover unavailable: ${describeCoverAssetsResolution(resolution)} ` +
+          `(requested file '${fileName}')`,
+      );
+      throw new ServiceUnavailableException(
+        '绘本封面文件目录不可用：服务端未找到封面资源目录，无法提供封面。' +
+          '这是部署产物问题（缺少 assets/prek-english-covers），请检查构建与发布步骤；' +
+          '服务端日志已记录全部候选路径。（Storage: cover assets directory missing）',
+      );
+    }
+
+    const localPath = join(resolution.dir, fileName);
+    if (!existsSync(localPath)) {
+      this.logger.error(describeMissingCoverAsset(fileName, resolution as CoverAssetsFound));
+      throw new NotFoundException(
+        `封面文件不存在：${fileName}（该文件不在本实例的封面资源目录中）；` +
+          '服务端日志已记录已解析的目录与来源。（Cover asset not present in this deployment）',
+      );
+    }
+
+    return localPath;
   }
 
   // ========== 权限校验 ==========
@@ -1135,23 +1201,7 @@ export class ResourcesService {
     }
 
     const fileName = this.coverFileNameFrom(filePath, index);
-
-    const possiblePaths = [
-      join(__dirname, '../../../assets/prek-english-covers/', fileName),
-      join(process.cwd(), 'server/assets/prek-english-covers/', fileName),
-    ];
-
-    let localPath: string | null = null;
-    for (const p of possiblePaths) {
-      if (existsSync(p)) {
-        localPath = p;
-        break;
-      }
-    }
-
-    if (!localPath) {
-      throw new NotFoundException('封面文件不存在');
-    }
+    const localPath = this.resolveLocalCoverFile(fileName);
 
     const safeFileName = storybook.title ? `${storybook.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.jpg` : `cover-${index}.jpg`;
     const stream = createReadStream(localPath);
@@ -2463,23 +2513,7 @@ export class ResourcesService {
     }
 
     const fileName = this.coverFileNameFrom(filePath, index);
-
-    const possiblePaths = [
-      join(__dirname, '../../../assets/prek-english-covers/', fileName),
-      join(process.cwd(), 'server/assets/prek-english-covers/', fileName),
-    ];
-
-    let localPath: string | null = null;
-    for (const p of possiblePaths) {
-      if (existsSync(p)) {
-        localPath = p;
-        break;
-      }
-    }
-
-    if (!localPath) {
-      throw new NotFoundException('封面文件不存在');
-    }
+    const localPath = this.resolveLocalCoverFile(fileName);
 
     const safeFileName = storybook.title ? `${storybook.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.jpg` : `cover-${index}.jpg`;
     const stream = createReadStream(localPath);

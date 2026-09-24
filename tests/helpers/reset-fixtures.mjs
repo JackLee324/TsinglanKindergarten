@@ -91,6 +91,29 @@ const LOCK_RESOURCE = 1;
 export const ACCOUNT_ROLES = {
   admin: ['principal'],
   low: ['prek_assistant'],
+  /**
+   * A SECOND principal. "A principal may not reset a peer principal's password"
+   * is a rule about EQUAL rank, so asserting it needs two accounts at one level.
+   */
+  admin2: ['principal'],
+  /** A third principal: the IDOR target for `admin2` in the reset-password suite. */
+  admin3: ['principal'],
+  /**
+   * Holds `account.view` (it can read the account list) but NOT
+   * `account.reset_password` — the case that proves the reset route is
+   * permission-gated rather than merely login-gated.
+   */
+  director: ['curriculum_director'],
+  /** An ordinary teaching account: the legitimate reset TARGET for a principal. */
+  head: ['prek_head'],
+  /**
+   * A system super administrator. Created directly (there is no BEFORE INSERT
+   * trigger on `teachers`, only BEFORE UPDATE/DELETE, so `ensureKeeper()` is what
+   * makes this reversible). Suites that only need it as a TARGET never log into
+   * it: an un-enrolled super_admin is refused by AuthGuard's mandatory-MFA gate,
+   * which is exactly the behaviour the MFA suite asserts.
+   */
+  superadmin: ['super_admin'],
 };
 
 function passwordHash(password) {

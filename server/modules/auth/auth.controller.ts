@@ -6,7 +6,8 @@ import {
   Req,
   Res,
   Logger,
-  NotFoundException,
+  BadRequestException,
+  HttpStatus,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
@@ -16,16 +17,69 @@ import { getClientIp } from '@server/common/http/client-ip';
 import { Public, CurrentTeacher } from './auth.guard';
 import { AuthorizationService } from '../authz/authorization.service';
 import { MfaService } from './mfa.service';
-import { MfaExempt } from '../authz/permission.decorator';
+import { MfaExempt, RequirePermission, CurrentAuthz } from '../authz/permission.decorator';
 import type {
   AuthUser,
   LoginRequest,
   ChangePasswordRequest,
   ResetPasswordRequest,
-  ResetPasswordResponse,
   AuthConfigResponse,
 } from '@shared/api.interface';
 import type { EffectivePermissions } from '@shared/rbac';
+
+/**
+ * Request body of the administrative reset.
+ *
+ * `mfaCode` is OPTIONAL in the type because it is optional in the protocol: it is
+ * required exactly when the caller has a second factor (the service enforces
+ * that). It deliberately lives here rather than in `@shared/api.interface`
+ * `ResetPasswordRequest` so the published contract the client already codes
+ * against (`{ teacherId }`) is unchanged: an operator without MFA keeps working,
+ * an operator WITH MFA must supply the code.
+ */
+type ResetPasswordBody = ResetPasswordRequest & { mfaCode?: string };
+
+/**
+ * Shape check for the target selector.
+ *
+ * A malformed id would otherwise be handed to PostgreSQL as a uuid comparison and
+ * surface as a 500 (invalid input syntax for type uuid, 22P02), which tells an
+ * operator nothing. Rejecting it here makes the answer deterministic.
+ */
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Delete credential fields from the parsed request body once the handler has
+ * consumed them.
+ *
+ * WHY THIS IS NECESSARY (verified against a live server, not assumed)
+ * ------------------------------------------------------------------
+ * The platform's HTTP trace logging writes the REQUEST BODY of every successful
+ * request to the application log, unconditionally: in
+ * `@lark-apaas/nestjs-logger` the success-path `tap()` does
+ *      if (req.body) responseData.request_body = req.body;
+ *      if (data)     responseData.response = data;
+ * BEFORE consulting its own `logRequestBody` / `logResponseBody` options (those
+ * flags only gate the other two branches). Grepping the log of a live gate run
+ * found 28 plaintext login passwords and every MFA code this suite sent.
+ *
+ * A credential that has already been consumed has no further use in the request
+ * object, so it is removed here. This is defence in depth for requirement
+ * "never log a password, token or MFA secret": the value exists in a local
+ * variable for the duration of the handler and nowhere else.
+ *
+ * (The response half — a response body that carries a freshly issued credential —
+ * is handled per route below by sending the response explicitly, since the same
+ * interceptor logs the handler's return value.)
+ */
+function dropConsumedCredentials(req: Request, fields: readonly string[]): void {
+  const body = req.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== 'object') return;
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) delete body[field];
+  }
+}
 
 @Controller('api/auth')
 export class AuthController {
@@ -63,16 +117,24 @@ export class AuthController {
     return { loginType: 'password' };
   }
 
+  /**
+   * Password step of login.
+   *
+   * The response is sent EXPLICITLY (rather than by returning a value) for one
+   * reason: the challenge token in the `mfaRequired` branch is a live credential,
+   * and the platform's HTTP trace logging writes the handler's return value into
+   * the server log. Sending the body through `res.json` keeps it out of that log;
+   * the wire format is byte-for-byte what the client already receives
+   * (`{ mfaRequired, challengeToken, expiresAt }` / `{ mfaRequired, teacher }`).
+   * The password is likewise removed from the request object once consumed.
+   */
   @Public()
   @Post('login')
   async login(
     @Body() body: LoginRequest,
     @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<
-    | { mfaRequired: true; challengeToken: string; expiresAt: string }
-    | { mfaRequired: false; teacher: AuthUser }
-  > {
+    @Res() res: Response,
+  ): Promise<void> {
     const ipAddress = this.getIpAddress(req);
     const userAgent = req.headers['user-agent'];
     const result = await this.authService.login(
@@ -81,17 +143,19 @@ export class AuthController {
       ipAddress,
       userAgent,
     );
+    dropConsumedCredentials(req, ['password']);
 
     // Second factor pending. Deliberately NO cookie is set: a half-authenticated
     // caller must not hold anything that reaches a protected route.
     // ('sessionId' in result narrows the union explicitly; relying on the boolean
     // discriminant did not narrow under this tsconfig.)
     if (!('sessionId' in result)) {
-      return {
+      res.status(HttpStatus.CREATED).json({
         mfaRequired: true as const,
         challengeToken: result.challengeToken,
         expiresAt: result.expiresAt,
-      };
+      });
+      return;
     }
 
     res.cookie(
@@ -100,7 +164,7 @@ export class AuthController {
       this.authService.getCookieOptions(),
     );
 
-    return { mfaRequired: false as const, teacher: result.teacher };
+    res.status(HttpStatus.CREATED).json({ mfaRequired: false as const, teacher: result.teacher });
   }
 
   // ===========================================================================
@@ -157,6 +221,7 @@ export class AuthController {
       ipAddress,
       userAgent,
     );
+    dropConsumedCredentials(req, ['challengeToken', 'code']);
     res.cookie(
       this.authService.getSessionCookieName(),
       sessionId,
@@ -180,14 +245,20 @@ export class AuthController {
    */
   @MfaExempt()
   @Post('mfa/enroll')
-  async mfaEnroll(@CurrentTeacher() teacher: AuthUser, @Req() req: Request) {
+  async mfaEnroll(
+    @CurrentTeacher() teacher: AuthUser,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
     const result = await this.mfaService.beginEnrollment(teacher.id, teacher.username || teacher.name);
     await this.authService.auditMfa('mfa_enrolled', {
       teacherId: teacher.id, teacherName: teacher.name,
       ipAddress: this.getIpAddress(req), userAgent: req.headers['user-agent'],
       detail: 'enrolment started',
     });
-    return result;
+    // The TOTP secret is a live credential: sent explicitly so the platform's
+    // response-body logging cannot persist it. See dropConsumedCredentials().
+    res.status(HttpStatus.CREATED).json(result);
   }
 
   /** Finish enrolment; returns the recovery codes ONCE. */
@@ -197,14 +268,17 @@ export class AuthController {
     @CurrentTeacher() teacher: AuthUser,
     @Body() body: { code: string },
     @Req() req: Request,
-  ) {
+    @Res() res: Response,
+  ): Promise<void> {
     const result = await this.mfaService.confirmEnrollment(teacher.id, body?.code ?? '');
+    dropConsumedCredentials(req, ['code']);
     await this.authService.auditMfa('mfa_enabled', {
       teacherId: teacher.id, teacherName: teacher.name,
       ipAddress: this.getIpAddress(req), userAgent: req.headers['user-agent'],
       detail: 'second factor enabled',
     });
-    return result;
+    // Recovery codes are credentials: sent explicitly, never returned by value.
+    res.status(HttpStatus.CREATED).json(result);
   }
 
   /** Replace recovery codes. Invalidates all existing ones. */
@@ -214,19 +288,21 @@ export class AuthController {
     @CurrentTeacher() teacher: AuthUser,
     @Body() body: { code: string },
     @Req() req: Request,
-  ) {
+    @Res() res: Response,
+  ): Promise<void> {
     // Re-authenticate with a current code before issuing new recovery material.
     const outcome = await this.mfaService.verify(teacher.id, body?.code ?? '');
     if (!outcome.ok) {
       throw new UnauthorizedException('需要当前有效验证码才能重新生成恢复码');
     }
+    dropConsumedCredentials(req, ['code']);
     const codes = await this.mfaService.regenerateRecoveryCodes(teacher.id);
     await this.authService.auditMfa('mfa_recovery_regenerated', {
       teacherId: teacher.id, teacherName: teacher.name,
       ipAddress: this.getIpAddress(req), userAgent: req.headers['user-agent'],
       detail: 'recovery codes regenerated',
     });
-    return { recoveryCodes: codes };
+    res.status(HttpStatus.CREATED).json({ recoveryCodes: codes });
   }
 
   /**
@@ -242,6 +318,7 @@ export class AuthController {
   ) {
     const outcome = await this.mfaService.verify(teacher.id, body?.code ?? '');
     if (!outcome.ok) throw new UnauthorizedException('需要当前有效验证码才能解除绑定');
+    dropConsumedCredentials(req, ['code']);
     await this.mfaService.assertMayDisable(teacher.id);
     await this.mfaService.disable(teacher.id);
     await this.authService.auditMfa('mfa_disabled', {
@@ -270,27 +347,126 @@ export class AuthController {
       userAgent,
       sessionId,
     );
+    // Both passwords have been consumed; neither may survive in the request
+    // object, because the platform logs request bodies on success.
+    dropConsumedCredentials(req, ['currentPassword', 'newPassword']);
     return { success: true, teacher: updatedTeacher };
   }
 
+  /**
+   * POST /api/auth/reset-password — administrative reset of ANOTHER account's
+   * password (audit finding G-18).
+   *
+   * ===========================================================================
+   * AUTHORIZATION (was: `if (!operator.roles.includes('principal')) throw 404`)
+   * ===========================================================================
+   * The route now declares the capability it needs — `account.reset_password`,
+   * enforced by PermissionGuard — so who may do this is data (role defaults and
+   * per-account grants/denies in the RBAC catalog), not a string in this file.
+   * `super_admin` holds it by catalog construction, `principal` holds it by role
+   * default, and any role can be given or denied it without a code change.
+   *
+   * The route alone is NOT enough for a targeted operation like this, because the
+   * real question is "whose password?". The service therefore applies, in order:
+   *   * the ceiling rule `canManageAccount()` (target roles read from the
+   *     database, never from the request) — a caller may only act on an account it
+   *     strictly outranks, and only a super_admin may act on a super_admin;
+   *   * `account.reset_privileged_password` (super_admin only) for any target that
+   *     holds a privileged role (super_admin / principal).
+   * See AuthService.resetPassword for the full model.
+   *
+   * ===========================================================================
+   * 403 vs 404 — A DECISION, NOT AN ACCIDENT
+   * ===========================================================================
+   * An authorization failure answers **403**, not 404. The previous 404 was
+   * unreachable-by-design ("hide existence") but it made three different
+   * situations indistinguishable — no permission, target out of scope, and no
+   * such account — so an operator could not tell a misconfiguration from a
+   * decommissioned teacher, and it made THIS endpoint disagree with every other
+   * account-management route, where `AuthorizationService.assertCanManageAccount`
+   * answers 403 for the same rule.
+   *
+   * The anti-enumeration argument for 404 does not apply here:
+   *   * an account WITHOUT `account.reset_password` is refused by PermissionGuard
+   *     before any target lookup happens, so the status code of an existing target
+   *     and a missing one are identical for it (403 either way) — nothing leaks;
+   *   * the only callers that reach the target lookup already hold
+   *     `account.reset_password`, and that permission is held only by roles that
+   *     also hold `account.view`, i.e. callers who can already enumerate every
+   *     account through `GET /api/teachers`. A 404 would hide nothing from them
+   *     while making legitimate support cases harder to diagnose (SECURITY.md G-18).
+   * Consequently 404 is reserved for exactly one condition — the account does not
+   * exist — and the tests assert both codes explicitly.
+   *
+   * ===========================================================================
+   * OTHER REQUIREMENTS MET HERE
+   * ===========================================================================
+   *   * IDOR: the ONLY target selector accepted is `teacherId`; a body carrying an
+   *     `accountId` (or a malformed id) is rejected instead of being aliased or
+   *     passed to the database, and the id is always resolved to an account and
+   *     checked against the caller's authority (AuthService.resetPassword).
+   *   * Audit: every successful reset writes a `password_reset` row INSIDE the same
+   *     transaction as the password change, and every refused attempt (out of
+   *     scope, privileged target, failed step-up) is audited as `permission_denied`.
+   *   * Secrets: the generated temporary password is disclosed once, in the 201
+   *     response body, and nowhere else — not in the server log, not in audit rows,
+   *     not in an error message, not in a cache. The caller's `mfaCode` is consumed
+   *     and then removed from the request object for the same reason; see
+   *     dropConsumedCredentials().
+   *   * Re-authentication: this route is deliberately NOT `@MfaExempt`, so
+   *     AuthGuard's mandatory-MFA gate applies to the caller, and the service
+   *     additionally requires a current second factor whenever the caller has one.
+   *
+   * No `Cache-Control` is set by the platform for API responses (verified: the
+   * security-headers middleware sets nosniff / framing / referrer / COOP / CORP /
+   * CSP / HSTS only), so this route sets `no-store` itself on the response it sends.
+   */
   @Post('reset-password')
+  @RequirePermission('account.reset_password')
   async resetPassword(
-    @Body() body: ResetPasswordRequest,
+    @Body() body: ResetPasswordBody,
     @CurrentTeacher() operator: AuthUser,
+    @CurrentAuthz() authz: EffectivePermissions,
     @Req() req: Request,
-  ): Promise<ResetPasswordResponse> {
-    if (!operator.roles.includes('principal')) {
-      throw new NotFoundException();
+    @Res() res: Response,
+  ): Promise<void> {
+    const raw = body as unknown as Record<string, unknown> | undefined;
+
+    // Exactly one selector. Refusing `accountId` outright rather than ignoring it
+    // means a caller cannot make the API and the audit trail disagree about which
+    // account was meant.
+    if (raw && Object.prototype.hasOwnProperty.call(raw, 'accountId')) {
+      throw new BadRequestException('不支持 accountId 参数，请使用 teacherId');
     }
+    const teacherId = typeof raw?.teacherId === 'string' ? raw.teacherId.trim() : '';
+    if (!teacherId || !UUID_PATTERN.test(teacherId)) {
+      throw new BadRequestException('teacherId 必须是有效的账号 ID');
+    }
+    const mfaCode = typeof raw?.mfaCode === 'string' ? raw.mfaCode : undefined;
+    // Both fields have been read; the second factor must not survive in the request
+    // object, because the platform logs request bodies of successful requests.
+    dropConsumedCredentials(req, ['mfaCode']);
+
     const ipAddress = this.getIpAddress(req);
     const userAgent = req.headers['user-agent'];
-    return this.authService.resetPassword(
-      operator.id,
-      operator.name,
-      body.teacherId,
+
+    const result = await this.authService.resetPassword({
+      authz,
+      actor: { id: operator.id, name: operator.name, roles: authz.roles },
+      targetTeacherId: teacherId,
+      mfaCode,
       ipAddress,
       userAgent,
-    );
+    });
+
+    // Sent EXPLICITLY rather than returned: the body carries the one-time temporary
+    // password, and the platform's HTTP trace logging writes a handler's return
+    // value into the server log — which would turn a one-time credential into a
+    // durable one. `no-store` is set here rather than with @Header() because a
+    // handler that owns the response also owns its headers.
+    res.status(HttpStatus.CREATED);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(result);
   }
 
   @MfaExempt()

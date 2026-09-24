@@ -43,10 +43,14 @@ let FATAL = null;
 
 const run = await startVerificationRun(process.env.AUTHZ_TEST_DB, {
   suite: 'mfa',
-  accounts: ['admin'],
+  // `admin` is promoted to super_admin by section E; `target` is a PRINCIPAL — a
+  // privileged account, so resetting its password additionally requires the
+  // super-admin-only `account.reset_privileged_password` permission.
+  accounts: ['admin', 'admin2'],
 });
 const sql = run.sql;
 const admin = run.account('admin');
+const target = run.account('admin2');
 const PW = admin.password;
 const TID = admin.id;
 
@@ -166,6 +170,97 @@ try {
   check('and CAN still read its own identity', canSeeSelf.s, 200);
   const blockedAudit = await req('GET', '/api/audit/logs');
   check('audit log also blocked while un-enrolled', blockedAudit.s, 403);
+
+  // ===========================================================================
+  // G. PASSWORD RESET: MANDATORY MFA + RE-AUTHENTICATION (audit finding G-18)
+  // ===========================================================================
+  // The administrative password reset is a high-risk operation, and the security
+  // model already answers "who must prove more" in exactly one place:
+  //   * AuthGuard refuses EVERY non-@MfaExempt route to an MFA-required account
+  //     that has not enrolled — the state this suite is in right now — so the reset
+  //     route must be refused here too (it is deliberately not exempt);
+  //   * once enrolled, the caller must present a CURRENT second factor, verified
+  //     with MfaService.verify() — the same step-up /auth/mfa/disable and
+  //     /auth/mfa/recovery-codes already use.
+  // Because only a super_admin may act on a privileged account (principal /
+  // super_admin), and super_admin is the role MFA is mandatory for, every reset of
+  // a privileged account is MFA-gated in practice.
+  console.log('\n=== G. RESET PASSWORD: MANDATORY MFA + STEP-UP (G-18) ===');
+  const RESET = '/api/auth/reset-password';
+
+  const blockedReset = await req('POST', RESET, { teacherId: target.id });
+  check('un-enrolled super_admin is BLOCKED from reset-password -> 403', blockedReset.s, 403);
+  check('  -> the refusal is the MFA gate', /MFA/.test(blockedReset.d?.error?.message || ''), true);
+
+  // Re-enrol: the previous enrolment was removed in section F, so the secret is new.
+  const enr2 = await req('POST', '/api/auth/mfa/enroll');
+  check('re-enrolment returns a fresh secret',
+    typeof enr2.d?.secret === 'string' && enr2.d.secret.length > 20 && enr2.d.secret !== secret, true);
+  secret = enr2.d?.secret;
+  check('re-enrolment confirmed', (await req('POST', '/api/auth/mfa/confirm', { code: totp(secret) })).s, 201);
+
+  const hashBeforeReset = (await sql`select password_hash h from teachers where id = ${target.id}`)[0].h;
+  const noCode = await req('POST', RESET, { teacherId: target.id });
+  check('reset WITHOUT a second factor -> 401', noCode.s, 401);
+  const badCode = await req('POST', RESET, { teacherId: target.id, mfaCode: '000000' });
+  check('reset with a WRONG second factor -> 401', badCode.s, 401);
+  // Boolean comparison on purpose: the assertion is "the stored credential did not
+  // change", and printing the hash would put password material in the test log.
+  check('  -> neither refusal wrote anything',
+    (await sql`select password_hash h from teachers where id = ${target.id}`)[0].h === hashBeforeReset, true);
+  check('  -> and both refusals are audited',
+    (await sql`select count(*)::int n from audit_logs
+                where action = 'permission_denied' and teacher_id = ${TID}
+                  and detail like '%password_reset refused%'`)[0].n >= 2, true);
+
+  const didReset = await req('POST', RESET, { teacherId: target.id, mfaCode: totp(secret) });
+  check('super_admin resets a PRINCIPAL account with a current code -> 201', didReset.s, 201);
+  const temp = didReset.d?.temporaryPassword;
+  if (typeof temp !== 'string' || temp.length < 12) {
+    throw new Error(
+      'the privileged reset carried no usable temporary password: ' + JSON.stringify(didReset.d),
+    );
+  }
+  const resetAudit = await sql`
+    select detail from audit_logs
+     where action = 'password_reset' and teacher_id = ${target.id}`;
+  check('the reset is audited exactly once', resetAudit.length, 1);
+  check('  -> the audit row records the verified second factor',
+    /secondFactor=totp/.test(resetAudit[0]?.detail ?? ''), true);
+  check('  -> and it contains no credential', (resetAudit[0]?.detail ?? '').includes(temp), false);
+  check('  -> the stored credential is a hash, not the plaintext',
+    (await sql`select password_hash h from teachers where id = ${target.id}`)[0].h !== temp, true);
+
+  jar = {}; await req('GET', '/');
+  const targetLogin = await req('POST', '/api/auth/login', { username: target.username, password: temp });
+  check('the reset target authenticates with the temporary password', targetLogin.s, 201);
+
+  // ===========================================================================
+  // H. SELF-SERVICE PASSWORD CHANGE BY A SUPER ADMIN
+  // ===========================================================================
+  // The migration 0003 trigger allows a super_admin to rotate its OWN password only
+  // when the request declares the actor id (`app.rbac_actor_id`), and no application
+  // code path ever declared it — so that branch was unreachable and the endpoint
+  // additionally answered HTTP 500 because the write ran as the `anon_` database
+  // role (migration 0005 grants it UPDATE on three columns of `teachers` only).
+  // `tests/rbac-database.test.mjs` proves the DATABASE permits the self-service
+  // write; this proves the APPLICATION now reaches it.
+  console.log('\n=== H. SUPER ADMIN ROTATES ITS OWN PASSWORD ===');
+  jar = {}; await req('GET', '/');
+  const lSelf = await req('POST', '/api/auth/login', { username: admin.username, password: PW });
+  check('super_admin login requires the second factor', lSelf.d?.mfaRequired, true);
+  const vSelf = await req('POST', '/api/auth/mfa/verify', { challengeToken: lSelf.d.challengeToken, code: totp(secret) });
+  check('second factor accepted', vSelf.s, 201);
+  const selfChange = await req('POST', '/api/auth/change-password', {
+    currentPassword: PW,
+    newPassword: 'SuperAdminPassw0rd!4',
+  });
+  check('super_admin changes its OWN password -> 201', selfChange.s, 201);
+  check('  -> the response carries the account, never a credential',
+    /newPassword|passwordHash|scrypt\$/.test(JSON.stringify(selfChange.d)), false);
+  jar = {}; await req('GET', '/');
+  const afterChange = await req('POST', '/api/auth/login', { username: admin.username, password: 'SuperAdminPassw0rd!4' });
+  check('  -> and the new password authenticates (MFA still required)', afterChange.d?.mfaRequired, true);
 } catch (error) {
   FATAL = error;
 } finally {

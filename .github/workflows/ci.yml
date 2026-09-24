@@ -1,0 +1,290 @@
+# =============================================================================
+# CI — typecheck → tests → build → security gate → predeploy
+# =============================================================================
+#
+# ⚠️  THIS WORKFLOW HAS NEVER BEEN EXECUTED. There is no GitHub runner available
+#     where it was written, so it is not a verification result — it is a
+#     configuration. Every command in it has been run by hand on the target
+#     machine against the same database shape (PostgreSQL 16 on a non-default
+#     port, server on 127.0.0.1:3200), which is why the steps are shaped the way
+#     they are; but "the steps work when run in this order by a human" is not the
+#     same claim as "this YAML works". Expect to debug the first run.
+#
+# DESIGN NOTES THAT MATTER FOR CORRECTNESS
+# ----------------------------------------
+# 1. `npm run build` uses SWC (`nest build`) and does NOT typecheck. A type error
+#    therefore ships straight through the build. That is the entire reason the
+#    `typecheck` step exists and is separate — it is not redundant with `build`.
+#
+# 2. The security gate (`scripts/verify-all.sh`) does not start a server and does
+#    not create the database. It needs ALL of:
+#      * PostgreSQL reachable at the URL in `AUTHZ_TEST_DB`;
+#      * the schema migrated, with `schema_migrations` populated;
+#      * a RUNNING instance on 127.0.0.1:3200 (started manually — see the
+#        documented recipe in DEPLOYMENT_PRODUCTION.md §7, reproduced below);
+#      * `AUTHZ_TEST_DB` exported.
+#    A gate that runs before the server is up reports a wall of 401/ECONNREFUSED
+#    failures that look like regressions and are not.
+#
+# 3. THE GATE IS EXCLUSIVE. `verify-all.sh` takes a PostgreSQL advisory lock
+#    (namespace 20812, resource 1) because it runs `npm run build`, whose first
+#    step is `rm -rf dist` — while the server that is also under test serves
+#    static assets out of `dist/`. Two concurrent gates were proven to poison each
+#    other (fake 401s, fake 404s). The `concurrency` group below is therefore not
+#    an optimisation; it is what keeps that lock uncontended. Do not remove it.
+#
+# 4. TWO SERVER-SIDE VARIABLES CHANGE HOW MANY CHECKS THE GATE RUNS, and the
+#    values below are the ones the repository's own measured gate used:
+#      * `LOGIN_IP_RATE_LIMIT_MAX=100000` — the limiter is an in-process table
+#        keyed by IP, and the suites together make ~14 logins from 127.0.0.1. At
+#        the 30/60s default they rate-limit EACH OTHER and the failures look like
+#        401 regressions.
+#      * `DOWNLOAD_TOKEN_TTL_SECONDS=10` — the files suite waits for a real token
+#        expiry and only waits 30s, so at the 300s default 2 checks print a NOTE
+#        and are skipped (73 → 71).
+#    Both are passed to the server below, exactly as the docs prescribe.
+#
+# 5. What this workflow CANNOT verify, and does not pretend to:
+#      * object storage (dataloom) — needs a real 妙搭 platform request context;
+#        predeploy reports it as a named waiver rather than a pass.
+#      * HTTPS/HSTS — CI is plain HTTP, so the Secure-cookie and HSTS paths are
+#        switched off by construction. `predeploy` reports that as a failure and
+#        CI runs it in its documented "contract verification against a fixture
+#        database" mode, which is printed as a waiver, never as a pass. In this
+#        mode the two database-state checks (a real super_admin that can log in,
+#        and privileged-account MFA enrolment) are RECORDED, because the only
+#        super_admin in the verification database is the password-less fixture
+#        `__rbac_keeper` (tests/helpers/reset-fixtures.mjs:116-131). The
+#        code-level MFA enforcement checks still run and still have to pass.
+#      * Docker image build — not part of this workflow; see the Dockerfile.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# One PR's checks cancel the previous run's for the same ref. Paired with the
+# advisory lock this also serialises gates that share a database (see note 3).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Node 22 is the project's documented engine (package.json "engines").
+  NODE_VERSION: '22'
+  # Non-default port, matching the local verification environment the docs and the
+  # gate's own recipes use (DEPLOYMENT_PRODUCTION.md §7).
+  SERVER_PORT: '3200'
+  SERVER_HOST: '127.0.0.1'
+  MFA_BASE: 'http://127.0.0.1:3200'
+  # The test database. The service below is created with these credentials and
+  # published on the same port the repo's helper scripts default to
+  # (tests/helpers/legacy-fixture.mjs:28-37: qlsadmin / qlsdev_local_only / 55432),
+  # so no test helper needs a change to run here.
+  PGPORT: '55432'
+  PGUSER: 'qlsadmin'
+  PGPASSWORD: 'qlsdev_local_only'
+  AUTHZ_TEST_DB: 'postgresql://qlsadmin:qlsdev_local_only@127.0.0.1:55432/qls_test_0005'
+  DATABASE_URL: 'postgresql://qlsadmin:qlsdev_local_only@127.0.0.1:55432/qls_test_0005'
+  # Read by tests/helpers/legacy-fixture.mjs for its privileged (CREATE DATABASE)
+  # connection. It must be a role with CREATEDB — the service user is a superuser.
+  QLS_DEV_PGPORT: '55432'
+  QLS_DEV_PGUSER: 'qlsadmin'
+  QLS_DEV_PGPASSWORD: 'qlsdev_local_only'
+  # Gate-shaping values — see note 4. These MUST match between the server start
+  # and the gate, or the gate runs fewer checks than it reports.
+  DOWNLOAD_TOKEN_TTL_SECONDS: '10'
+  LOGIN_IP_RATE_LIMIT_MAX: '100000'
+
+jobs:
+  verify:
+    name: typecheck → tests → build → gate → predeploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # Major version matches the verification environment the gate was
+        # calibrated against (PostgreSQL 16).
+        image: postgres:16
+        env:
+          POSTGRES_USER: qlsadmin
+          POSTGRES_PASSWORD: qlsdev_local_only
+          POSTGRES_DB: qls_test_0005
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U qlsadmin -d qls_test_0005"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # NOTE: this repository's package-lock.json is linux/x64 only
+      # (DEPLOYMENT_PRODUCTION.md §6): every platform-specific optional dependency
+      # it records is os=linux, cpu=x64, which is exactly what an ubuntu-latest
+      # runner is. `npm ci` is therefore correct HERE and destructive on
+      # macOS/arm64, where it prunes the darwin bindings the local build needs.
+      # Do not "simplify" this into a local dev instruction.
+      - name: Install dependencies (npm ci, from the lockfile)
+        run: npm ci --no-audit --no-fund
+
+      # -----------------------------------------------------------------------
+      # 1. TYPECHECK — not redundant with build: `nest build` is SWC-based and
+      #    emits JavaScript for a tree that may not typecheck at all.
+      # -----------------------------------------------------------------------
+      - name: Typecheck (server)
+        run: npm run type:check:server
+
+      - name: Typecheck (client)
+        run: npm run type:check:client
+
+      # -----------------------------------------------------------------------
+      # 2. MIGRATE the verification database.
+      #    The gate's suites create and drop their own fixture rows, but they
+      #    assume the SCHEMA and `schema_migrations` exist. `up` applies pending
+      #    migrations only; it never resets, drops or re-seeds anything.
+      # -----------------------------------------------------------------------
+      - name: Migrate verification database
+        run: |
+          npm run migrate:status
+          npm run migrate:verify
+          npm run migrate
+          npm run migrate:status
+
+      # -----------------------------------------------------------------------
+      # 3. UNIT + INTEGRATION TESTS
+      #    tests/migration.test.mjs creates and drops its own scratch databases
+      #    (qls_test_migration*) via the CREATEDB role above; it fails — rather
+      #    than silently skipping — when PostgreSQL is unreachable, so no
+      #    QLS_ALLOW_NO_DB escape hatch is set here on purpose.
+      # -----------------------------------------------------------------------
+      - name: Unit and integration tests
+        run: npm test
+
+      # -----------------------------------------------------------------------
+      # 4. BUILD
+      # -----------------------------------------------------------------------
+      - name: Build
+        run: npm run build
+
+      - name: Assert build artefacts exist
+        run: |
+          test -f dist/server/main.js || { echo "::error::dist/server/main.js missing"; exit 1; }
+          test -f dist/dist/client/index.html || { echo "::error::dist/dist/client/index.html missing — GET / would not render"; exit 1; }
+          ls -la dist dist/dist/client
+
+      # -----------------------------------------------------------------------
+      # 5. START THE SERVER (the gate does not do this for you)
+      #    Recipe from DEPLOYMENT_PRODUCTION.md §7. Two deliberate choices:
+      #      * SERVER_HOST=127.0.0.1 — the app defaults to `localhost`, and the
+      #        probes below use the same name, so either would work; pinning it
+      #        removes the variable.
+      #      * the secrets are generated per run with openssl. They are throwaway
+      #        CI values, never real credentials, and they exist so the download
+      #        and MFA code paths under test are actually exercisable (a missing
+      #        DOWNLOAD_TOKEN_SECRET makes the files suite report 503s that are
+      #        correct behaviour but useless as a regression signal).
+      # -----------------------------------------------------------------------
+      - name: Start server (background) and wait for health
+        run: |
+          set -u
+          MFA_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+          DOWNLOAD_TOKEN_SECRET="$(openssl rand -base64 32)" \
+          npm run start > /tmp/qls-server.log 2>&1 &
+          echo "server pid: $!"
+
+          for i in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$MFA_BASE/api/health" || true)"
+            if [ "$code" = "200" ]; then
+              echo "liveness OK after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "::error::server did not become live within 60s"
+              sed -n '1,200p' /tmp/qls-server.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Readiness touches the database, so it is the check that says the
+          # server can actually serve traffic (503 otherwise).
+          ready="$(curl -s -o /tmp/ready.json -w '%{http_code}' --max-time 10 "$MFA_BASE/api/health/ready")"
+          echo "readiness HTTP $ready"
+          cat /tmp/ready.json
+          if [ "$ready" != "200" ]; then
+            echo "::error::readiness returned $ready"
+            sed -n '1,200p' /tmp/qls-server.log
+            exit 1
+          fi
+
+      # -----------------------------------------------------------------------
+      # 6. SECURITY GATE
+      #    Runs npm test, both typechecks, the build, the static API-contract
+      #    check and six HTTP suites. Exclusive by design (note 3).
+      # -----------------------------------------------------------------------
+      - name: Security gate (scripts/verify-all.sh)
+        run: bash scripts/verify-all.sh
+
+      - name: Server log (always, for correlation)
+        if: always()
+        run: sed -n '1,300p' /tmp/qls-server.log || true
+
+      # -----------------------------------------------------------------------
+      # 7. PREDEPLOY
+      #    The same script `npm run predeploy` runs, against the environment that
+      #    was actually built and started above.
+      #
+      #    PREDEPLOY_SKIP_GATE=1 is deliberate and is printed as a NAMED WAIVER in
+      #    the script's summary: the gate is a dedicated step immediately above, so
+      #    running it twice would double the runtime and contend with itself.
+      #
+      #    PREDEPLOY_SUPER_ADMIN_MODE=report records — as a named waiver, never as
+      #    a pass — the two checks that cannot be true of a fixture database (see
+      #    note 5). Unset it for a genuine release check.
+      #
+      #    PREDEPLOY_AUDIT_REGISTRY: this repo's .npmrc points at
+      #    registry.npmmirror.com, which does not implement the npm advisory
+      #    endpoint (404 [NOT_IMPLEMENTED]). Without the override the audit reports
+      #    "could not be run" — honest, but no signal. With it, real advisories are
+      #    reported and HIGH/CRITICAL findings fail the job.
+      # -----------------------------------------------------------------------
+      - name: Predeploy readiness gate
+        env:
+          NODE_ENV: production
+          HTTPS_ENABLED: 'false'
+          PREDEPLOY_SKIP_GATE: '1'
+          PREDEPLOY_SUPER_ADMIN_MODE: report
+          PREDEPLOY_AUDIT_REGISTRY: https://registry.npmjs.org
+        run: npm run predeploy
+
+      # The gate builds into dist/ as part of the run, so the artefacts that
+      # produced these results are worth keeping for a failed run.
+      - name: Upload build artefacts and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qls-ci-artifacts
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            dist/server/main.js
+            /tmp/qls-server.log
+            /tmp/ready.json

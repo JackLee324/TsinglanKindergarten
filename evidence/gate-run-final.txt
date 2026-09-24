@@ -1,6 +1,6 @@
   gate lock  acquired (exclusive advisory lock on the shared environment)
 === 自动化测试 ===
-  npm test                 # tests 183 # pass 183 # fail 0 
+  npm test                 # tests 230 # pass 230 # fail 0 
 === 类型检查 ===
   typecheck server         PASS
   typecheck client         PASS
@@ -9,9 +9,9 @@
 === 前后端 API 契约（静态检查，无需运行服务） ===
   api-contracts             matched
 === HTTP 验证套件（需要运行中的服务） ===
-  authz-http               pass=24 fail=0
+  authz-http               pass=74 fail=0
   hardening                pass=10 fail=0
-  mfa                      pass=36 fail=0
+  mfa                      pass=55 fail=0
   security-headers         pass=20 fail=0
   files-http               pass=73 fail=0
   naming-http              pass=49 fail=0

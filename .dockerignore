@@ -1,0 +1,113 @@
+# =============================================================================
+# .dockerignore — what must never reach the build context or an image layer
+# =============================================================================
+# A Docker build context is uploaded to the daemon and every `COPY` that does not
+# name an excluded path can pull any of it into a layer. Two consequences make
+# this file a security control rather than an optimisation:
+#
+#   1. `node_modules/` here is a macOS/arm64 tree. Copying it into a linux image
+#      produces a container whose native bindings are the wrong platform — the
+#      same class of failure DEPLOYMENT_PRODUCTION.md §6 records for `npm ci` on
+#      macOS. The image installs its own dependencies from the lockfile instead.
+#   2. This repository contains verified-sensitive material: `backups/` and
+#      `*.dump` hold real database dumps (password hashes, PII), and `evidence/`
+#      holds captured verification output that can quote environment values and
+#      request bodies. None of it belongs in an image anyone can `docker save`.
+# =============================================================================
+
+# ---- dependencies and builds: rebuilt inside the image ----------------------
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+.swc
+*.tsbuildinfo
+
+# ---- version control and editor state --------------------------------------
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# ---- secrets: never copied, never baked into a layer ------------------------
+# `.env` is gitignored, but a build context is not a git checkout — it is the
+# working tree, so the file WOULD be sent and could be copied by a careless
+# `COPY . .`. Excluding it here makes that mistake impossible.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets
+secret
+credentials
+credential
+*.credentials
+service-account*.json
+id_rsa*
+id_ed25519*
+
+# ---- sensitive local artefacts: dumps, backups, captured evidence -----------
+# These are the files that must never end up in a published image.
+backups
+db-backups
+dumps
+evidence
+snapshots
+*.dump
+*.sql.gz
+*.backup
+backup*.sql
+uploads
+private-storage
+logs
+
+# ---- local verification tooling --------------------------------------------
+# `.devtools/` contains an embedded PostgreSQL distribution and its data
+# directory — hundreds of MB, platform-specific, and absolutely not runtime
+# payload. `scripts/dev-postgres.sh` is referenced by the docs, not by the server.
+.devtools
+scripts/dev-postgres.sh
+scripts/verify-seed-failure.sh
+
+# ---- documentation and reports ---------------------------------------------
+# Not needed to build or run. If you have a LICENSE file, un-ignore it: the OCI
+# image spec expects licensing information to be present in the image.
+*.md
+*.markdown
+*.txt
+
+# ---- tests -----------------------------------------------------------------
+# The verification suites run in CI against a real database, not inside the
+# image. Excluded so the image cannot be mistaken for a place they are run.
+tests
+coverage
+*.lcov
+
+# ---- OS noise --------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+tmp
+temp
+.playwright-cli
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm_cache

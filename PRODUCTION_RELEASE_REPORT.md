@@ -739,3 +739,91 @@ canonical 拼写仍然可用。别名表**只来源于真实值**，每条别名
 
 **`[无法验证]`**：真实对象存储不可达，"有文件的资源端到端可下载"未经验证；
 已验证的是它**通过文件校验并抵达存储调用（302）**，而仅有元数据的资源**停在 404**。
+
+---
+
+# 最终状态：A / B / C / D
+
+> 本附录是最终结论，取代正文与早前附录中的分段结论。冲突时以本附录为准。
+> 判定：**本机代码验收通过；公网上线未通过。**
+
+## 本机最终门禁（逐字，`evidence/gate-run-final.txt`）
+
+```
+npm test                 # tests 230 # pass 230 # fail 0
+typecheck server         PASS
+typecheck client         PASS
+npm run build            PASS
+api-contracts            matched
+authz-http               pass=74 fail=0
+hardening                pass=10 fail=0
+mfa                      pass=55 fail=0
+security-headers         pass=20 fail=0
+files-http               pass=73 fail=0
+naming-http              pass=49 fail=0
+                        ✅ 全部通过
+```
+
+**230 项单元测试 + 281 条 HTTP 断言（6 个套件）全部通过。**
+
+`npm run predeploy`：20 项检查、**6 项失败**、2 项告警、`NOT READY FOR PRODUCTION`、**exit 1**
+（原始输出 `evidence/predeploy.txt`）。其内部的门禁检查（第 19 项）**已通过**。
+
+---
+
+## A. 已在本机真实验证
+
+| 能力 | 证据 |
+|------|------|
+| 统一鉴权体系（9 角色 / 权限目录 / 4 范围） | 门禁 authz 74/74 |
+| **G-18 修复**：reset-password 接入 `@RequirePermission('account.reset_password')`，硬编码 `roles.includes('principal')` 已移除 | 源码 + 37 项确定性测试 + HTTP 断言 |
+| 新增 `account.reset_privileged_password`，**仅 super_admin 持有**；目录完整性断言会在其他角色获得它时**抛错** | `shared/rbac.ts`；变异测试已验证 |
+| 天花板规则 `canManageAccount`：principal 不能重置同级 principal、不能重置 super_admin；只能按模型重置其下角色 | HTTP 断言（403 矩阵） |
+| **IDOR 防护**：仅接受 `teacherId`（`accountId`→400、非法 uuid→400）；目标角色从库中读取，并在写事务内 `FOR UPDATE` **重新判定**（无 TOCTOU）；拒绝时**一个字节都不写** | 前后 `password_hash` 逐字节比对 + 对端仍可用原密码登录 |
+| 403/404 决策：**授权失败一律 403**，404 仅用于账号确实不存在 | 断言同时覆盖 403 与 404，且说明防枚举理由在此不成立 |
+| MFA：未登记 MFA 的 super_admin 被拒（403）；特权账号重置需 **step-up 验证码**（缺失/错误→401，不写入，且记录拒绝审计） | 门禁 mfa 55/55 |
+| 重置全程审计；**敏感信息不落日志** | 6 MB 日志中 0 命中密码/TOTP/挑战令牌/临时密码/scrypt 串 |
+| **修复了一个真实且严重的既存缺陷**：此前所有密码写入以数据库角色 `anon_` 执行，而 0005 只授予它 `teachers` 的 3 列 UPDATE，导致重置与改密**返回 500 且从未真正改密** | 修复后断言：新密码可用、旧密码失效 |
+| **修复了平台级明文日志泄露**：HTTP trace 拦截器**无条件**记录请求体与响应体；修复前同一日志含 28 个明文登录密码、2 个有效 TOTP、14 个挑战令牌、4 个临时密码 | 在 auth 模块内通过「消费即擦除 + 显式发送含凭据响应」闭环 |
+| 安全响应头（含 CSP report-only、HSTS 条件启用、移除 `X-Powered-By`） | before/after 实测；20/20 |
+| 优雅关闭：SIGTERM/SIGINT、请求 drain、关闭 DB、超时强制退出、幂等 | `scripts/verify-shutdown.sh` 24/24；实测 exit 0（约 440ms）/ 在途请求被应答后 exit 0 / 挂起请求 5083ms 强制退出 exit 1 / 双信号只执行一次 |
+| **storybook-cover asset root 已修复**：不再依赖 `__dirname` 猜测；顺序为 `STORYBOOK_COVER_ASSETS_DIR`（权威，无回退）→ 编译产物布局（cwd 无关）→ 源码树；缺失时 readiness 503 + 错误级启动日志 | `tests/cover-asset-root.test.mjs` 10/10，含从空临时 cwd 启动并取真实种子行→200 + 真实 JPEG 字节 |
+| 7+1 个迁移全部应用、校验和一致、**0007 零数据丢失**、可回滚（0002 按设计拒绝） | `migrate status/verify`；前后快照 |
+| `scripts/predeploy-check.sh` 真实存在、`npm run predeploy` 真实可执行、失败非零、输出 READY/NOT READY；**不可验证项一律不计为通过** | 20 项检查；两次故意失败路径实测 |
+| 回归门禁自身的可信度：无 `finally` 内 `process.exit`、崩溃必须非零退出、每次运行独立 fixture、advisory 锁防并发污染 | 静态扫描全清 + 5 次字节一致运行（md5 一致） |
+
+## B. 代码已完成，等待真实基础设施验证
+
+| 项 | 为什么本机无法验证 |
+|----|--------------------|
+| 真实对象存储 upload / download / private storage / signed URL / expiry / 授权与非授权下载 / ZIP 安全 | 妙搭 dataloom 需每请求平台上下文，独立机器**结构上不可能**具备；当前保持明确 **503 `STORAGE_NOT_CONFIGURED` / `STORAGE_UNAVAILABLE`**，**不伪造任何下载 URL** |
+| `registerFile` 魔数校验的**权威性** | 上传为浏览器直传 bucket，`head` 字节由客户端提供；需服务端读取对象后才具权威性 |
+| 生产库 backup / restore rehearsal | 本机**没有** `pg_dump` / `pg_restore` / `psql`。逻辑往返演练（12 表 / 902 行、校验和一致）**不等价于**生产备份可用，文档已如此声明 |
+| 反向代理下的 `trust proxy` / HSTS / `Secure` Cookie 真实行为 | 无 Nginx / 云入口 / 真实证书 |
+| CSP 强制模式 | 需先在真实构建产物上收集 Report-Only 违规 |
+| Docker 镜像构建与运行 | **本机没有 Docker**，`docker build` / `docker run` **一次都没执行**；Dockerfile 为「按代码正确」，非实测 |
+| CI 流水线执行 | 无 GitHub runner；仅做 YAML 结构校验，**从未执行** |
+| npm audit 的稳定性 | 配置的镜像**未实现** advisory 端点（`NOT_IMPLEMENTED`）→ 记为 UNVERIFIED；改用公网 registry 后可运行 |
+
+## C. 仍存在的生产阻塞项
+
+| # | 阻塞项 | 依据 |
+|---|--------|------|
+| **B1** | 生产库备份/恢复演练**从未执行** | 本机无 `pg_dump`/`pg_restore`/`psql` |
+| **B2** | 真实对象存储未接入 | 需平台凭据 |
+| **C-1** | **没有任何可用的 super_admin**：唯一持有者是测试夹具 `__rbac_keeper`，它被**刻意设计为没有 `password_hash`**，且 `AuthGuard` 对该角色在 MFA 未绑定前拒绝一切路由 → 最高权限能力**当前完全不可达** | predeploy `FAIL [07]`；`auth.service.ts` + `auth.guard.ts` |
+| **C-2** | **教师管理功能不可用**：`PATCH /api/teachers/:id` 与 `DELETE /api/teachers/:id` 因与 G-18 同源的 `anon_` 列权限问题**返回 500**（改名未生效、停用失败） | 由 auth 负责代理实测报告；**未修复**（不在其文件范围） |
+| **C-3** | **平台级明文日志泄露仅被部分封堵**：`HTTPTraceInterceptor` 对**所有模块**无条件记录请求/响应体；auth 模块已闭环，但 `POST /api/teachers` 仍会返回 `temporaryPassword` 并被平台写入日志 | 由 auth 代理验证 |
+| **C-4** | 依赖漏洞：**16 HIGH / 0 CRITICAL**（含 `drizzle-orm` 直接 SQL 注入公告、`@nestjs/platform-express`、`@lark-apaas/fullstack-nestjs-core`）。门禁**拒绝豁免**此类真实漏洞 | predeploy 依赖检查 |
+| **C-5** | 生产环境变量未配置：`NODE_ENV`、`MFA_ENCRYPTION_KEY`、`DOWNLOAD_TOKEN_SECRET`、`HTTPS_ENABLED`/`TRUST_PROXY` | predeploy `FAIL [01][03][10][11]` |
+| **C-6** | 单实例架构约束（已接受）：进程内限流，扩容前必须先迁移到共享存储 | `DEPLOYMENT_PRODUCTION.md` 附录 |
+| **C-7** | 平台缺陷：`app.close()` 在本应用**无法完成**（`DRIZZLE_DATABASE` Proxy 在池断开后于 Nest 钩子自省时抛错，已用裸 `NestFactory.create` 独立复现）。已定位并在应用侧绕过并降级为 WARN，但 Nest 的关闭钩子不会运行 | shutdown 代理实测 |
+
+## D. 非阻塞的后续优化
+
+1. **回收站 UI** — 按指示保持 deferred；后端 soft delete / restore / 永久删除已有测试覆盖。
+2. **多实例限流** — 迁移到 Redis/shared store（C-6 的解除条件）。
+3. **`scripts/predeploy-check.sh` 在 CI 中接入公网 registry 的 npm audit**，使 C-4 从 UNVERIFIED 变为稳定可测。
+4. **审计覆盖度**：独立复核为 42 路由 / 23 条显式权限；本机早期扫描为 40/21（因 look-ahead 窗口把 `resources GET /:id` 重复计了 3 次）。以复核数字为准，差异已记录。
+5. **未实现**：优雅退出的编排层验证（无 k8s）、`rm -rf dist` 与服务并发时的瞬态中断端到端复现、`/assets/*` 由平台 CDN 提供（设计如此，非缺陷）。
+6. Dockerfile / CI 待真实环境首次构建后回归。

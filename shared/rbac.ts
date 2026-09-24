@@ -69,6 +69,24 @@ export const SUPER_ADMIN_ROLE: RoleCode = 'super_admin';
 export const SYSTEM_ROLES: RoleCode[] = ['super_admin', 'principal'];
 
 /**
+ * Accounts that hold one of these roles are "privileged accounts": taking over
+ * such an account hands the holder the ability to manage other people's
+ * accounts, so their credentials are a higher-value target than a teacher's.
+ *
+ * Deliberately the same two roles as SYSTEM_ROLES, but a SEPARATE constant: this
+ * one is used to make an authorization decision (see
+ * `account.reset_privileged_password`), and tying an authorization decision to a
+ * list whose documented purpose is UI grouping is how a display tweak turns into
+ * a privilege change. If the two ever need to differ, they can.
+ */
+export const PRIVILEGED_ACCOUNT_ROLES: RoleCode[] = ['super_admin', 'principal'];
+
+/** Does this account hold a role whose credentials are privileged? */
+export function isPrivilegedAccount(roles: readonly RoleCode[]): boolean {
+  return roles.some((r) => PRIVILEGED_ACCOUNT_ROLES.includes(r));
+}
+
+/**
  * Rank is used ONLY for the "an administrator may not grant a role at or above
  * their own level" rule. It is deliberately NOT used to decide whether a
  * permission is allowed — that is what the permission catalog is for. Hard-coding
@@ -310,6 +328,7 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { code: 'account.update', group: 'account', name: '修改账号', nameEn: 'Update Account', description: '修改姓名、邮箱、状态等资料', dataScoped: false, highRisk: true },
   { code: 'account.disable', group: 'account', name: '停用账号', nameEn: 'Disable Account', description: '停用/启用账号（停用后会话立即失效）', dataScoped: false, highRisk: true },
   { code: 'account.reset_password', group: 'account', name: '重置密码', nameEn: 'Reset Password', description: '为其他账号重置密码', dataScoped: false, highRisk: true },
+  { code: 'account.reset_privileged_password', group: 'account', name: '重置特权账号密码', nameEn: 'Reset Privileged Account Password', description: '为系统/管理账号（super_admin、principal）重置密码；仅超级管理员持有', dataScoped: false, highRisk: true },
   { code: 'account.force_logout', group: 'account', name: '强制下线', nameEn: 'Force Logout', description: '强制撤销指定账号的全部会话', dataScoped: false, highRisk: true },
 
   // ---- role / permission ------------------------------------------------
@@ -377,6 +396,18 @@ export function getPermissionDefinition(code: PermissionCode): PermissionDefinit
 export const DATA_SCOPED_PERMISSIONS: PermissionCode[] = PERMISSIONS
   .filter((p) => p.dataScoped)
   .map((p) => p.code);
+
+/**
+ * Resetting the password of a PRIVILEGED account (see `PRIVILEGED_ACCOUNT_ROLES`).
+ *
+ * A named constant rather than a literal because `assertRbacCatalogIntegrity()`
+ * below asserts the grant rule for it: super_admin holds it, and NO other role
+ * may ever hold it. That assertion is what turns "only the super administrator
+ * may take over an administrator account" from a convention into a check that
+ * fails loudly at boot and in the test suite.
+ */
+export const RESET_PRIVILEGED_PASSWORD_PERMISSION: PermissionCode =
+  'account.reset_privileged_password';
 
 // =============================================================================
 // 3. ROLE -> DEFAULT PERMISSIONS
@@ -664,5 +695,30 @@ export function assertRbacCatalogIntegrity(): void {
   }
   if (ROLE_RANK[SUPER_ADMIN_ROLE] <= ROLE_RANK.principal) {
     throw new Error('rbac: super_admin must outrank principal');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Resetting a privileged account's password is the SUPER ADMIN's capability
+  // and nobody else's.
+  // ---------------------------------------------------------------------------
+  // Expressed here rather than only in the route handler because the grant list
+  // is the thing a future change is most likely to widen "temporarily". A role
+  // default containing this permission would hand a principal (or, worse, a
+  // teaching role) the ability to take over an administrator account, so the
+  // catalog refuses to load instead. super_admin holds it by construction, since
+  // ROLE_PERMISSIONS.super_admin is derived from the catalog.
+  if (!ROLE_PERMISSIONS[SUPER_ADMIN_ROLE].includes(RESET_PRIVILEGED_PASSWORD_PERMISSION)) {
+    throw new Error(
+      `rbac: super_admin must hold "${RESET_PRIVILEGED_PASSWORD_PERMISSION}"`,
+    );
+  }
+  for (const code of ROLE_CODES) {
+    if (code === SUPER_ADMIN_ROLE) continue;
+    if (ROLE_PERMISSIONS[code].includes(RESET_PRIVILEGED_PASSWORD_PERMISSION)) {
+      throw new Error(
+        `rbac: role "${code}" must NOT hold "${RESET_PRIVILEGED_PASSWORD_PERMISSION}" ` +
+          '(resetting a privileged account password is a super_admin-only capability)',
+      );
+    }
   }
 }
