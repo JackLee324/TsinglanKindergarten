@@ -21,22 +21,18 @@ let pass = 0, fail = 0;
 function check(l, a, e) { const ok = Array.isArray(e) ? e.includes(a) : a === e; console.log('  ' + (ok ? 'PASS' : 'FAIL') + '  ' + l.padEnd(56) + '-> ' + String(a) + (ok ? '' : '   expected ' + e)); ok ? pass++ : fail++; }
 
 const Pg = (await import('postgres')).default;
+const { resetFixtures: sharedReset } = await import('../tests/helpers/reset-fixtures.mjs');
 const sql = Pg(process.env.AUTHZ_TEST_DB, { onnotice: () => {} });
 const crypto = await import('node:crypto');
 const h = (() => { const salt = crypto.randomBytes(16).toString('base64'); return 'scrypt$16384$8$1$' + salt + '$' + crypto.scryptSync(PW, salt, 32, { N: 16384, r: 8, p: 1 }).toString('base64'); })();
-// Reset fixtures so the run is repeatable. The role reset MUST declare
-// super-admin authority: if a previous interrupted run left the account as
-// super_admin, the migration-0003 trigger refuses the demotion with 42501
-// ('a principal cannot manage a super_admin') — which is the guard behaving
-// correctly, and which made this script non-re-runnable until it was fixed.
+// Shared fixture reset (roles, passwords, status, and ALL MFA state) so this
+// suite can run after any other. It also guarantees a KEEPER super_admin exists,
+// without which promoting the fixture account would make it the last super_admin
+// and the guard would then refuse to demote it. See
+// tests/helpers/reset-fixtures.mjs.
+const sql2 = await sharedReset(process.env.AUTHZ_TEST_DB, { password: PW });
+await sql2.end();
 const TID = (await sql`select id from teachers where username='qlsadmin'`)[0].id;
-await sql`delete from teacher_mfa where teacher_id=${TID}`;
-await sql`delete from mfa_recovery_codes where teacher_id=${TID}`;
-await sql`delete from mfa_challenges where teacher_id=${TID}`;
-await sql.begin(async (tx) => {
-  await tx.unsafe("select set_config('app.rbac_actor_super_admin','on',true)");
-  await tx`update teachers set password_hash=${h}, roles=array['principal'], status='active' where id=${TID}`;
-});
 
 // TOTP implemented independently of the server code, so the test cannot pass by
 // sharing a bug with the implementation.

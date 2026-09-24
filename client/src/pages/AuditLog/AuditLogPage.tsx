@@ -69,6 +69,18 @@ const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
   password_changed: 'bg-teal-100 text-teal-700 border-teal-200',
   password_change_failed: 'bg-red-100 text-red-700 border-red-200',
   password_reset: 'bg-amber-100 text-amber-700 border-amber-200',
+  // MFA (migration 0006). Positive second-factor events read teal; failures and
+  // state removals read red/amber, so an operator scanning the log can tell a good
+  // MFA event from a bad one at a glance.
+  mfa_enrolled: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+  mfa_enabled: 'bg-teal-100 text-teal-700 border-teal-200',
+  mfa_disabled: 'bg-amber-100 text-amber-700 border-amber-200',
+  mfa_reset: 'bg-amber-100 text-amber-700 border-amber-200',
+  mfa_success: 'bg-teal-100 text-teal-700 border-teal-200',
+  mfa_failed: 'bg-red-100 text-red-700 border-red-200',
+  mfa_recovery_used: 'bg-orange-100 text-orange-700 border-orange-200',
+  mfa_recovery_regenerated: 'bg-indigo-100 text-indigo-700 border-indigo-200',
+  mfa_challenge_issued: 'bg-blue-100 text-blue-700 border-blue-200',
 };
 
 const AuditLogPage: React.FC = () => {

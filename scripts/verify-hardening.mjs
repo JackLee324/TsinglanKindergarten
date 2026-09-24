@@ -31,17 +31,12 @@ let pass=0,fail=0;
 function check(l,a,e){const ok=Array.isArray(e)?e.includes(a):a===e;console.log('  '+(ok?'PASS':'FAIL')+'  '+l.padEnd(58)+'-> '+String(a)+(ok?'':'   expected '+e));ok?pass++:fail++;}
 
 const Pg=(await import('postgres')).default;
+const { resetFixtures: sharedReset } = await import('../tests/helpers/reset-fixtures.mjs');
 const sql=Pg(process.env.AUTHZ_TEST_DB,{onnotice:()=>{}});
 
-// Reset fixtures: the sibling authz suite deliberately demotes an administrator
-// to prove instant revocation, so without this a run could start from a demoted
-// database and report artefact failures.
-const c0=await import('node:crypto');
-const pw=()=>{const salt=c0.randomBytes(16).toString('base64');
-  return 'scrypt$16384$8$1$'+salt+'$'+c0.scryptSync(PW,salt,32,{N:16384,r:8,p:1}).toString('base64');};
-const h=pw();
-await sql`update teachers set password_hash=${h}, roles=array['principal'], status='active' where username='qlsadmin'`;
-await sql`update teachers set password_hash=${h}, roles=array['prek_assistant'], status='active' where username='prek-teacher01'`;
+// Shared fixture reset so this suite can run after any other suite. See
+// tests/helpers/reset-fixtures.mjs.
+await sharedReset(process.env.AUTHZ_TEST_DB, { password: PW });
 
 await req('GET','/');
 const login=await req('POST','/api/auth/login',{username:'qlsadmin',password:PW},

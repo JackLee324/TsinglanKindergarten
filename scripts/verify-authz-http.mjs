@@ -17,6 +17,7 @@ const DBURL=process.env.AUTHZ_TEST_DB||null;
 const crypto0=await import('node:crypto');
 const PgMod=await import('postgres');
 const Pg=(PgMod.default||PgMod);
+const { resetFixtures: sharedReset } = await import('../tests/helpers/reset-fixtures.mjs');
 function pwHash(pw){const salt=crypto0.randomBytes(16).toString('base64');
   return 'scrypt$16384$8$1$'+salt+'$'+crypto0.scryptSync(pw,salt,32,{N:16384,r:8,p:1}).toString('base64');}
 /**
@@ -25,13 +26,11 @@ function pwHash(pw){const salt=crypto0.randomBytes(16).toString('base64');
  * revocation), so without a reset a second run starts from a demoted database and
  * reports failures that are artefacts of the previous run rather than real bugs.
  */
+// Fixture reset is shared with the other HTTP suites so the three can run in any
+// order. See tests/helpers/reset-fixtures.mjs for why this is necessary.
 async function resetFixtures(){
   if(!DBURL) return;
-  const sql=Pg(DBURL,{onnotice:()=>{}});
-  const h=pwHash(PW);
-  await sql`update teachers set password_hash=${h}, roles=array['prek_assistant'], status='active' where username='prek-teacher01'`;
-  await sql`update teachers set password_hash=${h}, roles=array['principal'], status='active' where username='qlsadmin'`;
-  await sql`update teachers set password_hash=${h}, roles=array['curriculum_director'], status='active' where username='qlsdirector'`;
+  const sql = await sharedReset(DBURL, { password: PW });
   await sql.end();
 }
 function check(label,actual,expected){
