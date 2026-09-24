@@ -1,5 +1,5 @@
 === 自动化测试 ===
-  npm test                 # tests 102 # pass 102 # fail 0 
+  npm test                 # tests 103 # pass 103 # fail 0 
 === 类型检查 ===
   typecheck server         PASS
   typecheck client         PASS

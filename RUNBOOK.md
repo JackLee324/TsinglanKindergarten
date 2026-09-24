@@ -868,7 +868,39 @@ ALTER ROLE <migration_role> WITH PASSWORD '<新口令>';
 ⚠️ 若同时轮换，注意 `MIGRATION_DATABASE_URL` 的优先级高于 `DATABASE_URL`
 （`migrate.mjs:80-83`）。
 
-### 7.4 平台凭据
+### 7.4 轮换 `DOWNLOAD_TOKEN_SECRET`（**可在线，低风险**）
+
+含义：下载令牌的 HMAC-SHA256 签名密钥（`server/common/crypto/download-token.ts`）。
+[已证实]
+
+| 项 | 说明 |
+|---|---|
+| 影响面 | 已发出的下载令牌全部作废。但令牌默认只活 **300 秒**，因此用户**重新点一次下载**即可 |
+| 是否需要改数据库 | ❌ **不需要** |
+| 是否需要停机 | ❌ 不需要；但**多副本时所有副本必须同时用同一把密钥**，否则会随机出现"链接无效" |
+| 失败模式 | 若新密钥 <32 字节或缺失 → 下载接口一律 **503**（fail closed），不会发出无法签名的链接 |
+
+```bash
+# 1) 生成新密钥
+NEW=$(openssl rand -base64 32); echo "$NEW"
+
+# 2) 更新部署环境变量 DOWNLOAD_TOKEN_SECRET（所有副本）→ 滚动重启
+#    ⚠️ 滚动期间新旧副本并存 → 短时窗口内可能"链接无效"，让用户重试即可
+
+# 3) 验证
+curl -s -o /dev/null -w '/api/health %{http_code}\n' "$BASE/api/health"
+#   然后实际点一次下载（需已有带文件的资源）：
+#   期望 302 到平台签名直链；若为 503 则看日志里的具体原因
+```
+
+可选：把 `DOWNLOAD_TOKEN_TTL_SECONDS` 调小（例如 120）以进一步缩短泄漏窗口 ——
+但要考虑大文件下载耗时，**太短会导致下载中途失效**。
+
+> ⚠️ **不要把这条流程套用到 `MFA_ENCRYPTION_KEY` 上。** 两者语义完全不同：
+> MFA 密钥丢失/换错 = **所有 MFA 账号（含 super_admin）永久无法登录**，必须停机 + 逐行重加密（§7.1）。
+> 相关区别见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §3.3。
+
+### 7.5 平台凭据
 
 **[无法验证]**：`FORCE_AUTHN_INNERAPI_DOMAIN` 等由妙搭平台控制。
 参考平台文档；本仓库只能确认"缺它进程会直接退出"

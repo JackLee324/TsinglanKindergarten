@@ -101,7 +101,7 @@ deleted files: 0
 
 ```
 === 自动化测试 ===
-  npm test                 # tests 102 # pass 102 # fail 0
+  npm test                 # tests 103 # pass 103 # fail 0
 === 类型检查 ===
   typecheck server         PASS
   typecheck client         PASS
@@ -127,7 +127,7 @@ deleted files: 0
 
 | 项目 | 结果 |
 |------|------|
-| 单元测试 | **102/102** 通过 |
+| 单元测试 | **103/103** 通过 |
 | 服务端类型检查 | 通过（`tsc --noEmit`） |
 | 客户端类型检查 | 通过 |
 | 生产构建 | 通过（exit 0） |
