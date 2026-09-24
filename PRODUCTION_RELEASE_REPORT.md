@@ -304,6 +304,56 @@ Content-Type: application/json; charset=utf-8
 
 ---
 
+## 6b. 「禁止假启动」实测验证
+
+`[已证实]` 原始日志：`evidence/no-fake-startup.txt`
+
+需求明确禁止「把错误 catch 后吞掉导致系统继续假启动」。**代码中确实存在该违规**，
+且已修复并实测。
+
+**违规现场**（`server/modules/auth/auth.service.ts`）：
+
+```ts
+// onModuleInit()
+try { await this.seedTeachers(); }
+catch (err) { this.logger.error(`Seed teachers failed: ...`) }   // 吞掉，继续启动
+
+// seedTeachers() 内部
+catch (error) { this.logger.error(`Failed to seed teacher ${seed.username}: ...`) }
+// 循环结束后仅打印 created=N, skipped=M
+```
+
+**实测后果**：在由随包 `init.sql` 建立的库上，`teachers.wecom_user_id` 为 `NOT NULL`
+而 seed 从不写该列 → 所有插入失败 → 每个失败都被吞掉 → 进程打印
+`created=0, skipped=0` 并自认为健康启动，**实际可用账号数为 0**。
+运维看到的是一个"运行中"的平台和一个永远登不进去的登录页。
+
+**修复**：`seedTeachers()` 改为返回 `{ created, skipped, failed, failedUsernames }`；
+`onModuleInit()` 区分三种结果——全部 skipped（账号已存在）静默通过；部分失败大声报错
+但**不**中止（系统仍可用）；**全部失败则抛出异常**，使 Nest 中止启动。
+
+**验证方式（关键：不是"退出码非 0"就算通过）**：
+给 `teachers` 加 `CHECK (false) NOT VALID` 约束——`NOT VALID` 跳过对既有行的校验但
+仍对**新插入**生效，因此 schema 完整、应用正常启动到 seed 步骤才失败，从而**隔离**了
+seed 行为，避免因其他启动错误而"因为错误的原因通过"。断言要求日志中出现**特定的、
+刻意的拒绝信息**，而不是任何崩溃都满足的非零退出码。
+
+```
+=== OBSERVED: bash scripts/verify-seed-failure.sh ===
+  PASS  built server present
+  PASS  forced every teachers INSERT to fail (CHECK (false) NOT VALID)
+  PASS  application did NOT stay up
+  PASS  log contains the deliberate refusal message
+  PASS  seed reported the failure counts instead of hiding them
+
+  pass=5 fail=0
+  PASSED — a total seeding failure now aborts startup instead of faking health.
+```
+
+另经全仓扫描：`server/` 下**不存在任何空 `catch {}`**。
+
+---
+
 ## 7. 鉴权与安全模型（摘要）
 
 完整设计见 `RBAC.md` 与 `PRODUCTION_READINESS.md`；此处仅列已验证结论。
@@ -400,7 +450,7 @@ Content-Type: application/json; charset=utf-8
 | 禁止只改前端不改后端 | ✅ 契约错位均在后端补路由/方法 |
 | 禁止只改 README 不改代码 | ✅ 代码改动 9700 行 |
 | 禁止删除测试以求通过 | ✅ **删除文件数 = 0**，且为门禁加了自测 |
-| 禁止 catch 吞错继续假启动 | ✅ 启动/迁移失败即失败；`init.sql` 的静默失败已被暴露 |
+| 禁止 catch 吞错继续假启动 | ✅ **已发现违规并修复+实测**（§6b，5/5 通过）；全仓无空 `catch {}` |
 | 禁止大规模改 UI | ✅ 前端仅 6 个文件，无视觉重设计 |
 | 无备份能力必须明说 | ✅ §4.1 明确声明未做，并给出部署环境所需命令 |
 | 无法验证必须标注 | ✅ §9 |
@@ -425,4 +475,4 @@ Content-Type: application/json; charset=utf-8
 
 *本报告由自动加固流程生成。所有 `[已证实]` 结论的原始日志位于 `evidence/`：
 `change-inventory.txt`、`backup-restore-rehearsal.txt`、`migration-rollback.txt`、
-`security-headers.txt`。*
+`security-headers.txt`、`authorization-coverage.txt`、`no-fake-startup.txt`。*
