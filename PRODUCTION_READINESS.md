@@ -705,3 +705,51 @@ npm run build                     PASS
 - 安全响应头（HSTS/CSP 等）、CORS 收敛未做
 - Docker 与真实反向代理本机无法验证
 - **用户真实数据库的备份与恢复演练未执行**（本机无其连接串）
+
+---
+
+## R. 第 6 轮：回归门禁恢复 + super_admin 强制 MFA
+
+### R-1 回归门禁已恢复并可重复（一个入口）
+
+新增 `scripts/verify-all.sh`。**实测连续运行两次均全绿**：
+
+```
+npm test          24/24      typecheck server  PASS
+typecheck client  PASS       npm run build     PASS
+verify-authz-http 24/24      verify-hardening   9/9      verify-mfa 36/36
+```
+
+上一轮我把三个 HTTP 套件跑成"只有在特定顺序下才通过"。根因是**共享可变 fixture**：
+- 残留的 MFA 绑定让其他套件的普通登录停在第二因素；
+- fixture 账号被留在 super_admin 上 → `rbac_protect_last_super_admin` **正确地**拒绝降级，
+  数据库一度无法被任何套件复位；
+- 共享的按 IP 登录限流被连续运行耗尽。
+
+修复：`tests/helpers/reset-fixtures.mjs`，每个套件启动时先调用它（恢复角色/状态/密码、
+清除**全部** MFA 状态、确保 keeper super_admin 存在、撤销遗留会话）。因此**顺序无关、可反复运行**。
+
+### R-2 门禁立刻抓出一个我自己造成的真实回归
+
+新增门禁后第一次运行就发现 **client 类型检查是 FAIL 的**（上一轮引入）：
+新增 9 个 `AuditAction` 值后，审计页与双语字典必须同步。已修复（新增 9 个徽章配色 +
+zh/en 各 9 个 `audit.action.mfa_*` 键）。
+这正是单一契约源的价值——门禁让它在**发布前**暴露，而不是带着坏掉的前端构建上线。
+
+### R-3 super_admin 强制 MFA 的**另一半**已完成
+
+此前只做到"不允许关闭 MFA"，但**从未绑定过**的 super_admin 仍可用密码单独操作 —— 要求只是名义上满足。
+
+现在 `AuthGuard` 对"角色要求 MFA 但尚未绑定"的账号**默认拒绝一切路由**，仅放行
+`@MfaExempt()` 标记的少数路由（自身身份、MFA 流程、登出）。选择默认拒绝而非路径白名单，
+是为了让**将来新增的端点自动受限**。
+
+实测（6 项）：未绑定 super_admin → 其他 API **403**（提示指向 MFA）、可开始绑定、可读自身身份、
+审计日志同样被拒。
+
+### R-4 仍未完成
+
+① ValidationPipe 缺 `whitelist`/`forbidNonWhitelisted`；② requestId header/body 一致性；
+③ 限流仍为进程内 Map；④ 文件上传下载未实现（0 个可下载资源）；⑤ 6 处 API 契约错位未修；
+⑥ 安全响应头/CORS 未做；⑦ Docker 与真实反向代理本机无法验证；
+⑧ **用户真实数据库的备份与恢复演练仍未执行**（本机无其连接串，不得声称已完成）。
