@@ -670,4 +670,5 @@ body:   {"error":{...,"requestId":"deadbeef-1111-2222-3333-444455556666",...}}
 | B6 | 回收站**无 UI**（按指示暂缓）；后端 soft delete / restore / purge 的权限与审计须先确保可靠 | 按指示延后 |
 | — | 回归门禁**非顺序无关**，任何单次绿色运行都不足以作为证据 | 修复中 |
 | — | `scripts/predeploy-check.sh` **不存在**，但被 `package.json` 的 `predeploy` 引用 | 待修 |
+| **G-18** | **`POST /api/auth/reset-password` 绕过 RBAC**：无 `@RequirePermission`，仅靠硬编码 `roles.includes('principal')`，可重置**他人**口令，缺 `403`（返回 `404`），且**没有任何测试覆盖** | **未修复**，详见 `evidence/g18-reset-password.txt` |
 | — | **未实现优雅退出**；无 Dockerfile / CI 流水线 | 待补 |
