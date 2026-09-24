@@ -73,13 +73,22 @@ export async function getMyResources(params: ResourceListParams = {}): Promise<R
   }
 }
 
-export async function downloadResource(id: string): Promise<{ downloadUrl: string }> {
-  try {
-    const resp = await axiosForBackend.get(`/api/resources/${id}/download`);
-    return resp.data;
-  } catch (error) {
-    return handleApiError(error, 'downloadResource');
-  }
+/**
+ * URL for downloading a resource.
+ *
+ * CONTRACT: the server responds with a 302 redirect to a short-lived signed URL,
+ * not with a JSON body. The previous client called this endpoint through axios and
+ * looked for `response.data.downloadUrl`; axios followed the redirect, returned the
+ * file BYTES, the field was undefined, and the download button silently did
+ * nothing — no error, no toast, nothing to debug.
+ *
+ * A browser navigation is the correct client for a redirect + Content-Disposition
+ * response: the session cookie is sent automatically, the browser follows the 302
+ * and saves the file. No auth header is needed, which is also why using axios here
+ * bought nothing.
+ */
+export function getDownloadUrl(resourceId: string): string {
+  return `/api/resources/${resourceId}/download`;
 }
 
 export function getStorybookCoverUrl(resourceId: string, index: number): string {

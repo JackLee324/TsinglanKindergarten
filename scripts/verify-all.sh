@@ -52,6 +52,14 @@ echo "=== 构建 ==="
 printf '  %-24s ' "npm run build"
 npm run build >/dev/null 2>&1 && echo PASS || { echo FAIL; FAILED=1; }
 
+echo "=== 前后端 API 契约（静态检查，无需运行服务） ==="
+printf '  %-24s ' "api-contracts"
+if out=$(node scripts/verify-api-contracts.mjs 2>&1); then
+  echo "$(echo "$out" | grep -oE '[0-9]+ server routes discovered' | head -1) matched"
+else
+  echo "FAIL"; echo "$out" | grep -E 'NO matching' -A2 | head -8 | sed 's/^/      /'; FAILED=1
+fi
+
 echo "=== HTTP 验证套件（需要运行中的服务） ==="
 run "authz-http"       node scripts/verify-authz-http.mjs
 run "hardening"        node scripts/verify-hardening.mjs

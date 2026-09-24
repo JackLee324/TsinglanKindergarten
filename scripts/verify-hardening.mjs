@@ -51,15 +51,23 @@ console.log('       client sent X-Forwarded-For: 203.0.113.99, 10.0.0.1');
 console.log('       audit recorded            : '+audited);
 
 console.log('\n=== B. ERROR SANITIZATION (audit finding G-11) ===');
-// NOTE: a global ValidationPipe IS installed by PlatformModule (APP_PIPE), so
-// `/api/resources/mine` now fails DTO validation with 400 rather than reaching the
-// database. Either way it is an error path, and the property under test is that no
-// internal detail leaks. A genuine 5xx is exercised separately by stopping
-// PostgreSQL and re-issuing an authenticated request — see
-// PRODUCTION_READINESS.md §Q-3 for that recorded run.
-const err=await req('GET','/api/resources/mine');
+// Error-path coverage. NOTE the history: this check originally used
+// `/api/resources/mine`, which was broken (no such route, so it fell through to
+// `:id` and 500'd) and therefore doubled as an error generator. That route is now
+// FIXED and returns 200 — which is asserted separately below — so the leak check
+// must use a path that genuinely errors.
+//
+// A valid-but-nonexistent UUID produces a 404 through the application's own
+// exception filter, which is the code path whose sanitisation we want to verify.
+// A real 5xx is exercised separately by stopping PostgreSQL; that run is recorded
+// in PRODUCTION_READINESS.md and cannot be automated here because it requires
+// taking the database down.
+const mine = await req('GET', '/api/resources/mine');
+check('GET /api/resources/mine now works (contract fix)', mine.status, 200);
+
+const err = await req('GET', '/api/resources/00000000-0000-0000-0000-000000000000');
 check('error path returns a 4xx/5xx status', [400,404,500].includes(err.status), true);
-const body=JSON.stringify(err.data);
+const body = JSON.stringify(err.data ?? {});
 check('response body has NO "stack"',      !/"stack"/.test(body), true);
 check('response body has NO "cause"',      !/"cause"/.test(body), true);
 check('response body has NO file path',    !/\/Users\/|node_modules|\.ts"/.test(body), true);

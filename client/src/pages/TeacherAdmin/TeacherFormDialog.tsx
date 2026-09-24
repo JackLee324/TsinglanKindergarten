@@ -119,8 +119,28 @@ const TeacherFormDialog: React.FC<TeacherFormDialogProps> = ({
         await teachersApi.updateTeacher(teacher.id, form);
         toast.success(t('teacher.updateSuccess'));
       } else {
-        await teachersApi.createTeacher(form as CreateTeacherRequest);
-        toast.success(t('teacher.addSuccess'));
+        // The server generates a random one-time password and returns it ONLY in
+        // this response: it is never stored in plaintext and cannot be retrieved
+        // afterwards. The previous code discarded the response, so an administrator
+        // could never learn the password of an account they had just created and
+        // had to immediately run "reset password" instead.
+        //
+        // Shown through the existing toast rather than a new dialog: the account
+        // creation flow already succeeds here, and the requirement is only that the
+        // one-time credential is displayed once. It is deliberately NOT logged and
+        // NOT persisted.
+        const created = (await teachersApi.createTeacher(
+          form as CreateTeacherRequest,
+        )) as { username?: string; temporaryPassword?: string };
+
+        if (created?.temporaryPassword) {
+          toast.success(
+            `${t('teacher.addSuccess')} — ${created.username ?? ''}: ${created.temporaryPassword}`,
+            { duration: 30000 },
+          );
+        } else {
+          toast.success(t('teacher.addSuccess'));
+        }
       }
       onOpenChange(false);
       onSuccess();

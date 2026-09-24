@@ -66,7 +66,7 @@ export async function updateTeacherPermissions(
   permissions: SubjectPermissionInput[],
 ): Promise<TeacherDetail> {
   try {
-    const resp = await axiosForBackend.patch(`/api/teachers/${id}/permissions`, {
+    const resp = await axiosForBackend.post(`/api/teachers/${id}/permissions`, {
       permissions,
     });
     return resp.data;

@@ -21,7 +21,7 @@ export async function reviewResource(
   comment?: string,
 ): Promise<void> {
   try {
-    await axiosForBackend.post(`/api/review/resources/${id}`, { action, comment });
+    await axiosForBackend.post(`/api/resources/${id}/review`, { action, comment });
   } catch (error) {
     handleApiError(error, 'reviewResource');
   }
@@ -29,7 +29,7 @@ export async function reviewResource(
 
 export async function getReviewHistory(id: string): Promise<ReviewRecord[]> {
   try {
-    const resp = await axiosForBackend.get(`/api/review/resources/${id}/history`);
+    const resp = await axiosForBackend.get(`/api/resources/${id}/review-history`);
     return resp.data;
   } catch (error) {
     return handleApiError(error, 'getReviewHistory');

@@ -61,6 +61,32 @@ export class ResourcesController {
     return this.resourcesService.listResources(query, teacher.id, ip);
   }
 
+  /**
+   * The caller's own resources.
+   *
+   * MUST BE DECLARED BEFORE `@Get(':id')`. The client has always called
+   * `/api/resources/mine`, but no such route existed, so the request fell through
+   * to `@Get(':id')` with id='mine'. That reached the database as a UUID
+   * comparison against a non-UUID literal and surfaced as a 500 (previously),
+   * i.e. the "我的资源" page could never load. Route order is load-bearing here:
+   * Express matches in declaration order, so moving this below `:id` silently
+   * re-breaks it.
+   *
+   * `getMyResources()` already existed in the service and had NO caller at all.
+   */
+  @Get('mine')
+  @RequirePermission('resource.view')
+  async getMyResources(
+    @CurrentTeacher() teacher: AuthUser,
+    @Query() query: ResourceListQueryDto,
+  ) {
+    return this.resourcesService.getMyResources(teacher.id, {
+      status: query.status,
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+  }
+
   @Get(':id')
   @RequirePermission('resource.view')
   async getResource(

@@ -98,15 +98,12 @@ export const ResourceCard: React.FC<ResourceCardProps> = ({
     if (downloading || !resource.fileName) return;
     setDownloading(true);
     try {
-      const result = await resourcesApi.downloadResource(resource.id);
-      if (result?.downloadUrl) {
-        const a = document.createElement('a');
-        a.href = result.downloadUrl;
-        a.download = resource.fileName ?? 'resource';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }
+      // Navigate rather than call through axios: the endpoint answers with a 302
+      // redirect to a short-lived signed URL, which the browser must follow itself.
+      // Previously this awaited axios, which followed the redirect, returned the
+      // file BYTES, left `result.downloadUrl` undefined and made the button do
+      // NOTHING — silently, with no error and no toast. See getDownloadUrl().
+      window.location.href = resourcesApi.getDownloadUrl(resource.id);
     } catch (err) {
       logger.error('Download failed', String(err));
     } finally {
