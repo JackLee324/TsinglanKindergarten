@@ -1,10 +1,40 @@
 QLS PLATFORM — FILE VALIDATION: INDEPENDENT ADVERSARIAL PROBE
-generated: 2026-09-24T02:21:21Z
+generated: 2026-09-24T02:26:19Z
 
 Method: tests the BUILT artifact (dist/server/common/files/file-validation.js),
 not the TypeScript source, because the source is not what ships.
 Checks were written by ATTACKING the module rather than by reading it.
 
+################################################################
+# A FALSE POSITIVE IN THIS PROBE, AND ITS CORRECTION
+################################################################
+
+The probe originally asserted isPathTraversalSafe('/etc/passwd') === false
+and reported 30/31 with that as the one defect. THAT ASSERTION WAS WRONG,
+and acting on it briefly introduced a real regression.
+
+Evidence that it was wrong - the real shape of stored paths in this platform:
+  server/database/seed-curriculum.sql / curriculum.data.ts contain
+    "filePath": "/curriculum-resources/prek-english-covers/1876907126277273.jpg"
+  i.e. platform bucket keys BEGIN with '/'. The value is passed to a
+  bucket-scoped storage client and resolved against the BUCKET ROOT; it never
+  touches a filesystem. An absolute-looking bucket key is therefore normal,
+  not dangerous. What must be rejected is traversal ('..', '.'), UNC, drive
+  letters, '~' and encoded traversal - all of which the module already did.
+
+The module's OWN test suite (tests/file-security.test.mjs, written
+independently by the module author) caught the regression: its case
+'accepts ordinary stored paths' expects '/uploads/2024/lesson.pdf' to be
+safe and started failing. The source change was reverted, and this probe's
+assertion was corrected to encode the real convention.
+
+This is recorded rather than quietly deleted: a probe that is itself
+ungrounded produces confident, wrong findings, and the only reason it was
+caught is that a second, independent test suite disagreed.
+
+################################################################
+# CORRECTED PROBE RESULT
+################################################################
 $ node scripts/probe-file-validation.mjs
 === A. filename sanitisation (path traversal / injection) ===
   PASS  ../../etc/passwd keeps no slash                               -> false
@@ -43,58 +73,30 @@ $ node scripts/probe-file-validation.mjs
 
 === E. stored-path traversal ===
   PASS  "../../etc/passwd" flagged                                    -> false
-  FAIL  "/etc/passwd" flagged                                         -> true   expected false
+  PASS  leading-slash bucket path allowed (real platform shape)       -> true
+  PASS  UNC-style "//host/share" rejected                             -> false
   PASS  "a/b/../c.pdf" flagged                                        -> false
   PASS  "uploads/2026/plan.pdf" allowed                               -> true
 
 === RESULT ===
-  pass=30 fail=1
-exit=1
+  pass=32 fail=0
+exit=0
 
-=== DEFECT FOUND (1 of 31) ===
-  isPathTraversalSafe('/etc/passwd') -> true   (expected false)
-
-  A POSIX-absolute path is accepted as safe. Cause: the function rejects
-  '\\\\' (UNC) and '//', a drive letter, '~', encoded traversal and '.'/'..'
-  segments, but never a SINGLE leading separator. For '/etc/passwd',
-  split(/[\\/]+/) yields ['', 'etc', 'passwd'] - no '.'/'..' segment and a
-  non-empty last segment - so it falls through to 'return true'.
-
-  The asymmetry is the giveaway that this is an oversight, not a deliberate
-  allowance: '//etc/passwd' IS rejected while '/etc/passwd' is not.
-
-  Impact: a stored file_path is meant to be bucket-relative. If a consumer
-  RESOLVES it instead of joining it - path.resolve('/bucket','/etc/passwd')
-  yields '/etc/passwd', unlike path.join - the guarantee is gone. The value
-  arrives from the client via the file-registration endpoint.
-
-  Reported to the module's author with a suggested one-line fix
-  (reject when the first split segment is empty). Re-run this probe after
-  the fix to confirm 31/31.
-
-=== VERIFIED CORRECT (the other 30) ===
+=== WHAT IS VERIFIED CORRECT (32 checks) ===
   filename sanitisation: traversal, backslash traversal, NUL, hidden files,
     '..' alone, empty, over-long WITH extension preserved, newline
   magic bytes: pdf, zip, png, jpeg, ole2
-  anti-spoofing: EXE-as-.pdf, HTML-as-.pdf, text-as-.pdf, ZIP-as-.pdf all
-    REJECTED - this is the check that matters most and it works
+  anti-spoofing: EXE/HTML/text/ZIP payloads declared as application/pdf are
+    ALL REJECTED - the check that matters most
   allowlist: .html/.svg/.js/.exe rejected; real PDF/JPEG accepted; zero-byte
     rejected; oversize rejected
-  stored path: '../../etc/passwd' and 'a/b/../c.pdf' flagged;
+  stored path: traversal and UNC rejected; real leading-slash bucket keys and
     'uploads/2026/plan.pdf' allowed
 
-################################################################
-# AFTER FIX — re-run of the same probe
-################################################################
-  PASS  "../../etc/passwd" flagged    -> false
-  PASS  "/etc/passwd" flagged         -> false     <-- was FAIL (true)
-  PASS  "a/b/../c.pdf" flagged        -> false
-  PASS  "uploads/2026/plan.pdf"       -> true
-
-  pass=31 fail=0     <-- was 30/1
-
-Fix applied in server/common/files/file-validation.ts: reject when the first
-split segment is empty, i.e. a leading '/' or '\\' makes the path absolute and
-its first segment empty. A stored file_path must be bucket-relative. Confirmed
-with `npm run build:server` + this probe, and `npm run type:check:server`
-reports 0 errors.
+=== NOTE: REMAINING IN-FLIGHT WORK (not this probe's finding) ===
+  The author's own unit suite still has ONE failing case against its own
+  implementation: 'classifies markup as html, never as text' expects
+  sniffMagicBytes(htmlMarkup) === 'html' but the implementation returns
+  'text'. That matters because 'text/plain' IS on the allowlist, so HTML
+  content declared as text/plain would currently pass the consistency check.
+  Left to the module author, who is actively working on it.

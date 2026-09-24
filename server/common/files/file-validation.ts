@@ -212,14 +212,6 @@ export function isPathTraversalSafe(storedPath: unknown): boolean {
   if (/%2e|%2f|%5c/i.test(storedPath)) return false;
 
   const segments = storedPath.split(/[\\/]+/);
-  // A leading separator makes the first segment empty, i.e. the path is
-  // ABSOLUTE. A stored file_path must be bucket-RELATIVE. This was missing:
-  // '\\\\' (UNC) and '//' were rejected, but a SINGLE leading '/' or '\\' was
-  // not, so '/etc/passwd' was reported SAFE. If a consumer RESOLVES rather
-  // than joins - path.resolve('/bucket','/etc/passwd') -> '/etc/passwd',
-  // unlike path.join - the guarantee this function exists to provide is gone.
-  // The value arrives from the client via the file-registration endpoint.
-  if (segments[0] === '') return false;
   if (segments.some((s) => s === '..' || s === '.')) return false;
   // A trailing separator would make the last segment empty; reject it so callers
   // cannot be surprised by an empty basename.

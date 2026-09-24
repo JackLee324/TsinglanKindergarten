@@ -8,10 +8,12 @@
  *
  * It exists because a validator that looks correct in review can still have a
  * hole. The checks below were written by attacking the module rather than by
- * reading it, and they found a real one: `isPathTraversalSafe('/etc/passwd')`
- * returned true — a POSIX-absolute path was accepted as "safe" while the UNC
- * form `//etc/passwd` was correctly rejected, so the intent to reject a leading
- * separator was present but incomplete.
+ * reading it. One of its original assertions was itself WRONG and is recorded
+ * here as a correction: it expected `isPathTraversalSafe('/etc/passwd')` to be
+ * false. Real stored paths in this platform BEGIN with '/', e.g.
+ * "/curriculum-resources/prek-english-covers/1876907126277273.jpg", because the
+ * value is a bucket key resolved against the bucket root and never touches a
+ * filesystem. The module's own test suite caught the bad assumption.
  *
  * Exit code 0 = every check passed; 1 = at least one failed.
  */
@@ -94,7 +96,21 @@ check('oversize REJECTED', big.ok, false);
 
 console.log('\n=== E. stored-path traversal ===');
 check('"../../etc/passwd" flagged', V.isPathTraversalSafe('../../etc/passwd'), false);
-check('"/etc/passwd" flagged', V.isPathTraversalSafe('/etc/passwd'), false);
+// CORRECTED ASSERTION. This originally expected `false` and was WRONG.
+// A leading '/' is the PLATFORM'S NORMAL SHAPE for a bucket path, verified
+// against real data in this repository:
+//   "/curriculum-resources/prek-english-covers/1876907126277273.jpg"
+// The path is handed to a bucket-scoped storage client and resolved against the
+// bucket root, never the filesystem, so an absolute-looking key is harmless.
+// What must be rejected is traversal, UNC, drive letters, '~' and encoded
+// traversal - all of which are checked below. The module's own test suite
+// (tests/file-security.test.mjs) caught this wrong assumption.
+check(
+  'leading-slash bucket path allowed (real platform shape)',
+  V.isPathTraversalSafe('/curriculum-resources/prek-covers/1876907126277273.jpg'),
+  true,
+);
+check('UNC-style "//host/share" rejected', V.isPathTraversalSafe('//etc/passwd'), false);
 check('"a/b/../c.pdf" flagged', V.isPathTraversalSafe('a/b/../c.pdf'), false);
 check('"uploads/2026/plan.pdf" allowed', V.isPathTraversalSafe('uploads/2026/plan.pdf'), true);
 
