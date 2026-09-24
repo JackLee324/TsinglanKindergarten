@@ -344,13 +344,59 @@ QLS_SOFT_DELETE_FORCE_DOWN=on node scripts/migrate.mjs down 0007
 ```
 运行时会在日志里打印 `migration GUC: qls.<name>=<value>`，便于事后核对。
 
+**实测验证（`evidence/migration-guard.txt`）** — 在一个"从零建库 + 灌入 902 行 + 且已应用 `0007`"的
+scratch 库上，故意把 1 条资源放进回收站，然后：
+
+| 步骤 | 命令 | 实测结果 |
+|---|---|---|
+| 3 | `node scripts/migrate.mjs down 0006`（**不带**开关） | **拒绝**：`✗ code: 42501`，`0007 down refused: 1 resource(s) are in the recycle bin. … or re-run with QLS_SOFT_DELETE_FORCE_DOWN=on if this is genuinely intended.`，`exit=1`，事务已回滚 |
+| 4 | `QLS_SOFT_DELETE_FORCE_DOWN=on node scripts/migrate.mjs down 0006` | **成功**：日志出现 `! migration GUC: qls.soft_delete_force_down=on`，随后 `✓ 0007_resource_soft_delete rolled back` → `✓ 0006_mfa rolled back`，`exit=0` |
+| 5 | 复查列 | `deleted_at` / `deleted_by` / `purge_after` **全部不存在** → down 正确反演了 up |
+
+[已证实：`evidence/migration-guard.txt`（由另一个 agent 执行并留存原始日志；我阅读了该日志，未复跑）]
+
+> **残余限制（脚本/日志自己声明，不要过度宣称）**：
+> 通用机制 `QLS_MIGRATION_GUC_<name>` 理论上对**任何**迁移都生效，
+> 但**目前只有 `0007` 的 down 真正读取 GUC**，
+> 而且**只通过 `QLS_SOFT_DELETE_FORCE_DOWN` 这个别名被演练过**。
+> `0003` / `0006` 的 `qls.rbac_force_down` / `qls.mfa_force_down` 尚未被端到端演练 ——
+> 它们**应该**可用（映射是通用的），但**未实测** [推断]。
+
 > ⚠️ **历史教训（值得记住）**：这些开关**曾经是假的**。
 > `0003`/`0006`/`0007` 的 down 文件里的提示语写着一个环境变量名，
 > 但当时**没有任何代码**把它映射到 SQL 实际读取的 GUC
-> → 运维照着提示重跑，仍然被拒。commit `18fd396`
-> （`fix(migrate): make the documented down-migration escape hatch real`）修复了它。
+> → 运维照着提示重跑，仍然被拒，**永远无法回滚**。commit `18fd396`
+> （`fix(migrate): make the documented down-migration escape hatch real`）修复了它：
+> `applyMigrationGucs()` 现在在 **`up` 与 `down` 两条路径**的事务内、
+> 迁移 SQL **之前**执行事务级 `set_config(..., true)`，值走**绑定参数**（环境变量无法注入 SQL）。
 > **教训：错误信息里提到的开关必须真的存在，否则比没有提示更糟。**
 > 写新迁移的 down 时，请同时确认开关已被 `applyMigrationGucs()` 覆盖（命名一致性）。
+
+### 6.4 `down` 在**已灌满数据**的库上的实测表现（决定 DR 策略）
+
+> 原始日志：`evidence/migration-rollback.txt`（我先建 scratch 库：前导 → `init.sql` → 迁移，
+> 再灌入完整 **902 行**数据集，然后逐个 `down`）。 [已证实：阅读该日志]
+
+| 迁移 | 结果 | 说明 |
+|---|---|---|
+| `down 0005` | ✅ **SUCCESS**（连带 `0006` 一起回滚了 2 个） | 结构可逆 |
+| `down 0004` | ✅ **SUCCESS** | 只删自己建的 `rls0004_%` policy，角色保留 |
+| `down 0003` | ✅ **SUCCESS** | RBAC 表当时为空，守卫放行 |
+| `down 0002` | ❌ **按设计拒绝**（`P0001`） | 原文：`0002 down refused: reverting the username backfill would leave 0 accounts able to log in (20 currently can). Doing so would lock every user out of the system. Create a super_admin account first, or restore from a backup.` |
+| `down 0001` | — | 未到达：`0002` 的守卫按设计终止了链条 |
+
+**数据存活检查（回滚后）**：`teachers 22` / `resources 347` / `review_records 18` /
+`audit_logs 386` / `sessions 128` 全部**完好**；`teacher_mfa` → **表不存在**，
+这是**正确的**（`0006` 的 down 就是删这张表）。
+
+**结论（必须写进 DR 策略，不要过度解读）**：
+
+1. **改结构/改授权的迁移（`0003`/`0004`/`0005`）确实可逆**，在满数据的库上回滚不丢业务数据。
+2. **`0002` 有意不可原地回滚** —— 这是**守卫，不是缺陷**：反演它会剥掉所有账号的登录凭据、
+   让 20 个用户全部进不来。脚本**不应该**悄悄替人做这个决定。
+3. **因此：活库的灾难恢复必须用 `pg_restore`，不是 `down` 到零。**
+   `down` 是"改回结构"的手段，不是"恢复数据"的手段。
+   见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §5.4。
 
 ---
 
@@ -432,7 +478,17 @@ DATABASE_URL="…" node scripts/migrate.mjs up       # 再装回去
 # 7) 应用级验证
 npm run type:check:server
 NODE_ENV=production npm run start   # + GET /api/health、/api/health/ready
+
+# 8) 若迁移触碰了 teachers / 认证相关结构，再跑一次"禁止假启动"回归
+#    （它会用 db-bootstrap 建 scratch 库，因此**也会顺带验证 §2.3 的建库路径**）
+ADMIN_DB="postgresql://user:pw@host:5432/postgres" bash scripts/verify-seed-failure.sh
 ```
+
+> **为什么第 8 步与本文件相关**：`0001` 补的正是 `teachers` 的 6 个认证列。
+> 曾发生过的事故是：缺列 → seed 全部失败 → **失败被吞掉、进程照常报"启动成功"、
+> 可用账号为 0**。该行为已修复（总失败时抛错中止启动），
+> `scripts/verify-seed-failure.sh` 就是它的回归测试（实测 **5/5 PASS**）。
+> 详见 [`RUNBOOK.md`](RUNBOOK.md) §5.3.3。
 
 ### 8.1 UP 文件的标准骨架
 

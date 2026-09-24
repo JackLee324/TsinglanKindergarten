@@ -284,32 +284,54 @@ migration `0003` 装了三个触发器： [已证实，`0003_rbac_database_layer
 > （`authorization.service.ts:59-66`），否则合法操作也会以 `42501` 失败。
 > 这一点在 `tests/rbac-database.test.mjs` 中被实证并回归。 [已证实]
 
-### 5.5 路由覆盖现状（如实记录，含未加权限的路由）
+### 5.5 路由覆盖现状（含**仅认证**的路由 —— 它们**不是**未受保护）
 
-| Controller | 权限声明 |
+**独立复核的计数**（我的方法：`grep -cE "^\s*@(Get|Post|Patch|Put|Delete)\(" server/modules/*/*.controller.ts`，
+排除 `hello.controller.ts` —— 该文件**整体被注释掉**，是模板残留）：
+
+| 指标 | 数量 |
 |---|---|
-| `auth` | 登录/verfiy `@Public()`；`me/permissions`、`mfa/*`、`me`、`logout` 为 `@MfaExempt()`；其余仅需登录态 |
-| `teachers` | `account.view` / `account.create` / `account.update` / `account.disable` / `permission.grant` —— 全覆盖 |
-| `resources` | `resource.view` / `create` / `update` / `delete` / `submit_review` / `download` —— 全覆盖 |
-| `review` | `review.view`（三条路由均为此） |
-| `audit` | `audit.view` |
-| **`curriculum`** | **无 `@RequirePermission`** → 任何已登录账号可读结构/资料夹/角色 |
-| **`dashboard`** | **无 `@RequirePermission`** → 任何已登录账号可读统计/最近资源 |
-| `health` | `@Public()` |
+| 活跃 controller | **9** |
+| 路由处理器（decorator 计） | **42** |
+| 声明了显式权限（`@RequirePermission` / `@RequireSuperAdmin`） | **23** |
+| **仅要求认证**（无权限声明） | **19** |
 
-证据：各 controller 中的装饰器（`grep -n "@RequirePermission" server/modules/*/*.controller.ts`）。 [已证实]
+[已证实，本次 grep 逐文件计数；末行的 `view.controller.ts` 是 SPA 兜底
+`@Get(['/', '*'])`，一个 decorator 覆盖两个路径]
 
-两条需要明确指出的问题：
+> ⚠️ **与 `evidence/authorization-coverage.txt` 的计数差异（如实记录）**：
+> 那份审计报告写的是"40 路由 / 21 条显式权限 / 19 条仅认证"。
+> 它的 **19** 与我的 **19** 一致，但 40/21 与我的 42/23 不同 ——
+> 我复核该扫描的原始输出后发现它把 `resources.controller.ts` 的 `GET /:id`
+> 重复计了 3 次（第 67/69/90 行，look-ahead 窗口造成），同时漏了几条。
+> **结论方向一致（19 条仅认证），数字以本表为准。**
 
-1. **`POST /api/resources/:id/review`（审核通过/退回）声明的是 `review.view`**，
-   而不是 `review.approve` / `review.reject`
-   （`server/modules/review/review.controller.ts:40-41`）。
-   该文件注释自称"approve 与 reject 现在是分开的权限"，但路由实际只要求 `review.view`，
-   而 `review.view` 给了 `curriculum_director`、`principal`、`super_admin` 之外的哪些角色
-   取决于 `shared/rbac.ts` 的默认值 —— **代码与注释不一致，需要按 `shared/rbac.ts` 复核并修正**。
-   [已证实：装饰器与注释；⚠️ 结论性影响见 §12 G-8]
-2. `curriculum` / `dashboard` 无权限声明，等于"登录即可读"。目前它们是只读目录/统计接口，
-   风险有限，但按 `permission.decorator.ts:18-19` 的要求属于应当补齐的项。
+**这 19 条为什么是"仅认证"而不是"未加保护"**：
+`AuthGuard` 与 `PermissionGuard` **都是** 全局 `APP_GUARD`
+（`server/modules/auth/auth.module.ts`，按该顺序注册），
+**除显式 `@Public()` 外每一条路由都要求有效会话**。
+[已证实：`auth.module.ts` 源码 + 实测——未带会话访问 `/api/curriculum/structure` 返回 401]
+
+| 分组 | 路由 | 为什么"仅认证"是对的 |
+|---|---|---|
+| 认证自助（13 条） | `POST login`、`mfa/verify`、`mfa/enroll`、`mfa/confirm`、`mfa/disable`、`mfa/recovery-codes`、`change-password`、`reset-password`、`logout`、`GET config`、`me`、`me/permissions`、`mfa/status` | 给它们加权限是**错的**：任何账号（哪怕一条权限都没有）都必须能改自己的口令、绑自己的 MFA、登出。`login` / `mfa/verify` 必须是 `@Public()`（调用方此刻没有会话） |
+| 目录只读（3 条） | `curriculum/structure`、`folders`、`roles` | 静态目录数据，不含用户数据 |
+| 仪表盘（2 条） | `dashboard/stats`、`recent` | 服务方法接收的是**调用者自己的** `teacher.id`，**无法**返回他人数据 |
+| SPA 兜底（1 条） | `view.controller.ts` | 渲染前端外壳，本身不含数据 |
+
+**仍然需要指出的一条真实不一致（§12 G-8）**：
+
+**`POST /api/resources/:id/review`（审核通过/退回）声明的是 `review.view`**，
+而不是 `review.approve` / `review.reject`
+（`server/modules/review/review.controller.ts:40-41`，本次再次确认装饰器未变）。
+该文件注释自称"approve 与 reject 现在是分开的权限"，但路由实际只要求 `review.view`。
+**这只影响"谁能审核"，是一个权限粒度问题，不是未受保护**（仍要求认证 + `review.view`），
+但**代码与自身注释不一致**，应按 `shared/rbac.ts` 的默认值复核后修正。
+
+> **审计报告的对应结论（供对照）**：`evidence/authorization-coverage.txt` 的
+> `A-1 [LOW, defence in depth]` —— dashboard / curriculum 依赖"仅认证"，
+> **不存在可利用漏洞**（服务按调用者作用域），但**建议**显式声明权限以便审计与防未来重构走偏。
+> 另一条 `A-2 [INFO]`：`server/modules/hello/` 是死代码，静态扫描会报出幻影路由，建议删除。
 
 ---
 
@@ -516,29 +538,50 @@ GRANT service_role_   TO <app_db_role>;
 >    [已证实：代码事实] [推断：两者在平台中间件改写 `req.requestId` 后可能不一致 ——
 >    `PRODUCTION_READINESS.md` §Q-5 已实测观察到不一致] 见 §12 G-9。
 
-### 10.2 安全响应头 —— **代码已写，但运行中的实例尚未生效**
+### 10.2 安全响应头 —— **已实现并在线实测通过**
 
-工作区中新增了 `server/common/http/security-headers.middleware.ts`，并在
-`server/main.ts` 中于 `configureApp()` 之后 `app.use(securityHeaders)`。
-它设置：`X-Content-Type-Options`、`X-Frame-Options: DENY`、`Referrer-Policy`、
-`Cross-Origin-Opener-Policy`、`Cross-Origin-Resource-Policy`、`Permissions-Policy`、
-条件性 `Strict-Transport-Security`（仅当 `HTTPS_ENABLED` 或 `TRUST_PROXY` 表明前面有 TLS）、
-以及**默认 report-only** 的 `Content-Security-Policy`（`CSP_MODE=enforce` 才拦截），
-并移除 `X-Powered-By`。 [已证实，源码阅读]
+实现位置：`server/common/http/security-headers.middleware.ts`，
+在 `server/main.ts` 中于 `configureApp()` **之后** `app.use(securityHeaders)`
+（必须在之后：`configureApp()` 自己会 `app.set('trust proxy', true)`，
+且 `app.use` 必须在 `app.listen()` 之前，否则 Nest 的路由已挂载完毕）。
 
-**但实测运行中的实例没有任何这些头**：
-```
+**本次会话在线实测（重新构建并重启之后的实例）**：
+
+```console
 $ curl -sI http://127.0.0.1:3200/api/health
 HTTP/1.1 200 OK
-X-Powered-By: Express
-x-request-id: 9df81526-…
-（无 X-Content-Type-Options / X-Frame-Options / Referrer-Policy / CSP / HSTS）
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: strict-origin-when-cross-origin
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Resource-Policy: same-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self';
+  style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:;
+  connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';
+  frame-ancestors 'none'
+x-request-id: 20f56862-…
+x-log-trace-id: f65dc551-…
+                        ← 不再有 X-Powered-By
 ```
-[已证实，2026-09-24] —— 说明该改动**尚未进入正在运行的构建/进程**。
-必须"重新 build + 重启 + 复验响应头"之后，才能在验收清单上勾选。
-在此之前，`PRODUCTION_READINESS.md` §G-9「无安全响应头」的状态**仍未改变**。
+[已证实，2026-09-24 本次会话实测]
 
-平台另外注入了 `X-Robots-Tag: noindex, nofollow`（实测响应头中可见）。
+| 项 | 行为 |
+|---|---|
+| **CSP** | **默认 report-only**（`CSP_MODE` 未设或为 `report-only`）；`enforce` 才真正拦截；`off`/`false`/`0` 不发该头。默认不 enforce 是**刻意的**：未经真实构建产物验证的强制 CSP 会导致整站白屏 |
+| **HSTS** | 仅当 `HTTPS_ENABLED` 或 `TRUST_PROXY` 表明前面有 TLS 时发出（`max-age=15552000; includeSubDomains`，**不含 `preload`**）；纯 HTTP 下刻意不发 |
+| `X-Frame-Options: DENY` + `frame-ancestors 'none'` | ⚠️ 与"平台 CSRF cookie 带 `Partitioned`（iframe 场景）"存在**设计冲突**，上线前须确认是否需被 iframe 嵌入（[`DEPLOYMENT_PRODUCTION.md`](DEPLOYMENT_PRODUCTION.md) §9.2） |
+| 验证套件 | `node scripts/verify-security-headers.mjs`；**整改前**对旧构建的评分是 **`pass=5 fail=15`**（`evidence/security-headers.txt`）—— 这个失败基线证明该套件不是空转；整改后同一构建 **20/20**（`evidence/gate-run-final.txt`） |
+
+**整改前的真实状态（保留作为对照，说明这不是"本来就有"）**：应用**一个安全头都没有**，
+并且用 `X-Powered-By: Express` 主动暴露框架（`evidence/security-headers.txt` BEFORE 节）。
+
+**教训**：`dist/` 陈旧会造成"改了代码但线上没有"——
+`dist/server/main.js` 的 mtime 早于 `server/main.ts`、且 `dist/server/common/http/` 里只有 `client-ip.js`。
+**每次改动中间件都必须重新 `npm run build` + 重启 + `curl -sI` 复验。**
+
+平台另外注入了 `X-Robots-Tag: noindex, nofollow` 与 `x-log-trace-id`
+（后者与平台的 request-id 中间件并存，是 §12 G-9 那条 header/body 不一致的可能成因）。
 
 ---
 
@@ -620,7 +663,7 @@ x-request-id: 9df81526-…
 | G-9 | `requestId` 的 header/body 一致性未解决；5xx 分支内变量遮蔽 | §10.1-2；`PRODUCTION_READINESS.md` §Q-5 | 低（可追溯性） |
 | G-10 | **日志脱敏白名单未实现**（password / cookie / sessionId / MFA secret / recovery code / DSN / 存储密钥） | `PRODUCTION_READINESS.md` §J-10 第 42 项 | 中 |
 | G-11 | **CORS 未收敛**：未配置到 `PUBLIC_APP_URL`，也未禁止 `*` + credentials | 同上 §J-10 第 43 项 | 中（取决于平台默认） |
-| G-12 | **安全响应头在运行实例中尚未生效**（代码已写、未构建未复验）；CSP 默认 report-only | §10.2 | 中 |
+| ~~G-12~~ | ~~安全响应头在运行实例中尚未生效~~ → **已闭环**：重新构建后实测全部响应头在线生效（含 CSP report-only、HSTS 条件发送、`X-Powered-By` 已移除），套件 20/20 通过。**CSP 仍为默认 report-only**（这是刻意选择，不是缺口） | §10.2；`evidence/security-headers.txt`、`evidence/gate-run-final.txt` | 已解决（CSP enforce 属待启用项，见 §10.2） |
 | G-13 | **无多设备会话管理界面**：无管理员查询会话、无强制下线接口（`session.view`/`session.revoke` 权限已定义但无路由） | `PRODUCTION_READINESS.md` §B6、RBAC.md §4 | 中 |
 | G-14 | **超级管理员账号的 MFA 恢复码丢失后无自助路径**，只能由另一名 super_admin 重置（而系统最多 2 名） | `RBAC.md` §3.1、`mfa.service.ts:267-274` | 高（可用性） |
 | G-15 | **20 个生产账号哈希硬编码在源码** | §11.3 | 高 |
@@ -683,13 +726,19 @@ x-request-id: 9df81526-…
   （[无法验证]，本机无该环境）。
 - **未验证妙搭平台的 dataloom 存储、vefaas 发布、`{{...}}` 占位符替换**
   （[无法验证]，无平台凭据）。
-- **未做备份/恢复演练**（见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md)）。
+- **未对真实/生产数据库做备份或恢复演练**（见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md)）。
+  已做的是一次**本机逻辑往返演练**（12 表 / 902 行 / 行数与校验和一致），
+  它**不涉及** `pg_dump`/`pg_restore`，也**不覆盖**生产库。 [已证实：`evidence/backup-restore-rehearsal.txt`]
+- **未复跑**由另一个 agent 执行的套件与演练（`verify-all.sh`、`verify-seed-failure.sh`、
+  `backup-rehearse.mjs`、回滚演练、安全响应头套件）——
+  我**阅读了它们的原始日志**（`evidence/`）并据此引用，标注为"已证实：阅读日志"。
 
 ### 14.3 需要复验的动态项
 
-工作区存在未提交改动（`server/main.ts` 已修改，`server/common/http/security-headers.middleware.ts` 为新增）。
-安全响应头必须**重新构建 + 重启 + curl 复验**后才能从 §12 G-12 移除。
-若在此之后代码继续变化，请以新代码为准并更新本文档。
+- 安全响应头**已在本会话实测通过**（§10.2），G-12 已闭环；
+  但每次改动中间件仍需**重新构建 + 重启 + `curl -sI` 复验**。
+- 若在此之后代码继续变化，请以新代码为准并更新本文档；
+  发布口径以 [`PRODUCTION_RELEASE_REPORT.md`](PRODUCTION_RELEASE_REPORT.md) 与 `evidence/` 为准。
 
 ---
 

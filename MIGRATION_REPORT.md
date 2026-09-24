@@ -380,12 +380,22 @@ SQL 实际读取的 GUC → 按提示重跑仍然被拒。已在 commit `18fd396
 
 ### 6.1 应用侧账号 seed
 
-- `AuthService.onModuleInit()` 调用 `seedTeachers()`（`auth.service.ts:85-94`）。
+- `AuthService.onModuleInit()` 调用 `seedTeachers()`。
 - 数据源：`server/modules/auth/seed-teachers.ts` 中**硬编码的 20 个账号 + scrypt 口令哈希**。
 - 幂等策略：按 `lower(username)` 查存在性；存在则跳过；
   存在但**没有 password_hash** 时**回填哈希**（而不是新建）。
-- **单个账号失败会被 `try/catch` 吞掉并只打 error 日志**（`auth.service.ts:223-229`），
-  应用照常报告启动成功。这正是 §E-5/§O-3 记录的"零账号却显示启动成功"的成因。 [已证实]
+- **⚠️ 行为已变更（重要，不要沿用旧结论）**：
+  **单个账号的失败在过去会被 `try/catch` 吞掉、应用照常报告"启动成功"**
+  —— 这正是 `PRODUCTION_READINESS.md` §E-5/§O-3 记录的"零账号却显示启动成功"的成因。
+  **该行为现已修复**（`auth.service.ts` 的 `onModuleInit`）：`seedTeachers()` 现在返回
+  `{ created, skipped, failed, failedUsernames }`，并按三种结果分别处理：
+  全部 skipped → 安静继续；**部分**失败 → 打 ERROR 但不中止；
+  **完全**失败（`created=0 && skipped=0 && failed>0`）→ **抛错，Nest 中止启动**。
+  日志行也随之变为 `Seed teachers: created=N, skipped=M, failed=F`。
+  [已证实：源码阅读 + `evidence/no-fake-startup.txt`]
+  回归测试 `scripts/verify-seed-failure.sh` 实测 **5/5 PASS**
+  （用 `CHECK (false) NOT VALID` 强制每次 `teachers` INSERT 失败，
+  并断言日志含刻意的拒绝信息 —— 而不是只看退出码）。[已证实：该日志；我未复跑]
 - 本库 `teachers` 实测 **22** 行、全部 `active`，角色分布：
   `k_assistant 4, prek_assistant 4, pe_specialist 4, prek_head 3, k_head 3, principal 2,
   curriculum_director 1, super_admin 1`（另含 `system_initializer`）。

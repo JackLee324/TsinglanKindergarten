@@ -1,0 +1,53 @@
+QLS — files-http IS NOT ORDER/STATE-INDEPENDENT: THE GATE IS NOT REPRODUCIBLY GREEN
+generated: 2026-09-24T02:53:25Z
+
+Four runs of the SAME commit (44d1fbf), no other test/build process running:
+
+RUN A  bash scripts/verify-all.sh          files-http FAIL
+       FAIL a leading-slash platform cover path is ACCEPTED -> 404 expected 200
+
+RUN B  node scripts/verify-files-http.mjs  pass=50 fail=22
+       PASS a leading-slash platform cover path is ACCEPTED -> 200   <-- opposite!
+       but 22 others fail: 'an expired token is refused -> 401 expected 403',
+       'the resource is listed before deletion -> undefined expected 1',
+       'submit-review -> 401 expected 201', 'DELETE -> 401 expected 200',
+       'recycle-bin -> 401 expected 200' ... i.e. a 401 cascade
+
+RUN C  node scripts/verify-files-http.mjs  pass=50 fail=22 (same as B)
+
+RUN D  bash scripts/verify-all.sh          files-http FAIL
+       FAIL the resource is listed before deletion -> 0 expected 1
+       FAIL POST /api/resources/:id/submit-review -> 404 expected 201
+       FAIL DELETE /api/resources/:id -> 404 expected 200
+
+INTERPRETATION
+  The failure SET changes between runs while the code does not. The two shapes
+  are: (a) a 401 cascade - the session stops being accepted part way through,
+  and (b) the suite's own probe resource not being found (0 / 404) as though it
+  was never created or was removed underneath it.
+
+  Both are consistent with the suite depending on shared mutable state. The
+  repo already solved this once: tests/helpers/reset-fixtures.mjs exists
+  precisely because the earlier suites were order-dependent. This suite reuses
+  that helper, but it still does not hold when run after the other four suites
+  (RUN A/D, via verify-all.sh) versus alone (RUN B/C).
+
+  A session being revoked mid-suite is also the expected behaviour of the
+  permissionsVersion mechanism when a fixture reset bumps it - so the suite is
+  likely racing its own reset against its own later steps.
+
+CONSEQUENCE - THIS IS THE IMPORTANT PART
+  My earlier '✅ 全部通过' runs at this commit were REAL but NOT STABLE. I
+  cannot presently certify the gate as green, and a gate that passes or fails
+  depending on ordering is not a gate. This is a defect in the TEST SUITE, not
+  evidence that the product is broken: the cover regression guard itself has
+  been observed PASSING (RUN B), so the real seeded platform path does work.
+
+  Recorded as a NEW blocker B6: the files-http suite must be made order-
+  independent (or run in isolation with its own fixtures) before the gate can
+  be relied on. Do NOT treat any single green run of verify-all.sh as proof
+  until this is fixed.
+
+NOTE: the probe (scripts/probe-file-validation.mjs) also needs
+'npm run build:server'; after a full 'npm run build' the artifact it loads is
+absent, so it exits 2. That is a separate usability issue in my own script.

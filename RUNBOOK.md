@@ -298,8 +298,9 @@ node scripts/verify-authz-http.mjs        # 需服务 + AUTHZ_TEST_DB
 node scripts/verify-hardening.mjs         # 需服务 + AUTHZ_TEST_DB
 node scripts/verify-mfa.mjs               # 需服务 + AUTHZ_TEST_DB（BASE 可用 MFA_BASE 覆盖）
 node scripts/verify-security-headers.mjs  # 需服务；验证 §5.7 的响应头
-node scripts/probe-file-validation.mjs    # 文件校验探针（写作期间新增，未执行过）
-node scripts/verify-seed-failure.sh       # seed 失败行为的验证（写作期间新增，未执行过）
+node scripts/verify-files-http.mjs        # 需服务 + AUTHZ_TEST_DB；文件下载/令牌链路
+node scripts/probe-file-validation.mjs    # 文件校验探针（未执行过）
+ADMIN_DB="postgresql://…/postgres" bash scripts/verify-seed-failure.sh   # §5.3.3，需先 npm run build
 npm run predeploy                         # bash ./scripts/predeploy-check.sh
 npm run lint                              # eslint + stylelint + type:check
 ```
@@ -311,6 +312,25 @@ npm run lint                              # eslint + stylelint + type:check
 > ⚠️ `npm run lint` 依赖 `eslint` / `stylelint`。
 > `PRODUCTION_READINESS.md` §G-5 记录过"`lint`/`precommit` 指向不存在文件"的历史问题；
 > 本次未运行 `npm run lint` 验证。 [无法验证]
+
+### 4.4 三个运维脚本（`verify-all.sh` 不调用，但运维一定会用到）
+
+| 脚本 | 何时用 | 关键点 |
+|---|---|---|
+| `scripts/db-bootstrap.mjs` | **搭全新库**；**为恢复演练准备验证目标库** | 唯一可行的建库顺序：前导（类型+角色，取自 `0001`）→ `init.sql` → `migrate up`。**库里已有 `teachers`/`resources` 就拒绝运行**（除非 `--force`），**从不 DROP**。**不是**重建生产库/DR 的手段。见 [`MIGRATION.md`](MIGRATION.md) §2.3 |
+| `scripts/backup-rehearse.mjs` | 想验证"**数据搬出去还能搬回来**"时 | 逻辑往返：逐表导出 → 用 `db-bootstrap` 从零建 scratch → 按 **FK 拓扑序**单事务导入 → 逐表比**行数 + SHA-256 内容校验和**。**不涉及 `pg_dump`/`pg_restore`**，**不覆盖生产库**。见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §7.4 |
+| `scripts/verify-seed-failure.sh` | **发布前**，以及改动 `teachers` 结构/seed 逻辑之后 | 断言"seed 全失败时**拒绝启动**"，且断言的是**日志里的拒绝信息**而不是退出码。见 §5.3.3 |
+
+```bash
+# 三个脚本的最小用法
+node scripts/db-bootstrap.mjs --url "$NEW_DB_URL"
+node scripts/backup-rehearse.mjs --source "$SRC" --scratch "$SCRATCH" --out backups/rehearsal.ndjson
+ADMIN_DB="postgresql://…/postgres" bash scripts/verify-seed-failure.sh
+```
+> `backup-rehearse.mjs` 的安全护栏：scratch 库名必须含 `scratch|rehearsal|restore_test|tmp|temp`
+> 且必须与 source 不同库，否则 **exit 2**（它会对该库执行 `DROP DATABASE`）。
+> 演练结束时默认**删掉** scratch 库，`--keep-scratch` 可保留以便排查。
+> ⚠️ `source` 与 `scratch` 必须处于**同一迁移版本**，否则会（正确地）报 FAIL。
 
 ---
 
@@ -429,18 +449,51 @@ WHERE lower(username) = lower('<username>');
    阈值 `LOGIN_IP_RATE_LIMIT_MAX`（默认 30）/ `LOGIN_IP_RATE_LIMIT_WINDOW_SECONDS`（默认 60）。
    ⚠️ 计数在**进程内**，重启进程即清空；多实例时每副本独立计数。
 
-#### 5.3.3 `Seed teachers: created=0, skipped=0` 且伴随 `Failed to seed teacher`
+#### 5.3.3 种子失败：**现在会拒绝启动**（历史"假启动"已修复）
 
-**这是严重故障**：`teachers` 表缺列（历史上是缺 `password_hash` 等 6 列）时，
-20 条 insert 全部 `42703` 失败，而 `auth.service.ts:223-229` **逐个 catch 掉**，
-进程仍然打印"启动成功"→ **零可用账号**。
-证据：`PRODUCTION_READINESS.md` §E-5/§O-3（实测日志）。 [已证实]
-
-```bash
-# 确认表结构是否齐全
-DATABASE_URL="…" node scripts/migrate.mjs status    # 0001 是否 applied？
+**先看日志行**（格式已更新，多了 `failed=`）：
 ```
-处置：应用 migration `0001`（它补齐 6 个列并带末尾断言），然后重启进程。
+Seed teachers: created=N, skipped=M, failed=F
+```
+
+| 日志 | 含义 | 处置 |
+|---|---|---|
+| `created=20, skipped=0, failed=0` | 正常 | — |
+| `created=0, skipped=20, failed=0` | 账号已存在，无需处理 | — |
+| `Partial teacher seeding failure: …`（ERROR） | **部分**失败 | 系统可用，但列出的账号缺失；按提示修好结构后重启补齐 |
+| **`Teacher seeding failed completely …`** | **完全**失败 → **进程已拒绝启动**（`abortOnError`） | **这是正确行为**，不是新的故障。见下 |
+
+**"完全失败导致拒绝启动"是设计意图。** 历史事故是：`teachers` 表缺列（缺
+`password_hash` 等 6 列）→ 20 条 insert 全部 `42703` 失败 → **失败被逐个 catch 吞掉** →
+进程打印"启动成功"、**可用账号为 0**、运维看到一个健康但无法登录的平台
+（`PRODUCTION_READINESS.md` §E-5/§O-3 的实测日志）。
+现在 `AuthService.onModuleInit()` 在
+`created=0 && skipped=0 && failed>0` 时**抛错中止启动**。 [已证实：源码 + `evidence/no-fake-startup.txt`]
+
+**处置流程**
+```bash
+# 1) 看结构是否齐全（0001 补齐 teachers 的 6 个认证列并带末尾断言）
+DATABASE_URL="…" node scripts/migrate.mjs status     # 0001 是否 applied？有无 pending？
+DATABASE_URL="…" node scripts/migrate.mjs up         # 若是新库/缺列，先应用迁移
+# 若是全新的非平台库，用建库脚本（它按唯一可行顺序跑：前导 → init.sql → 迁移）
+node scripts/db-bootstrap.mjs --url "$DATABASE_URL"
+
+# 2) 重启进程，确认日志出现 created=20
+```
+
+**若要在发布前主动验证这条规则仍然成立**（推荐加进发布检查）：
+```bash
+npm run build
+ADMIN_DB="postgresql://user:pw@127.0.0.1:55432/postgres" bash scripts/verify-seed-failure.sh
+# 期望：pass=5 fail=0
+```
+它用 `CHECK (false) NOT VALID` 让**每一次** `teachers` INSERT 都失败
+（`NOT VALID` 不校验既有行、但约束新插入 → schema 不变、启动路径正常，
+从而**隔离出 seed 行为**，而不是被无关的启动错误带偏），然后断言两件事：
+① 应用**没有**继续存活；② **日志里出现那句刻意的拒绝信息** ——
+**而不是仅仅"退出码非 0"**（任何原因的崩溃都能满足后者，那会让测试为了错误的原因通过）。
+它内部会调用 `db-bootstrap.mjs` 建 scratch 库 `qls_seedfail_probe` 并在结束时清理。
+[已证实：脚本全文 + `evidence/no-fake-startup.txt`（5/5 PASS，我未复跑）]
 
 ### 5.4 MFA 相关问题
 
@@ -613,18 +666,33 @@ DELETE FROM sessions WHERE revoked = true AND revoked_at < now() - interval '90 
    带内容哈希的文件可长缓存，但 `index.html` **不要**长缓存。
 4. `curl -sI "$BASE/" | head` 应见 `Content-Type: text/html`。
 
-### 5.7 安全响应头缺失（当前已知状态，不要误判为故障）
+### 5.7 安全响应头：现在应当**全部存在**（缺失=构建陈旧）
 
 ```bash
 curl -sI "$BASE/api/health" | grep -iE 'x-content-type|x-frame|referrer-policy|content-security|strict-transport|x-powered-by'
+# 或者直接用套件判定（它会读本进程的 TRUST_PROXY/HTTPS_ENABLED 来推断 HSTS 期望值，
+# 因此请在同一 shell / 同一环境里启动服务与套件）
+node scripts/verify-security-headers.mjs        # 期望全部 PASS
 ```
-- **若一条都没有**：说明运行的是**旧产物**。中间件代码已在工作区
-  （`server/common/http/security-headers.middleware.ts` + `main.ts` 接入），
-  但 `dist/` 尚未重建。本次实测确认了这一点：
-  `dist/server/common/http/` 只有 `client-ip.js`，`dist/server/main.js` 不含
-  `securityHeaders`，且 `dist/server/main.js` 的 mtime 早于 `server/main.ts`。 [已证实]
-  → 处置：`npm run build` 后重启，再复验。
-- 仍然看到 `X-Powered-By: Express` → 同上（新中间件会移除它）。
+
+**期望看到（本会话实测原样）**：`X-Content-Type-Options: nosniff`、
+`X-Frame-Options: DENY`、`Referrer-Policy: strict-origin-when-cross-origin`、
+`Cross-Origin-Opener-Policy`、`Cross-Origin-Resource-Policy`、`Permissions-Policy`、
+**`Content-Security-Policy-Report-Only`**（默认 report-only）；
+**不应**再看到 `X-Powered-By`。
+
+| 症状 | 原因 | 处置 |
+|---|---|---|
+| 一条都没有 | 运行的是**旧产物**（中间件没编进去） | `npm run build` → 重启 → 复验。**判据**：`grep -c securityHeaders dist/server/main.js` 应为非 0；`ls dist/server/common/http/` 应包含 `security-headers.middleware.js` |
+| 仍有 `X-Powered-By` | 同上（中间件会移除它） | 同上 |
+| 缺 `Strict-Transport-Security` | **正常**：HSTS 只在 `HTTPS_ENABLED`/`TRUST_PROXY` 表明前面有 TLS 时才发 | 反代后设 `HTTPS_ENABLED=true` 或正确的 `TRUST_PROXY`，重启 |
+| 只有 `Content-Security-Policy-Report-Only` 而没有强制的 CSP | **正常**：默认即 report-only（`CSP_MODE=enforce` 才拦截） | 想启用：先观察 violation 上报，再设 `CSP_MODE=enforce` |
+| 服务返回 403 且页面白屏（启用 enforce 之后） | 强制 CSP 与真实产物不兼容 | 回退 `CSP_MODE=report-only` 或 `off` —— **强制 CSP 配错会导致整站白屏**，所以默认不启用 |
+
+> 历史对照：整改前应用**一个安全头都没有**且主动暴露 `X-Powered-By: Express`，
+> 套件评分 `pass=5 fail=15`（`evidence/security-headers.txt`）；
+> 整改后同一构建 **20/20**（`evidence/gate-run-final.txt`）。
+> **这个"失败基线"是套件不空转的证据**，不要删掉那段对照记录。
 
 ### 5.8 上传/下载"点了没反应"
 

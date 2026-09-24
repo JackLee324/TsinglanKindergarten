@@ -241,13 +241,49 @@ GRANT service_role_   TO <app_role>;
 
 | 场景 | 做法 |
 |---|---|
-| **全新库（非平台）** | 用 `node scripts/db-bootstrap.mjs`（写作期间新增）。它按唯一可行的顺序执行：**幂等前导（`user_profile` 类型 + 三个 DB 角色，源码取自 `0001` 本身）→ `init.sql` → `migrate up`**。原因是 `init.sql` 需要类型与角色、而 `0001` 需要表，**两者互相依赖**，谁都不能单独先跑。 [已证实：文件头] |
+| **全新库（非平台）** | 用 `node scripts/db-bootstrap.mjs`（见下）。它按唯一可行的顺序执行：**幂等前导（`user_profile` 类型 + 三个 DB 角色，源码取自 `0001` 本身）→ `init.sql` → `migrate up`**。原因是 `init.sql` 需要类型与角色、而 `0001` 需要表，**两者互相依赖**，谁都不能单独先跑。 [已证实：脚本全文] |
 | **平台库**（妙搭已提供类型与角色） | 直接 `node scripts/migrate.mjs up`（见 §5）——平台已把前导做好，**不需要** `db-bootstrap` |
 | **已存在的库**（表已由平台/历史 `init.sql` 建好，但无迁移记录） | 先 `snapshot` 留底（§6.2），再 `node scripts/migrate.mjs baseline <version>` 把已有 migration 标记为已应用**而不执行**，然后 `up` 应用剩余项 |
 
 > `baseline` 的使用前提：**该库已经具备被 baseline 的那几个 migration 的效果**。
 > 用错会把"没建的表"标记为已建。执行前务必用 [`MIGRATION.md`](MIGRATION.md) §6.2 的核对清单人工确认。
 > `migrate.mjs` 会打印醒目警告，但**不会替你判断**。 [已证实]
+
+#### 4.3.1 全新环境：`db-bootstrap.mjs` 的确切行为
+
+**为什么不能只按直觉操作**（两种顺序都被**实测**证伪）：
+
+| 顺序 | 实测失败 |
+|---|---|
+| `init.sql` → `migrate up` | `42P01 relation "teachers" does not exist`（`init.sql` 引用自己没创建的 `user_profile` 类型与三个角色） |
+| `migrate up` → `init.sql` | **同样的 `42P01`**（`0001` 是对基线 DDL 的对齐层，不是自足 schema） |
+
+```bash
+# 全新环境
+node scripts/db-bootstrap.mjs --url "postgresql://<user>:<pass>@<host>:5432/<db>"
+# 或 DATABASE_URL="postgresql://…" node scripts/db-bootstrap.mjs
+
+# 建完后的验收
+DATABASE_URL="…" node scripts/migrate.mjs status    # 期望：全部 applied、No checksum drift
+curl -s "$BASE/api/health/ready"                    # 期望 200（需应用已启动）
+```
+
+| 行为 | 结果 |
+|---|---|
+| 库里**已有** `teachers` 或 `resources` | **拒绝运行**（`REFUSING`），**exit 1**，除非显式 `--force`。该脚本**从不 DROP 任何东西** |
+| 无连接串 | `no database URL` → **exit 2** |
+| 缺 `0001` / `init.sql` | **exit 2** |
+| `init.sql` 执行失败 | 精确报 `[SQLSTATE] message` + `hint` 并 **exit 1**，提示改用迁移 —— **不吞错** |
+| 迁移失败 | `migrations failed — database is NOT ready.` → **exit 1** |
+
+> **它不是什么**（脚本文件头明确声明）：❌ 不是重建生产库的手段；
+> ❌ 不是演进既有库的手段（那是 `migrate.mjs up`）；
+> ❌ 不是灾难恢复手段（那是 `pg_restore`，见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md)）。
+> 用途只有两个：**搭建全新环境**、**为恢复演练准备验证目标库**。
+
+> ⚠️ **该脚本与迁移 `0001` 共享同一份前导 DDL**：它把 `0001` 里前两个
+> `DO $$ … $$;` 块**提取出来**执行（脚本断言至少找到 2 个块，否则拒绝运行）。
+> 因此**不要改动 `0001` 里那两个块的位置或数量**，否则建库脚本会拒绝工作（这是有意的保护）。
 
 ### 4.4 历史 `init.sql` 不要单独用于新库
 
@@ -360,9 +396,27 @@ node scripts/migrate.mjs down <target_version>
 | `0003` | `account_permission_overrides` / `account_scopes` 有数据时拒绝（除非显式设 `QLS_RBAC_FORCE_DOWN`） | `0003_….down.sql:19-32` |
 | `0005` | **不拒绝，但会重新打开提权路径**（匿名角色恢复可 `UPDATE teachers.password_hash`/`roles`、可删审计） | `0005_….down.sql:1-13` |
 | `0006` | 存在**已确认**的 MFA 绑定时拒绝（除非 `QLS_MFA_FORCE_DOWN=on`） | `0006_mfa.down.sql:18-38` |
+| `0007` | 回收站**非空**时拒绝（除非 `QLS_SOFT_DELETE_FORCE_DOWN=on`） | `0007_….down.sql:13,27,46` |
 
-> ⚠️ `0005 down` 之后必须尽快 `up` 回来，或按
-> [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) 从备份恢复。
+**force-down 开关已实测可用**（`evidence/migration-guard.txt`）：
+不带开关 `down 0006` → 被 `0007` 以 `42501` 拒绝、事务回滚、`exit=1`；
+带 `QLS_SOFT_DELETE_FORCE_DOWN=on` → 日志出现 `! migration GUC: qls.soft_delete_force_down=on`、
+回滚成功、`exit=0`，且三个软删除列确认已删除。
+通用形式 `QLS_MIGRATION_GUC_<NAME>=<value>` → GUC `qls.<name>`（值走绑定参数，无法注入 SQL）。
+[已证实：阅读该原始日志；我未复跑]
+
+**满数据库上的回滚实测**（`evidence/migration-rollback.txt`；详见 [`MIGRATION.md`](MIGRATION.md) §6.4）：
+
+| 目标 | 结果 |
+|---|---|
+| `down 0005` / `down 0004` / `down 0003` | ✅ 干净回滚；业务数据完好（teachers 22 / resources 347 / review_records 18 / audit_logs 386 / sessions 128） |
+| `down 0002` | ❌ **按设计拒绝**（`P0001`）："reverting the username backfill would leave 0 accounts able to log in (20 currently can)" |
+| `down 0001` | — 未到达（`0002` 的守卫终止了链条） |
+
+> ⚠️ **因此"`down` 到零"在活库上走不通。**
+> `down` 是"改回结构"，**不是**"恢复数据" —— 活库的灾难恢复必须用 `pg_restore`
+> （[`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §5.4）。
+> ⚠️ `0005 down` 之后必须尽快 `up` 回来，或从备份恢复。
 > **回滚生产前必须先备份**（§13）。数据安全类回滚的真正手段是**恢复备份**，不是 `down`。
 
 ---
@@ -523,11 +577,40 @@ LOG [Bootstrap] environment: NODE_ENV=production HTTPS_ENABLED=true
 
 | 日志 | 含义 | 处理 |
 |---|---|---|
-| `Seed teachers: created=N, skipped=M` | 初始账号 seed 结果 | N=0 且 M=0 表示一个账号都没建 → 见 [`RUNBOOK.md`](RUNBOOK.md) §5.3 |
-| `Failed to seed teacher <user>: …` | 单个账号失败 | **会被逐条 catch 并继续启动**（`auth.service.ts:223-229`）。这是已知缺陷（§J-3），必须当故障处理 |
+| `Seed teachers: created=N, skipped=M, failed=F` | 初始账号 seed 结果（**现在会报告失败数**） | 见下方"种子失败语义" |
+| `Failed to seed teacher <user>: …` | 单个账号失败 | 逐个账号的失败明细 |
+| `Partial teacher seeding failure: …`（ERROR） | **部分**失败 | 系统仍可用，但缺的账号要补齐 |
+| `Teacher seeding failed completely …` | **完全**失败 → **进程拒绝启动** | **这是正确的行为**。按提示 `node scripts/migrate.mjs status` 查结构，修好后重启 |
 | `trust proxy: …` | 客户端 IP 是否可信 | 必须与部署拓扑一致，见 §9 |
 | `TRUST_PROXY=true in production: …`（WARN） | 信任了所有跳 | 按 §9 改成 `loopback`/CIDR |
 | `cache-service: failed to read token file /var/run/secrets/zti/credential` | 平台遥测不可用 | 非平台部署可忽略（仅一条警告）[已证实，§O-2] |
+
+#### 7.2.1 种子失败语义（**已修复：不再"假启动"**）
+
+历史事故：`AuthService.onModuleInit()` 把 seed 失败 catch 后继续，
+于是在缺列的库上 **20 条 insert 全失败 → 失败被吞 → 进程报"启动成功"、可用账号为 0**。
+该行为**已修复**（`server/modules/auth/auth.service.ts` 的 `onModuleInit`），现在是三种结果：
+
+| 结果 | 行为 |
+|---|---|
+| 全部 `skipped`（账号已存在） | 安静继续 |
+| **部分**失败 | 打 **ERROR** 并列出账号名；**不中止**（系统确实可用） |
+| **完全**失败（`created=0 && skipped=0 && failed>0`） | **抛错 → Nest 中止启动**（非 development 下 `abortOnError` 为真） |
+
+回归测试：`scripts/verify-seed-failure.sh`（实测 **5/5 PASS**，见 `evidence/no-fake-startup.txt`）。
+它用 `CHECK (false) NOT VALID` 让每一次 `teachers` INSERT 都失败
+（`NOT VALID` 不校验既有行、但约束新插入，因此 schema 不变、启动路径正常，隔离出 seed 行为），
+并断言**日志里出现那句刻意的拒绝信息** —— 而不是仅仅"退出码非 0"（任何崩溃都能满足后者）。
+用法（需 `ADMIN_DB` 与已构建的 `dist/server/main.js`）：
+
+```bash
+npm run build
+ADMIN_DB="postgresql://user:pw@127.0.0.1:55432/postgres" bash scripts/verify-seed-failure.sh
+# 可选：SEED_PROBE_PORT（默认 3299）
+# 该脚本会创建/清理自己的 scratch 库 qls_seedfail_probe，并调用 db-bootstrap 建库
+```
+> ⚠️ 注意它**也算一次建库路径的验证**（内部调用 `db-bootstrap.mjs`），
+> 因此若 `0001` 的前导块结构被改动，这个测试会一并失败。
 
 ### 7.3 优雅退出：**当前未实现**
 
@@ -682,27 +765,43 @@ curl -s -o /dev/null -X POST https://<域名>/api/auth/login \
 | 登录限流 | **强烈建议在此再加一层按 IP 的限流**，因为应用内限流是进程内的（[`SECURITY.md`](SECURITY.md) §2.4） |
 | 静态资源 | `dist/client/assets/*` 带内容哈希，可长缓存；`index.html` **不要**长缓存 |
 
-### 9.4 安全响应头的当前状态（不要让验收误判）
+### 9.4 安全响应头：**已重新构建并在线实测通过**
 
-代码已存在（`server/common/http/security-headers.middleware.ts` + `main.ts` 接入），
-**但运行中的实例不输出任何这些头**，且**原因已查明**：
+早期状态（**整改前**，`evidence/security-headers.txt` BEFORE 一节）：应用**一个安全头都没有**，
+并且用 `X-Powered-By: Express` 主动暴露框架；`scripts/verify-security-headers.mjs` 对旧构建的评分是
+**`pass=5 fail=15`** —— 这个"失败基线"本身很重要，它证明该验证套件不是空转。
+
+现在（**本次会话实测**，`curl -sI http://127.0.0.1:3200/api/health`）：
 
 ```
-$ curl -sI http://127.0.0.1:3200/api/health
-X-Powered-By: Express
-x-request-id: 9df81526-…
-（无 nosniff / X-Frame-Options / Referrer-Policy / CSP / HSTS）
-
-$ ls dist/server/common/http/
-client-ip.js                       ← 只有这一个；security-headers.middleware.js 不存在
-$ grep -c securityHeaders dist/server/main.js
-0
-$ stat -f '%Sm %N' server/main.ts dist/server/main.js
-server/main.ts        2026-09-24 10:11:58
-dist/server/main.js   2026-09-24 10:10:23     ← 产物比源码旧
+HTTP/1.1 200 OK
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: strict-origin-when-cross-origin
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Resource-Policy: same-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self';
+  style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:;
+  connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self';
+  frame-ancestors 'none'
+x-request-id: …
+x-log-trace-id: …
+                        ← X-Powered-By 已被移除
 ```
-[已证实] 即：**`dist/` 是陈旧的**，必须重新 `npm run build` 并重启，
-之后再用 `curl -sI` 复验。在此之前，`PRODUCTION_READINESS.md` §G-9「无安全响应头」仍然成立。
+[已证实，2026-09-24 本次会话 curl 实测]；套件在同一构建上 **20/20 PASS**
+（`evidence/gate-run-final.txt`：`security-headers pass=20 fail=0`）。
+
+| 项 | 行为 | 说明 |
+|---|---|---|
+| **CSP** | **默认 report-only**（`Content-Security-Policy-Report-Only`，只上报不拦截） | 由 `CSP_MODE` 控制：未设/`report-only` = 只上报；`enforce` = 真正拦截；`off`/`false`/`0` = 不发该头。**默认不 enforce 是刻意的**：未经真实构建产物验证的强制 CSP 会导致整站白屏。要启用 enforce，请先观察一段时间的 violation 上报 |
+| **HSTS** | **只在 `HTTPS_ENABLED` 或 `TRUST_PROXY` 表明前面有 TLS 时才发**（`max-age=15552000; includeSubDomains`，**不含 `preload`**） | 纯 HTTP 下刻意不发，避免把用户锁在错误的协议上。反代后记得设对，否则 HSTS 不出现 |
+| `X-Frame-Options: DENY` + CSP `frame-ancestors 'none'` | 禁止被 iframe 嵌入 | ⚠️ **上线前必须确认本平台是否需要被 iframe 嵌入**（见 §9.2 的冲突说明） |
+| 复验方法 | `node scripts/verify-security-headers.mjs` | 需运行中的服务；该套件还会读本进程的 `TRUST_PROXY`/`HTTPS_ENABLED` 来判断 HSTS 期望值，**因此请在同一 shell 里启动服务与套件** |
+
+> ⚠️ **`dist/` 陈旧会导致"改了代码但线上没有"**：以上头之所以曾经不生效，是因为
+> `dist/server/main.js` 的 mtime 早于 `server/main.ts`、且 `dist/server/common/http/` 里
+> 只有 `client-ip.js`。**每次改动中间件都必须重新 `npm run build` + 重启 + `curl -sI` 复验**。
 
 ---
 
@@ -788,6 +887,21 @@ node scripts/migrate.mjs down <上一个版本>     # 先读 §5.4 的拒绝守�
 
 ### 12.1 必须通过（阻塞发布）
 
+**一键门禁**（`scripts/verify-all.sh`，需 PostgreSQL + 已迁移 + 运行中的生产模式服务 + `AUTHZ_TEST_DB`）：
+
+```bash
+AUTHZ_TEST_DB="postgresql://…" bash scripts/verify-all.sh
+```
+最近一次全绿基线（`evidence/gate-run-final.txt`，**由另一个 agent 执行，我未复跑**）：
+```
+npm test 103/103 · typecheck server PASS · typecheck client PASS · npm run build PASS
+api-contracts matched
+authz-http 24/24 · hardening 10/10 · mfa 36/36 · security-headers 20/20 · files-http 61/61
+✅ 全部通过
+```
+
+逐项清单：
+
 - [ ] `git status --short` 为空（没有未提交改动进入发布）
 - [ ] `npm ci` 在 **linux-x64** 构建机上 exit 0
 - [ ] `npm run build` exit 0，且 `dist/dist/client/index.html` 存在
@@ -796,19 +910,24 @@ node scripts/migrate.mjs down <上一个版本>     # 先读 §5.4 的拒绝守�
 - [ ] `node scripts/db-snapshot.mjs --compare before.json --against after.json` → 无 integrity problem
 - [ ] `NODE_ENV=production` 下 `GET /api/health` → 200
 - [ ] `NODE_ENV=production` 下 `GET /api/health/ready` → 200（拿到 503 就是没就绪，不要当成"起来了"）
+- [ ] `node scripts/verify-security-headers.mjs` → 全部通过（§9.4；**与服务在同一 shell/环境**）
+- [ ] **`ADMIN_DB=… bash scripts/verify-seed-failure.sh` → 5/5 PASS**（§7.2.1）
+      —— 证明"seed 全失败时拒绝启动"，而不是带 0 个可用账号假启动
 - [ ] 未登录访问受保护 API → 401；无权限 → 403（含审计写入）
 - [ ] CSRF 四态验证通过（[`SECURITY.md`](SECURITY.md) §6）
 - [ ] **伪造 `X-Forwarded-For` 后审计记录的是真实 IP**（§9.1）
 - [ ] `MFA_ENCRYPTION_KEY` 已配置且**已与数据库备份分开备份**
+- [ ] `DOWNLOAD_TOKEN_SECRET` 已配置（≥32 字节），且**与 MFA 密钥分开管理**
 - [ ] 超级管理员已完成 MFA 绑定并能成功登录（含恢复码验证一次）
 - [ ] 回滚方案已写明：**上一个产物版本 + 备份文件位置 + 恢复责任人**
+- [ ] 明确知道 **`down` 到零在活库上不可行**（`0002` 按设计拒绝）→ DR 走 `pg_restore`（§5.4）
 
 ### 12.2 必须在部署环境复核（本机无法验证）
 
 - [ ] 反向代理下 `trust proxy` 行为（§9.1）：伪造 XFF 不影响 `req.ip`
 - [ ] TLS 下 Cookie 属性含 `Secure`；`SameSite` 与是否 iframe 嵌入一致（§9.2）
 - [ ] HSTS 在 HTTPS 下出现、在纯 HTTP 下不出现
-- [ ] 安全响应头实际出现（需**重新构建+重启**，见 §9.4）
+- [ ] 安全响应头在**该部署的构建产物**上出现（重新构建后 `curl -sI` 复验，§9.4）
 - [ ] requestId 的响应头与 500 响应体一致（[`SECURITY.md`](SECURITY.md) §12 G-9）
 - [ ] 备份/恢复演练通过（[`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §8）
 - [ ] 平台侧：dataloom 存储、`{{...}}` HBS 占位符替换、vefaas 发布行为

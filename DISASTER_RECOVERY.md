@@ -480,6 +480,13 @@ node scripts/db-snapshot.mjs --compare /tmp/prod_before.json --against /tmp/rest
 **绝不允许**：`DROP DATABASE` 重建、重跑 `init.sql`、重置 seed 数据来"修复"。
 见 [`MIGRATION.md`](MIGRATION.md) §7。
 
+> ⚠️ **注意 `down` 不属于上面任何一档。** `down` 是"改回结构"，**不是**"恢复数据"。
+> 满数据库上的实测（`evidence/migration-rollback.txt`，详见 [`MIGRATION.md`](MIGRATION.md) §6.4）：
+> `0005` / `0004` / `0003` 可干净回滚且业务数据完好，
+> 但 **`0002` 按设计拒绝**（`P0001`：反演会让 **20 个账号全部无法登录**），
+> 因此 **"`down` 到零"在活库上根本走不通**。
+> **活库的灾难恢复必须用 `pg_restore`。** 这条结论已由一次真实的回滚演练确立，不是推断。
+
 ---
 
 ## 6. 应用侧一致性：**部分恢复必然导致状态错位**
@@ -584,49 +591,106 @@ DATABASE_URL="postgresql://…恢复库…" node scripts/migrate.mjs status
 | 对象存储备份脚本 | 平台侧能力未确认 |
 [已证实：`ls scripts/` 与仓库根目录检查]
 
-### 7.4 `scripts/backup-rehearse.mjs` —— **演练器，不是备份器**（写作期间新增）
+### 7.4 `scripts/backup-rehearse.mjs` —— **本机唯一可做的演练**（但**不是备份器**）
 
-写作期间另一个 agent 新增了 `scripts/backup-rehearse.mjs`。**它是什么、不是什么，必须说清**：
+**它是什么**：一次**真实的逻辑导出 / 恢复往返演练**，用本项目自己的 schema 与迁移工具驱动。
 
-| 它**是** | 它**不是** |
-|---|---|
-| 一次**逻辑数据 round-trip 演练**：导出每张表的行 → 建 scratch 库并**从头迁移** → 导入 → 按**精确行数 + 每表内容校验和**比对 | ❌ **不能**替代 `pg_dump` / PITR |
-| 用本项目自己的 schema 与迁移工具驱动，因此能验证"**迁移链 + 数据**能否重建出一个可用的库" | ❌ **不能**证明生产备份可恢复 |
-| 有 preflight：缺少 `pg_dump` 等前提时会**明确拒绝**（exit 2），不假装成功 | 不覆盖：角色/表空间/扩展/库级设置、序列状态、迁移之外的 RLS 定义、大对象、PITR/WAL |
+**它是怎么做的（逐步，均已读源码确证）**：
 
-脚本自己会在输出里**打印真正的 `pg_dump`/`pg_restore` 命令**，并声明它没有执行那些命令
-（文件头 `WHAT THIS IS, AND WHAT IT IS NOT` 一节）。[已证实：文件头]
+| 步骤 | 内容 | 关键细节 |
+|---|---|---|
+| **PREFLIGHT** | 逐个查找 `pg_dump` / `pg_restore` / `psql` | 查找顺序：`PATH` → `$PG_BIN` → Homebrew libpq 目录 → 项目自己的 `.devtools/pg/.../bin`。**实测全部 NOT FOUND** → 脚本**大声打印**"NO `pg_dump` BACKUP WAS TAKEN"，并**打印生产环境必须执行的 `pg_dump`/`pg_restore`/`psql` 命令**，然后继续做逻辑演练 |
+| **安全护栏** | scratch 库名必须匹配 `/(scratch\|rehearsal\|restore_test\|tmp\|temp)/i`，且**必须与 source 不同库** | 不匹配直接 **exit 2**（"This script DROPs that database"） |
+| **STEP 1 导出** | 逐表 `SELECT *`，写入 `.ndjson`（`header` / `table` / `row` / `footer`） | 逐表算 **SHA-256 内容校验和**（按行的规范化 JSON 排序后哈希 → 与物理行序无关），并记录行数 |
+| **STEP 2 建 scratch** | `DROP DATABASE IF EXISTS … WITH (FORCE)` → `CREATE DATABASE` → **调用 `scripts/db-bootstrap.mjs`** | ★ 因此它演练的是**真实的从零建库路径**（前导 → `init.sql` → 迁移），而不是"只跑迁移"。脚本注释记录了实测：**只跑迁移会 `42P01 relation "teachers" does not exist`** |
+| **STEP 3 导入** | 按**外键拓扑序**（父表先）逐行 `INSERT`，**全部包在单个事务里** | 实测：按表名顺序导入会 `23503 … violates foreign key constraint "resources_uploader_fkey"`。脚本**不用**禁用约束来绕过（那需要超级用户且会掩盖真实的引用断裂）。`schema_migrations` **刻意跳过导入**（它是派生状态，scratch 的账本已由迁移写好） |
+| **STEP 4 校验** | 逐表比对**行数**与**内容校验和**；`schema_migrations` 比对**版本集合** | 版本集合比对比"复制账本"更强：它证明恢复后的库与源库**处于同一迁移版本** |
+| **SUMMARY** | 打印**明确的边界声明**，并写 `<out>.sha256` | 见下 |
+
+**实测结果（`evidence/migration-rollback.txt` 的 STEP 1）**：
+```
+12 张表 · 902 行 · 逐表行数与 SHA-256 内容校验和**完全一致**
+PASS  schema_migrations versions match (6): 0001, 0002, 0003, 0004, 0005, 0006
+PASS  teachers rows=22 · resources rows=347 · audit_logs rows=386 · sessions rows=128 …
+RESULT: logical round trip verified — every table restored with an
+        identical row count and an identical content checksum.
+```
+[已证实：原始日志 `evidence/backup-restore-rehearsal.txt` 与 `evidence/migration-rollback.txt`；
+日志由另一个 agent 执行并留存，**我阅读了日志，未复跑**]
 
 ```bash
-# 用法（照脚本文件头；我未执行）
+# 用法（照脚本参数解析；我未执行）
 node scripts/backup-rehearse.mjs \
   --source  "postgresql://user:pw@127.0.0.1:55432/qls_test_0005" \
   --scratch "postgresql://user:pw@127.0.0.1:55432/qls_rehearsal" \
-  --out     backups/rehearsal.ndjson
-# exit: 0 = round-trip 通过；1 = 失败/拒绝；2 = preflight 前提缺失
+  --out     backups/backup-rehearsal.ndjson      # 默认值
+  # --keep-scratch   保留 scratch 库以便排查（默认演练结束即 DROP）
+# exit: 0 = 往返通过；1 = 失败；2 = 前提缺失/护栏拒绝
+# 也接受环境变量：BACKUP_SOURCE_DB / DATABASE_URL / SUDA_DATABASE_URL / MIGRATION_DATABASE_URL
 ```
+
+**它的显式范围边界（脚本自己打印的 `SCOPE LIMITS`，逐字要点）**：
+
+| ✅ 它证明了 | ❌ 它**没有**证明 |
+|---|---|
+| **数据**能往返：逐表行数 + 内容校验和一致 | 不涉及 `pg_dump` / `pg_restore` |
+| scratch 库能沿**真实建库路径**从零建起来 | 不涉及**角色**、表空间、扩展、库级设置 |
+| 恢复后的库与源库**迁移版本一致** | 不涉及**序列状态**（`serial` 计数器） |
+| 导入是**原子**的（单事务） | 不涉及迁移之外的 RLS 定义、大对象 |
+| — | 不涉及 **WAL / PITR**（时间点恢复） |
+
+> **最重要的一条**：脚本在输出里明确声明
+> **"The production database was NOT touched by this run and is NOT covered."**
+> 以及（当 `pg_dump` 缺失时）**"The production rehearsal is still outstanding"**。
+
+**一个必须知道的使用约束**：`source` 与 `scratch` 必须处于**同一迁移版本**。
+实测反例见 `evidence/migration-guard.txt` STEP 1：源库停在 `0006`、而 scratch 由当时的迁移集建到 `0007`，
+于是 `schema_migrations` 版本集合不一致、`resources` 的内容校验和也不同
+（新列 `deleted_at`/`deleted_by`/`purge_after` 的有无）→ 演练**正确地报了 FAIL**。
+**这不是脚本缺陷，而是"先把两边版本对齐"的操作要求。**
 
 **这改变了什么、没改变什么（重要）**
 
 | | 变化 |
 |---|---|
-| ✅ 新增能力 | 现在**存在**一个可重复执行的、把数据搬出去再搬回来的演练工具。它对本项目特有的一类事故（**迁移链 + 数据**能否共同重建成可用库）有真实价值 |
-| ✅ 新增证据 | 另一个 agent 在 commit 记录中声称用它做过 scratch 库上的 round-trip 与 `0006`/`0007` 的 down 验证。**我只读了脚本与 commit message，没有复跑，也没有核对它的输出** [未复验] |
+| ✅ 新增能力 | 现在**存在**一个可重复执行的、把数据搬出去再搬回来的演练工具，且它**顺带演练了从零建库路径**。对本项目特有的一类事故（**迁移链 + 数据**能否共同重建成可用库）有真实价值 |
+| ✅ 新增证据 | 有原始日志：12 表 / 902 行 / 行数与校验和全部一致（`evidence/backup-restore-rehearsal.txt`、`evidence/migration-rollback.txt`）[已证实：阅读日志] |
+| ✅ 一个真实缺陷因此暴露并修复 | 演练第一次运行就失败，暴露出此前隐藏的问题（见 `PRODUCTION_RELEASE_REPORT.md` §4.3） |
 | ❌ **没有**改变 | 生产库**仍然没有被备份过**，`pg_dump`/`pg_restore` **仍然没有被执行过**（本机连客户端都没有）。§0 的结论不变 |
 | ❌ **没有**改变 | §2 的 RPO/RTO 仍是**未定义**；§8 的清单仍然全部未勾选 |
 
-> ⚠️ **不要因为"有一个 rehearsal 脚本"就认为备份问题解决了。**
+> ⚠️ **不要因为"有一个 rehearsal 脚本 + 一次绿色演练"就认为备份问题解决了。**
 > 真正的判据仍然是 §5.1 的 11 项，且**必须用 `pg_dump` 对真实集群做**。
+> 逻辑往返证明的是"数据搬得回去"，**不是**"生产备份可用"。
 
-### 7.5 `scripts/db-bootstrap.mjs` —— 从零建库（与恢复相关）
+### 7.5 `scripts/db-bootstrap.mjs` —— 恢复**验证目标库**的建设方式
 
-它解决"`init.sql` 与 `0001` 互相依赖、谁都不能先跑"的问题，按
-**前导（`user_profile` 类型 + 三个 DB 角色，源码取自 `0001`）→ `init.sql` → `migrate up`** 执行。
-[已证实：文件头]
+它解决一个**实测过的互相依赖缺陷**：`init.sql` 与迁移 `0001` 谁都不能单独先跑
+（两种顺序都以 `42P01 relation "teachers" does not exist` 失败），
+而妙搭平台预先提供数据库，因此该缺陷只在**换机器重建 / 恢复验证**时暴露。
+它按 `前导（类型 + 三个 DB 角色，源码取自 0001）→ init.sql → migrate up` 执行，
+**拒绝**在已有 `teachers`/`resources` 的库上运行（除非 `--force`），且**从不 DROP 任何东西**。
+[已证实：`scripts/db-bootstrap.mjs` 全文]
 
-在**恢复**场景下它的用途有限：恢复是从 dump 重建，不是从零跑 DDL。
-但它在**验证"备份是否完整"**时有用 —— 若一个 dump 恢复后无法通过
-`migrate.mjs verify`，说明 dump 里的结构与迁移记录不一致。详见 [`MIGRATION.md`](MIGRATION.md) §2.3。
+**为什么恢复文档必须提到它** —— 它是**恢复验证目标库的标准建法**：
+
+1. **§5.1 的判定第 9/10 项**要求"应用能连上恢复出来的库并跑起来"。
+   在**同一个 scratch 库**里先建空库、再 `pg_restore`，是正常做法；
+   但若你要做"对照验证"（例如对比 dump 恢复 vs 从零重建），
+   第二个对照库就应该用 `db-bootstrap.mjs` 建 ——
+   这样两条路径的结果才可比。`backup-rehearse.mjs` 走的就是这条路（§7.4）。
+2. **它能证明 dump 的结构完整性**：若一个 dump 恢复后 `migrate.mjs verify` 不通过，
+   说明 dump 内的结构与迁移记录不一致 —— 这是"备份不完整"的直接信号。
+3. ⚠️ **它不能用来恢复**：恢复是 `pg_restore`，不是从零跑 DDL。
+   它**不是**"重建生产库"的手段，脚本文件头对此有明确声明。
+
+```bash
+# 只用它建一个空的可迁移库（作为恢复验证目标）
+node scripts/db-bootstrap.mjs --url "$SCRATCH_URL"
+DATABASE_URL="$SCRATCH_URL" node scripts/migrate.mjs status   # 期望：全部 applied、无漂移
+```
+
+详见 [`MIGRATION.md`](MIGRATION.md) §2.3。
 
 ---
 
@@ -654,6 +718,13 @@ node scripts/backup-rehearse.mjs \
       且**角色成员关系**是否包含在内（§3.2）
 - [ ] **D3** 按 §4 把该 dump 恢复到 **scratch 库**，`pg_restore` **exit 0**
 - [ ] **D4** §4.5 的 ①~⑩ 验证查询**全部**通过（把输出存档）
+- [ ] **D4b** 用 `node scripts/db-bootstrap.mjs --url "$SCRATCH_URL"` 建一个**对照库**，
+      确认它能从零走到"全部迁移 applied、无漂移"；若 dump 恢复出的库在这一步不成立，
+      说明 dump 的结构与迁移记录不一致（§7.5）
+- [ ] **D4c** 先做一次**本机可做的逻辑往返演练**并留档：
+      `node scripts/backup-rehearse.mjs --source "$SRC" --scratch "$SCRATCH" --out backups/rehearsal.ndjson`
+      → 期望逐表行数与 SHA-256 内容校验和一致（§7.4）。
+      ⚠️ 这**不等于** D1–D3 已完成，只是把"数据能否搬回去"这一层先证明掉
 - [ ] **D5** §4.6 用生产密钥**成功解开一条 MFA 密文**
 - [ ] **D6** 应用指向 scratch 库启动，`/api/health/ready` 返回 **200**
 - [ ] **D7** 在 scratch 上完成登录 + 读列表的冒烟，且 `audit_logs` 新增一行
