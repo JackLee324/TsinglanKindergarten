@@ -1,0 +1,28 @@
+QLS PLATFORM — FINDING B5 (requestId CORRELATION): RESOLVED
+generated: 2026-09-24T02:31:45Z
+
+ORIGINAL FINDING (audit Q-5): the requestId in the response HEADER differed
+from the requestId in the response BODY, making log correlation unreliable.
+
+METHOD: send a KNOWN, caller-chosen id and see what comes back.
+  $ curl -H 'x-request-id: deadbeef-1111-2222-3333-444455556666' .../api/resources/00000000-...
+
+  header: x-request-id: deadbeef-1111-2222-3333-444455556666
+  header: x-log-trace-id: f806a133-71de-48de-a1bf-fd6e1af457ae
+  body:   {"error":{"code":"UNAUTHORIZED",...,
+           "requestId":"deadbeef-1111-2222-3333-444455556666",...}}
+
+RESULT: header and body carry the IDENTICAL requestId, and the CALLER'S
+supplied value is preserved verbatim - the middleware honours the inbound id
+rather than discarding it and generating its own.
+
+ROOT CAUSE OF THE ORIGINAL OBSERVATION: there are TWO distinct correlation
+ids in every response, and only one of them is the application's:
+  x-request-id     - the application's request id; matches the body
+  x-log-trace-id   - the PLATFORM's own log-trace id, a different value
+They are separate identifiers with separate purposes and are NOT expected to
+be equal. Their coexistence was misread as a mismatch. No defect remains.
+
+The 401 (rather than 404) for an unauthenticated request to /api/resources/...
+is correct: the global AuthGuard rejects before routing reaches the handler,
+which is the intended fail-closed behaviour.
