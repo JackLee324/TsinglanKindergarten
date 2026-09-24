@@ -53,7 +53,17 @@ export type AuditAction =
   | 'teacher_update'
   | 'password_changed'
   | 'password_change_failed'
-  | 'password_reset';
+  | 'password_reset'
+  // --- MFA (added by migration 0006) ---------------------------------------
+  | 'mfa_enrolled'
+  | 'mfa_enabled'
+  | 'mfa_disabled'
+  | 'mfa_reset'
+  | 'mfa_success'
+  | 'mfa_failed'
+  | 'mfa_recovery_used'
+  | 'mfa_recovery_regenerated'
+  | 'mfa_challenge_issued';
 
 // === 教师 ===
 export interface Teacher {

@@ -1,7 +1,7 @@
 /* eslint-disable */
 /** auto generated, do not edit */
 import { sql } from 'drizzle-orm';
-import { bigint, boolean, foreignKey, index, integer, pgTable, text, uniqueIndex, uuid, varchar, customType } from "drizzle-orm/pg-core"
+import { bigint, boolean, foreignKey, index, integer, pgTable, smallint, text, uniqueIndex, uuid, varchar, customType } from "drizzle-orm/pg-core"
 
 export const customTimestamptz = customType<{
   data: Date;
@@ -379,6 +379,73 @@ export const accountScopes = pgTable("account_scopes", {
   }).onDelete("cascade"),
 ]);
 
+// =============================================================================
+// MFA tables — added by migration 0006, NOT emitted by @lark-apaas/db-schema-sync.
+// Re-add these if you regenerate this file (see DEPLOYMENT_PRODUCTION.md).
+// =============================================================================
+
+/** TOTP enrolment. `secretEncrypted` is AES-256-GCM; the raw secret is never stored. */
+export const teacherMfa = pgTable("teacher_mfa", {
+  teacherId: uuid("teacher_id").primaryKey(),
+  secretEncrypted: text("secret_encrypted").notNull(),
+  algorithm: varchar("algorithm", { length: 10 }).notNull().default('SHA1'),
+  digits: smallint("digits").notNull().default(6),
+  periodSeconds: smallint("period_seconds").notNull().default(30),
+  /** false until the user proved possession by submitting a valid code. */
+  confirmed: boolean("confirmed").notNull().default(false),
+  enabledAt: customTimestamptz("enabled_at", { precision: 3 }),
+  lastUsedAt: customTimestamptz("last_used_at", { precision: 3 }),
+  createdAt: customTimestamptz("created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: customTimestamptz("updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  foreignKey({
+    columns: [table.teacherId],
+    foreignColumns: [teachers.id],
+    name: "teacher_mfa_teacher_fkey",
+  }).onDelete("cascade"),
+]);
+
+/** One-time recovery codes, stored only as SHA-256 hashes. */
+export const mfaRecoveryCodes = pgTable("mfa_recovery_codes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teacherId: uuid("teacher_id").notNull(),
+  codeHash: varchar("code_hash", { length: 64 }).notNull(),
+  usedAt: customTimestamptz("used_at", { precision: 3 }),
+  usedIp: varchar("used_ip", { length: 50 }),
+  createdAt: customTimestamptz("created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_mfa_recovery_hash").on(table.codeHash),
+  index("idx_mfa_recovery_teacher").on(table.teacherId),
+  foreignKey({
+    columns: [table.teacherId],
+    foreignColumns: [teachers.id],
+    name: "mfa_recovery_codes_teacher_fkey",
+  }).onDelete("cascade"),
+]);
+
+/** Half-finished logins: password verified, second factor pending. Stored in the
+ *  database so the flow works across multiple application instances. */
+export const mfaChallenges = pgTable("mfa_challenges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(),
+  teacherId: uuid("teacher_id").notNull(),
+  attempts: smallint("attempts").notNull().default(0),
+  maxAttempts: smallint("max_attempts").notNull().default(5),
+  expiresAt: customTimestamptz("expires_at", { precision: 3 }).notNull(),
+  consumedAt: customTimestamptz("consumed_at", { precision: 3 }),
+  ipAddress: varchar("ip_address", { length: 50 }),
+  userAgent: varchar("user_agent", { length: 500 }),
+  createdAt: customTimestamptz("created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_mfa_challenges_teacher").on(table.teacherId),
+  index("idx_mfa_challenges_expires").on(table.expiresAt),
+  foreignKey({
+    columns: [table.teacherId],
+    foreignColumns: [teachers.id],
+    name: "mfa_challenges_teacher_fkey",
+  }).onDelete("cascade"),
+]);
+
 // table aliases
 export const auditLogsTable = auditLogs;
 export const resourcesTable = resources;
@@ -388,3 +455,6 @@ export const subjectPermissionsTable = subjectPermissions;
 export const teachersTable = teachers;
 export const accountPermissionOverridesTable = accountPermissionOverrides;
 export const accountScopesTable = accountScopes;
+export const teacherMfaTable = teacherMfa;
+export const mfaRecoveryCodesTable = mfaRecoveryCodes;
+export const mfaChallengesTable = mfaChallenges;

@@ -13,6 +13,7 @@ import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@lark-apaas/fullstack
 import { scryptSync, randomBytes, timingSafeEqual } from 'crypto';
 
 import { SessionService } from './session.service';
+import { MfaService } from './mfa.service';
 import { teachersTable, auditLogs } from '@server/database/schema';
 import type { AuthUser, AuditAction, RoleCode, ResetPasswordResponse } from '@shared/api.interface';
 
@@ -25,8 +26,29 @@ const SCRYPT_KEYLEN = 32;
 const SALT_LEN = 16;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 15 * 60 * 1000;
-const IP_RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const IP_RATE_LIMIT_MAX = 30;
+/**
+ * Per-IP login rate limit.
+ *
+ * Configurable through the environment (the specification requires the thresholds
+ * to be operable, not hard-coded). Defaults keep the previously-shipped behaviour.
+ *
+ * NOTE (known limitation, tracked in PRODUCTION_READINESS.md §D-12): this counter
+ * lives in a per-process Map, so with more than one instance each replica enforces
+ * its own budget and the effective limit is multiplied by the replica count. The
+ * store is to be abstracted behind a replaceable RateLimitStore; until then this is
+ * a brake, not a hard bound.
+ *
+ * The values are read once at module load; a change requires a restart.
+ */
+function readPositiveInt(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const IP_RATE_LIMIT_WINDOW_MS = readPositiveInt('LOGIN_IP_RATE_LIMIT_WINDOW_SECONDS', 60) * 1000;
+const IP_RATE_LIMIT_MAX = readPositiveInt('LOGIN_IP_RATE_LIMIT_MAX', 30);
 
 interface AuditLogInput {
   action: AuditAction;
@@ -56,6 +78,7 @@ export class AuthService implements OnModuleInit {
 
   constructor(
     private readonly sessionService: SessionService,
+    private readonly mfaService: MfaService,
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
   ) {}
 
@@ -213,7 +236,10 @@ export class AuthService implements OnModuleInit {
     password: string,
     ipAddress: string,
     userAgent?: string,
-  ): Promise<{ sessionId: string; teacher: AuthUser }> {
+  ): Promise<
+    | { mfaRequired: true; challengeToken: string; expiresAt: string }
+    | { mfaRequired: false; sessionId: string; teacher: AuthUser }
+  > {
     if (!this.checkIpRateLimit(ipAddress)) {
       throw new ForbiddenException('请求过于频繁，请稍后再试');
     }
@@ -336,6 +362,43 @@ export class AuthService implements OnModuleInit {
       .where(eq(teachersTable.id, row.id));
 
     const teacher = this.rowToAuthUser(row);
+
+    // ---------------------------------------------------------------------
+    // Second factor. The password is verified; if MFA is enabled the login is
+    // NOT complete and NO session is created. Returning a session here would
+    // make the second factor decorative, because a stolen password alone would
+    // already yield a usable cookie.
+    //
+    // Availability note: if MFA is enabled but the process cannot decrypt the
+    // secret (MFA_ENCRYPTION_KEY missing or rotated), we FAIL CLOSED and refuse
+    // the login rather than silently downgrading a privileged account to
+    // single-factor. The alternative — letting the user in — would be an
+    // attacker-triggerable MFA bypass by simply causing a key misconfiguration.
+    // ---------------------------------------------------------------------
+    if (await this.mfaService.isEnabled(teacher.id)) {
+      const { challengeToken, expiresAt } = await this.mfaService.issueChallenge(
+        teacher.id,
+        ipAddress,
+        userAgent,
+      );
+
+      await this.writeAuditLog({
+        action: 'mfa_challenge_issued',
+        teacherId: teacher.id,
+        teacherName: teacher.name,
+        ipAddress,
+        userAgent,
+        success: true,
+        detail: 'password verified; awaiting second factor',
+      });
+
+      this.logger.log(
+        `Password verified for ${teacher.name} (${teacher.username}); MFA challenge issued`,
+      );
+
+      return { mfaRequired: true, challengeToken, expiresAt };
+    }
+
     // Pin the account's current authorization version onto the session, so any
     // later role/permission/status change invalidates it (RBAC.md §8).
     const sessionId = await this.sessionService.createSession(
@@ -356,7 +419,7 @@ export class AuthService implements OnModuleInit {
 
     this.logger.log(`Teacher logged in: ${teacher.name} (${teacher.username})`);
 
-    return { sessionId, teacher };
+    return { mfaRequired: false, sessionId, teacher };
   }
 
   async changePassword(
@@ -509,6 +572,83 @@ export class AuthService implements OnModuleInit {
     this.logger.log(`Password reset by admin for: ${row.username}`);
 
     return { temporaryPassword: tempPassword };
+  }
+
+  /**
+   * Complete a login after a successful second-factor check.
+   * Used by POST /api/auth/mfa/verify, which is @Public() because the caller has
+   * no session yet — the challenge token is what authorises it.
+   */
+  async completeMfaLogin(
+    teacherId: string,
+    ipAddress: string,
+    userAgent?: string,
+  ): Promise<{ sessionId: string; teacher: AuthUser }> {
+    const rows = await this.db
+      .select({
+        id: teachersTable.id,
+        wecomUserId: teachersTable.wecomUserId,
+        username: teachersTable.username,
+        name: teachersTable.name,
+        nameEn: teachersTable.nameEn,
+        roles: teachersTable.roles,
+        status: teachersTable.status,
+        mustChangePassword: teachersTable.mustChangePassword,
+        permissionsVersion: teachersTable.permissionsVersion,
+      })
+      .from(teachersTable)
+      .where(eq(teachersTable.id, teacherId))
+      .limit(1);
+
+    if (rows.length === 0) throw new UnauthorizedException('账号不存在');
+    const row = rows[0];
+    if (row.status !== 'active') throw new UnauthorizedException('账号已停用');
+
+    const teacher = this.rowToAuthUser(row);
+    const sessionId = await this.sessionService.createSession(
+      teacher.id,
+      ipAddress,
+      userAgent,
+      row.permissionsVersion ?? 1,
+    );
+
+    await this.writeAuditLog({
+      action: 'mfa_success',
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      ipAddress,
+      userAgent,
+      success: true,
+    });
+    await this.writeAuditLog({
+      action: 'login',
+      teacherId: teacher.id,
+      teacherName: teacher.name,
+      ipAddress,
+      userAgent,
+      success: true,
+      detail: 'login completed after MFA',
+    });
+
+    this.logger.log(`Teacher logged in with MFA: ${teacher.name} (${teacher.username})`);
+    return { sessionId, teacher };
+  }
+
+  /** Public wrapper so the MFA controller can write its own audit entries. */
+  async auditMfa(
+    action: 'mfa_failed' | 'mfa_enrolled' | 'mfa_enabled' | 'mfa_disabled'
+      | 'mfa_reset' | 'mfa_recovery_used' | 'mfa_recovery_regenerated',
+    input: { teacherId: string; teacherName?: string; ipAddress?: string; userAgent?: string; detail?: string },
+  ): Promise<void> {
+    await this.writeAuditLog({
+      action,
+      teacherId: input.teacherId,
+      teacherName: input.teacherName,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+      detail: input.detail,
+      success: action !== 'mfa_failed',
+    });
   }
 
   async logout(

@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { SessionService } from './session.service';
+import { MfaService } from './mfa.service';
 import { AuthGuard } from './auth.guard';
 import { AuthzModule } from '../authz/authz.module';
 import { PermissionGuard } from '../authz/permission.guard';
@@ -14,6 +15,7 @@ import { PermissionGuard } from '../authz/permission.guard';
   providers: [
     AuthService,
     SessionService,
+    MfaService,
     // ORDER IS SIGNIFICANT. NestJS evaluates global guards in provider
     // registration order, so AuthGuard (authentication: establishes
     // request.teacher + request.authz) always runs before PermissionGuard
@@ -29,6 +31,6 @@ import { PermissionGuard } from '../authz/permission.guard';
       useClass: PermissionGuard,
     },
   ],
-  exports: [AuthService, SessionService],
+  exports: [AuthService, SessionService, MfaService],
 })
 export class AuthModule {}
