@@ -46,6 +46,13 @@ const AUDIT_ACTIONS: AuditAction[] = [
   'password_changed',
   'password_change_failed',
   'password_reset',
+  // 回收站与文件校验（phase 6 / migration 0007）
+  'resource_delete',
+  'resource_restore',
+  'resource_purge',
+  'resource_file_register',
+  'resource_download_failed',
+  'file_validation_rejected',
 ];
 
 const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
@@ -81,6 +88,14 @@ const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
   mfa_recovery_used: 'bg-orange-100 text-orange-700 border-orange-200',
   mfa_recovery_regenerated: 'bg-indigo-100 text-indigo-700 border-indigo-200',
   mfa_challenge_issued: 'bg-blue-100 text-blue-700 border-blue-200',
+  // Recycle bin + file validation (phase 6). Read as a lifecycle: amber = moved
+  // to the bin (still recoverable), teal = recovered, red = gone or refused.
+  resource_delete: 'bg-amber-100 text-amber-700 border-amber-200',
+  resource_restore: 'bg-teal-100 text-teal-700 border-teal-200',
+  resource_purge: 'bg-red-100 text-red-700 border-red-200',
+  resource_file_register: 'bg-blue-100 text-blue-700 border-blue-200',
+  resource_download_failed: 'bg-orange-100 text-orange-700 border-orange-200',
+  file_validation_rejected: 'bg-red-100 text-red-700 border-red-200',
 };
 
 const AuditLogPage: React.FC = () => {

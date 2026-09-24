@@ -12,5 +12,6 @@
   hardening                pass=10 fail=0
   mfa                      pass=36 fail=0
   security-headers         pass=20 fail=0
+  files-http               pass=61 fail=0
 
   ✅ 全部通过

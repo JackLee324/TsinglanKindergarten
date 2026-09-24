@@ -5,6 +5,7 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { createReadStream } from 'fs';
 import { join } from 'path';
@@ -23,7 +24,9 @@ import {
   or,
   inArray,
   isNull,
+  isNotNull,
   gte,
+  lte,
   sql,
 } from 'drizzle-orm';
 import type { SQLWrapper } from 'drizzle-orm';
@@ -43,8 +46,83 @@ import {
   subjectPermissions,
   auditLogs,
 } from '@server/database/schema';
+import {
+  signDownloadToken,
+  downloadTokenConfigurationError,
+  downloadTokenTtlSeconds,
+  DOWNLOAD_TOKEN_SECRET_ENV,
+} from '@server/common/crypto/download-token';
+import {
+  validateUpload,
+  isPathTraversalSafe,
+  sanitizeFileName,
+  FALLBACK_FILENAME,
+} from '@server/common/files/file-validation';
 
 const ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
+
+/**
+ * Retention window for the recycle bin.
+ *
+ * The value is deliberately NOT a constant: it is policy, it differs per school,
+ * and it must be changeable without a code change. It is validated loudly rather
+ * than silently defaulted, because an operator who sets it to `0` or `abc` and
+ * gets 30 days anyway would believe the purge policy they intended was in force.
+ */
+export const RESOURCE_RETENTION_DAYS_ENV = 'RESOURCE_RETENTION_DAYS';
+export const DEFAULT_RESOURCE_RETENTION_DAYS = 30;
+/** Upper bound: a decade. Beyond this the "recycle bin" is just storage. */
+export const MAX_RESOURCE_RETENTION_DAYS = 3650;
+
+/**
+ * How many bytes of a file's head `registerFile` will accept.
+ *
+ * Only the leading bytes are ever needed to identify a format, so this bounds the
+ * work and the payload: an oversized value is truncated by `decodeHeadBytes()`
+ * rather than trusted wholesale.
+ */
+export const MAX_HEAD_BYTES = 4096;
+
+function resourceRetentionDays(): number {
+  const raw = process.env[RESOURCE_RETENTION_DAYS_ENV];
+  if (raw === undefined || raw === '') return DEFAULT_RESOURCE_RETENTION_DAYS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      `${RESOURCE_RETENTION_DAYS_ENV} must be a positive number of days; got "${raw}"`,
+    );
+  }
+  return Math.min(Math.floor(parsed), MAX_RESOURCE_RETENTION_DAYS);
+}
+
+/**
+ * The fields the download path needs — deliberately not the whole row.
+ * Returning the full row would hand every private column to callers that only
+ * need to build a URL.
+ */
+export interface DownloadableResource {
+  id: string;
+  title: string;
+  program: string;
+  subject: string;
+  subSubject?: string;
+  uploaderId: string;
+  fileName: string;
+  fileBucketId: string;
+  filePath: string;
+}
+
+/** What a successful `registerFile` persisted. */
+export interface RegisteredFile {
+  resourceId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  detectedKind: string;
+  fileBucketId: string;
+  filePath: string;
+}
+
 
 @Injectable()
 export class ResourcesService {
@@ -61,6 +139,56 @@ export class ResourcesService {
     const teacher = await this.getTeacherById(teacherId);
     if (!teacher) return false;
     return ADMIN_ROLES.some((r: string) => teacher.roles.includes(r));
+  }
+
+  /**
+   * Recycle-bin administration: business admins (园长/教学主任) plus super_admin.
+   *
+   * `isAdminTeacher()` intentionally stays business-only, so the EXISTING
+   * delete/update checks are unchanged. super_admin is accepted here because
+   * listing and restoring from the recycle bin are recovery operations: refusing
+   * the platform's highest-privilege account the ability to undo a mistaken
+   * deletion would be a safety regression, not a security gain.
+   */
+  private async isRecycleBinAdmin(teacherId: string): Promise<boolean> {
+    const teacher = await this.getTeacherById(teacherId);
+    if (!teacher) return false;
+    return (
+      ADMIN_ROLES.some((r: string) => teacher.roles.includes(r)) ||
+      teacher.roles.includes('super_admin')
+    );
+  }
+
+  /**
+   * The ACTIVE-row predicate.
+   *
+   * Soft delete is enforced HERE, in every query, and deliberately not in RLS:
+   * the recycle bin and restore run under the same database role as ordinary
+   * reads, so a row-level policy that hid `deleted_at IS NOT NULL` would also
+   * hide the recycle bin and silently turn restore into a zero-row UPDATE.
+   * See the header of 0007_resource_soft_delete.sql.
+   */
+  private activeOnly(): SQLWrapper {
+    return isNull(resources.deletedAt);
+  }
+
+  /**
+   * Derive a safe LOCAL file name from a STORED cover path.
+   *
+   * This is the one place where a stored path is turned into a local filesystem
+   * path (`join(<assets dir>, fileName)`), so it is exactly where traversal must
+   * be stopped: a stored value ending in `..` would otherwise make `join()` climb
+   * out of the covers directory. `isPathTraversalSafe` rejects the ascent
+   * primitive, and `sanitizeFileName` reduces whatever remains to a single safe
+   * component — the two checks answer different questions and both are needed.
+   */
+  private coverFileNameFrom(storedPath: string, index: number): string {
+    if (!isPathTraversalSafe(storedPath)) {
+      throw new BadRequestException('封面文件路径非法');
+    }
+    const lastSegment = storedPath.split(/[\\/]+/).pop() ?? '';
+    const sanitized = sanitizeFileName(lastSegment);
+    return sanitized === FALLBACK_FILENAME ? `cover-${index}.jpg` : sanitized;
   }
 
   // ========== 权限校验 ==========
@@ -420,7 +548,11 @@ export class ResourcesService {
 
     const isAdmin = await this.isAdminTeacher(currentTeacherId);
 
-    const conditions = [];
+    // Soft delete is excluded for EVERY caller, administrators included: a deleted
+    // resource belongs to the recycle bin, not to the normal listing. Without this
+    // line a deleted resource would still appear in search, in the subject page
+    // and in the dashboard counts.
+    const conditions = [this.activeOnly()];
 
     // 科目权限过滤：非管理员只能看有权限的科目
     if (!isAdmin) {
@@ -613,7 +745,8 @@ export class ResourcesService {
     const pageSize = params.pageSize ?? 20;
     const offset = (page - 1) * pageSize;
 
-    const conditions = [];
+    // Public/guest listing: published AND not soft-deleted.
+    const conditions = [this.activeOnly()];
 
     if (params.program) {
       conditions.push(eq(resources.program, params.program));
@@ -715,7 +848,13 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(and(eq(resources.id, id), eq(resources.status, 'published')))
+      .where(
+        and(
+          eq(resources.id, id),
+          eq(resources.status, 'published'),
+          this.activeOnly(),
+        ),
+      )
       .limit(1);
 
     if (rows.length === 0) {
@@ -755,6 +894,29 @@ export class ResourcesService {
     };
   }
 
+  /**
+   * Guest / unauthenticated download — CLOSED, on purpose.
+   *
+   * This was the SECOND copy of the old download-URL builder (the other being
+   * `getDownloadUrl()` below). Both produced
+   *
+   *     /api/__platform__/storage/download?bucket=<bucket>&path=<path>
+   *
+   * which hands the caller the object's location inside the private bucket and
+   * never expires. That is precisely the vulnerability phase 6 removes, so this
+   * method can no longer mint it.
+   *
+   * It also CANNOT mint the replacement: a download token is bound to a
+   * `teacherId`, and this entry point has no caller identity by construction.
+   * The honest outcome is to refuse — loudly and with an audit row — rather than
+   * to fall back to an unauthenticated URL, which is what "no caller" used to
+   * mean. Guest access must authenticate and use `GET /api/files/download`.
+   *
+   * NOTE (scope): this method currently has NO caller in the codebase — no route
+   * ever exposed it. It is kept (rather than deleted) so the public read-only API
+   * surface stays visible, and so a future guest mode has to confront this
+   * decision instead of silently re-introducing a permanent link.
+   */
   async getPublicDownloadUrl(
     id: string,
     ip?: string,
@@ -762,25 +924,34 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(and(eq(resources.id, id), eq(resources.status, 'published')))
+      .where(
+        and(
+          eq(resources.id, id),
+          eq(resources.status, 'published'),
+          this.activeOnly(),
+        ),
+      )
       .limit(1);
 
-    if (rows.length === 0) {
-      throw new NotFoundException('资源不存在');
-    }
-
     const resource = rows[0];
-
-    if (!resource.fileBucketId || !resource.filePath) {
-      throw new NotFoundException('资源文件不存在');
+    if (resource) {
+      await this.logAudit({
+        action: 'resource_download_denied',
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        ipAddress: ip,
+        errorMessage: '未登录的公开下载通道已关闭',
+        detail: '公共下载入口不再签发无账号绑定、无有效期的链接',
+      });
     }
 
-    const downloadUrl = `/api/__platform__/storage/download?bucket=${resource.fileBucketId}&path=${encodeURIComponent(resource.filePath)}`;
-
-    return {
-      downloadUrl,
-      fileName: resource.fileName ?? 'download',
-    };
+    throw new ForbiddenException(
+      '未登录的公开下载通道已关闭：下载必须通过登录后的签名链接 ' +
+        '（GET /api/files/download），该链接与账号绑定且短时有效。',
+    );
   }
 
   async getPublicStorybookCoverStream(
@@ -791,7 +962,13 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(and(eq(resources.id, resourceId), eq(resources.status, 'published')))
+      .where(
+        and(
+          eq(resources.id, resourceId),
+          eq(resources.status, 'published'),
+          this.activeOnly(),
+        ),
+      )
       .limit(1);
 
     if (rows.length === 0) {
@@ -818,7 +995,7 @@ export class ResourcesService {
       throw new NotFoundException('封面文件路径不存在');
     }
 
-    const fileName = filePath.split('/').pop() || `cover-${index}.jpg`;
+    const fileName = this.coverFileNameFrom(filePath, index);
 
     const possiblePaths = [
       join(__dirname, '../../../assets/prek-english-covers/', fileName),
@@ -857,7 +1034,9 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(eq(resources.id, id))
+      // A soft-deleted resource is 404 here, even for its uploader and for
+      // administrators: it exists only in the recycle bin.
+      .where(and(eq(resources.id, id), this.activeOnly()))
       .limit(1);
 
     if (rows.length === 0) {
@@ -1058,7 +1237,9 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(eq(resources.id, id))
+      // Editing a deleted resource is refused: restore it first, so the edit is
+      // visible and the audit trail reads in the order things actually happened.
+      .where(and(eq(resources.id, id), this.activeOnly()))
       .limit(1);
 
     if (rows.length === 0) {
@@ -1150,8 +1331,22 @@ export class ResourcesService {
     }
   }
 
-  // ========== 删除资源 ==========
+  // ========== 删除资源（回收站 / 软删除） ==========
 
+  /**
+   * Move a resource to the recycle bin (SOFT delete).
+   *
+   * HISTORY: this used to run `delete from resources where id = $1`. A hard
+   * delete from a UI button is unrecoverable: one mis-click destroyed the row,
+   * the audit log recorded that it happened but not what it contained, and the
+   * file in object storage was orphaned. The platform's own permission catalog
+   * already described the intended behaviour (`resource.delete` = "将资源移入回收站
+   * （软删除）"), so the permission checks and the audit entry are unchanged and
+   * only the mechanism moved from DELETE to UPDATE.
+   *
+   * The retention window is stored ON THE ROW (`purge_after`) so that changing the
+   * policy later cannot retroactively change the fate of rows already in the bin.
+   */
   async deleteResource(
     id: string,
     currentTeacherId: string,
@@ -1160,7 +1355,7 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(eq(resources.id, id))
+      .where(and(eq(resources.id, id), this.activeOnly()))
       .limit(1);
 
     if (rows.length === 0) {
@@ -1175,27 +1370,465 @@ export class ResourcesService {
       throw new ForbiddenException('只有上传者本人或管理员可以删除资源');
     }
 
+    const retentionDays = resourceRetentionDays();
+    const deletedAt = new Date();
+    const purgeAfter = new Date(deletedAt.getTime() + retentionDays * 24 * 60 * 60 * 1000);
+
+    let affected = 0;
     try {
-      await this.db.delete(resources).where(eq(resources.id, id));
-
-      const teacherInfo = await this.getTeacherById(currentTeacherId);
-
-      await this.logAudit({
-        action: 'resource_edit',
-        teacherId: currentTeacherId,
-        teacherName: teacherInfo?.name,
-        resourceId: resource.id,
-        resourceTitle: resource.title,
-        program: resource.program,
-        subject: resource.subject,
-        success: true,
-        ipAddress: ip,
-        detail: '删除资源',
-      });
+      const updated = await this.db
+        .update(resources)
+        .set({ deletedAt, deletedBy: currentTeacherId, purgeAfter })
+        // `activeOnly()` in the predicate makes this the atomic guard against a
+        // double delete: the second UPDATE matches no row, so a resource can not
+        // be pushed to the back of the retention queue by a repeated click.
+        .where(and(eq(resources.id, id), this.activeOnly()))
+        .returning({ id: resources.id });
+      affected = updated.length;
     } catch (error) {
       this.logger.error(`deleteResource failed: ${(error as Error).message}`);
       throw error;
     }
+
+    if (affected === 0) {
+      throw new BadRequestException('资源已在回收站中');
+    }
+
+    const teacherInfo = await this.getTeacherById(currentTeacherId);
+    await this.logAudit({
+      action: 'resource_delete',
+      teacherId: currentTeacherId,
+      teacherName: teacherInfo?.name,
+      resourceId: resource.id,
+      resourceTitle: resource.title,
+      program: resource.program,
+      subject: resource.subject,
+      success: true,
+      ipAddress: ip,
+      detail:
+        `移入回收站（软删除），保留 ${retentionDays} 天，` +
+        `purge_after=${purgeAfter.toISOString()}。可用 POST /api/resources/:id/restore 恢复`,
+    });
+  }
+
+  /**
+   * Restore a resource from the recycle bin.
+   *
+   * Permission mirrors delete: the uploader or an administrator (business admin
+   * or super_admin). The purge window is deliberately NOT re-checked here: if the
+   * row still exists, restoring it loses nothing, whereas refusing would destroy
+   * the teacher's work because a sweep had not run yet.
+   */
+  async restoreResource(
+    id: string,
+    currentTeacherId: string,
+    ip?: string,
+  ): Promise<void> {
+    const rows = await this.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.id, id), isNotNull(resources.deletedAt)))
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new NotFoundException('资源不在回收站中');
+    }
+
+    const resource = rows[0];
+    const isAdmin = await this.isRecycleBinAdmin(currentTeacherId);
+    const isUploader = resource.uploaderId === currentTeacherId;
+
+    if (!isAdmin && !isUploader) {
+      await this.logAudit({
+        action: 'permission_denied',
+        teacherId: currentTeacherId,
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        errorMessage: '无权从回收站恢复该资源',
+        ipAddress: ip,
+      });
+      throw new ForbiddenException('只有上传者本人或管理员可以从回收站恢复资源');
+    }
+
+    const updated = await this.db
+      .update(resources)
+      .set({ deletedAt: null, deletedBy: null, purgeAfter: null })
+      .where(and(eq(resources.id, id), isNotNull(resources.deletedAt)))
+      .returning({ id: resources.id });
+
+    if (updated.length === 0) {
+      throw new NotFoundException('资源不在回收站中');
+    }
+
+    const teacherInfo = await this.getTeacherById(currentTeacherId);
+    await this.logAudit({
+      action: 'resource_restore',
+      teacherId: currentTeacherId,
+      teacherName: teacherInfo?.name,
+      resourceId: resource.id,
+      resourceTitle: resource.title,
+      program: resource.program,
+      subject: resource.subject,
+      success: true,
+      ipAddress: ip,
+      detail:
+        `从回收站恢复（原删除时间 ` +
+        `${resource.deletedAt ? new Date(resource.deletedAt).toISOString() : '未知'}）`,
+    });
+  }
+
+  /**
+   * The recycle bin.
+   *
+   * Administrator-only, and NOT subject-scoped: a resource that has been deleted
+   * has left the normal curriculum tree, so "which subjects may I see" no longer
+   * describes who should be able to restore it. The route additionally requires
+   * the `resource.restore` permission.
+   */
+  async listDeletedResources(
+    params: { page?: number; pageSize?: number } = {},
+  ): Promise<ResourceListResponse> {
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 20;
+    const offset = (page - 1) * pageSize;
+    const whereClause = isNotNull(resources.deletedAt);
+
+    try {
+      const countResult = await this.db
+        .select({ value: count() })
+        .from(resources)
+        .where(whereClause);
+      const total = countResult[0]?.value ?? 0;
+
+      const items = await this.db
+        .select()
+        .from(resources)
+        .where(whereClause)
+        // Newest deletion first: the most recent mistake is the one being looked for.
+        .orderBy(desc(resources.deletedAt))
+        .limit(pageSize)
+        .offset(offset);
+
+      const teacherIds = new Set<string>();
+      for (const item of items) {
+        if (item.uploaderId) teacherIds.add(item.uploaderId);
+        if (item.deletedBy) teacherIds.add(item.deletedBy);
+        if (item.reviewerId) teacherIds.add(item.reviewerId);
+      }
+
+      const teacherMap = new Map<string, string>();
+      if (teacherIds.size > 0) {
+        const teacherRows = await this.db
+          .select({ id: teachers.id, name: teachers.name })
+          .from(teachers)
+          .where(inArray(teachers.id, [...teacherIds]));
+        for (const t of teacherRows) {
+          teacherMap.set(t.id, t.name);
+        }
+      }
+
+      const resultItems: Resource[] = items.map((item) => ({
+        id: item.id,
+        title: item.title,
+        titleEn: item.titleEn ?? undefined,
+        program: item.program as ProgramCode,
+        subject: item.subject,
+        subSubject: item.subSubject ?? undefined,
+        folderType: item.folderType as Resource['folderType'],
+        semester: item.semester ?? undefined,
+        weekNumber: item.weekNumber ?? undefined,
+        theme: item.theme ?? undefined,
+        description: item.description ?? undefined,
+        fileName: item.fileName ?? undefined,
+        fileSize: item.fileSize ?? undefined,
+        fileType: item.fileType ?? undefined,
+        version: item.version,
+        status: item.status as Resource['status'],
+        uploaderId: item.uploaderId,
+        uploaderName: teacherMap.get(item.uploaderId) ?? '未知教师',
+        reviewerId: item.reviewerId ?? undefined,
+        reviewerName: item.reviewerId ? teacherMap.get(item.reviewerId) : undefined,
+        reviewComment: item.reviewComment ?? undefined,
+        reviewedAt: item.reviewedAt ? new Date(item.reviewedAt).toISOString() : undefined,
+        createdAt: new Date(item.createdAt).toISOString(),
+        updatedAt: new Date(item.updatedAt).toISOString(),
+        // Recycle-bin-only fields. Present so the UI can show "who deleted it and
+        // when it disappears for good" without a second request.
+        deletedAt: item.deletedAt ? new Date(item.deletedAt).toISOString() : undefined,
+        deletedByName: item.deletedBy ? teacherMap.get(item.deletedBy) : undefined,
+        purgeAfter: item.purgeAfter ? new Date(item.purgeAfter).toISOString() : undefined,
+      }));
+
+      return { items: resultItems, total, page, pageSize };
+    } catch (error) {
+      this.logger.error(`listDeletedResources failed: ${(error as Error).message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Permanently remove recycle-bin rows whose retention window has elapsed.
+   *
+   * DELIBERATELY NOT EXPOSED OVER HTTP. It is destructive and irreversible, and a
+   * destructive retention sweep must not be triggerable by a request — not even
+   * one holding `resource.purge`. This repository has no scheduler, so this method
+   * is the seam an operator (or a future cron/scheduled task) calls; it is
+   * reachable through the service, not through a route.
+   *
+   * WHAT IT DOES NOT DO: it does not delete the object from platform storage.
+   * There is no usable object-store integration in this environment (see
+   * /api/files/download), so a purged row's file becomes an orphaned object in the
+   * bucket. That is recorded in the audit detail rather than hidden.
+   *
+   * `now` is injectable so the retention boundary is testable.
+   */
+  async purgeExpiredResources(
+    now: Date = new Date(),
+    options: { dryRun?: boolean; batchSize?: number } = {},
+  ): Promise<{ purged: number; resourceIds: string[]; dryRun: boolean }> {
+    const batchSize = Math.min(Math.max(options.batchSize ?? 500, 1), 5000);
+    const dryRun = options.dryRun === true;
+
+    const rows = await this.db
+      .select({
+        id: resources.id,
+        title: resources.title,
+        program: resources.program,
+        subject: resources.subject,
+        fileBucketId: resources.fileBucketId,
+        filePath: resources.filePath,
+        purgeAfter: resources.purgeAfter,
+      })
+      .from(resources)
+      .where(
+        and(
+          isNotNull(resources.deletedAt),
+          isNotNull(resources.purgeAfter),
+          lte(resources.purgeAfter, now),
+        ),
+      )
+      .orderBy(resources.purgeAfter)
+      .limit(batchSize);
+
+    const resourceIds = rows.map((r) => r.id);
+    if (dryRun || resourceIds.length === 0) {
+      return { purged: 0, resourceIds, dryRun };
+    }
+
+    await this.db.delete(resources).where(inArray(resources.id, resourceIds));
+
+    for (const row of rows) {
+      await this.logAudit({
+        action: 'resource_purge',
+        resourceId: row.id,
+        resourceTitle: row.title,
+        program: row.program,
+        subject: row.subject,
+        success: true,
+        detail:
+          `保留期已过（purge_after=${row.purgeAfter ? new Date(row.purgeAfter).toISOString() : '未知'}），` +
+          '记录已永久删除' +
+          (row.fileBucketId && row.filePath
+            ? '；⚠ 对象存储中的文件未删除（本环境无可用存储集成），已变为孤儿对象'
+            : ''),
+      });
+    }
+
+    this.logger.warn(
+      `purgeExpiredResources: permanently deleted ${resourceIds.length} resource(s) past retention`,
+    );
+    return { purged: resourceIds.length, resourceIds, dryRun: false };
+  }
+
+  // ========== 文件元数据登记（服务端校验边界） ==========
+
+  /**
+   * Register a file against an existing resource, validating BEFORE persisting.
+   *
+   * WHY A SEPARATE STEP: the client uploads straight to platform storage and only
+   * metadata reaches the backend, so this is the one place where the server can
+   * refuse a file. Nothing is written unless the name, the extension, the declared
+   * MIME type, the size AND the real leading bytes all agree.
+   *
+   * HONEST LIMITATION (stated, not hidden): the `head` bytes are supplied by the
+   * caller. When the caller is the browser that also performed the upload, they are
+   * a client assertion — the check then proves only that the client can produce
+   * consistent magic bytes, not that the stored object matches them. Making it
+   * authoritative requires reading the bytes server-side (upload through the
+   * server, or re-read the stored object after upload), which needs the platform
+   * object-store integration that is not reachable in this environment. Until
+   * then this endpoint must be called by a TRUSTED upload path.
+   *
+   * Both outcomes are audited: a rejection is a security event worth keeping.
+   */
+  async registerFile(
+    resourceId: string,
+    currentTeacherId: string,
+    input: {
+      fileName: string;
+      mimeType: string;
+      sizeBytes: number;
+      head: string;
+      fileBucketId: string;
+      filePath: string;
+    },
+    ip?: string,
+  ): Promise<RegisteredFile> {
+    const rows = await this.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.id, resourceId), this.activeOnly()))
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new NotFoundException('资源不存在');
+    }
+
+    const resource = rows[0];
+    const isAdmin = await this.isAdminTeacher(currentTeacherId);
+    const isUploader = resource.uploaderId === currentTeacherId;
+
+    if (!isAdmin && !isUploader) {
+      await this.logAudit({
+        action: 'permission_denied',
+        teacherId: currentTeacherId,
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        errorMessage: '无权登记该资源的文件',
+        ipAddress: ip,
+      });
+      throw new ForbiddenException('只有上传者本人或管理员可以登记资源文件');
+    }
+
+    // --- validation, BEFORE anything is written -----------------------------
+    const head = this.decodeHeadBytes(input.head);
+    const validation = validateUpload({
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+      head,
+    });
+
+    // NOTE the explicit `=== false`: this tsconfig runs with `strict: false`, and
+    // a NEGATED truthiness check does not narrow a boolean-literal discriminated
+    // union under that setting (verified with tsc against these options).
+    if (validation.ok === false) {
+      await this.logAudit({
+        action: 'file_validation_rejected',
+        teacherId: currentTeacherId,
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        ipAddress: ip,
+        errorMessage: validation.message,
+        detail:
+          `登记文件被拒绝：code=${validation.code} ` +
+          `fileName=${JSON.stringify(input.fileName)} mime=${JSON.stringify(input.mimeType)} ` +
+          `size=${String(input.sizeBytes)}`,
+      });
+      throw new BadRequestException(`文件校验失败：${validation.message}`);
+    }
+
+    if (!isPathTraversalSafe(input.filePath)) {
+      await this.logAudit({
+        action: 'file_validation_rejected',
+        teacherId: currentTeacherId,
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        ipAddress: ip,
+        errorMessage: '文件路径非法（疑似路径穿越）',
+        detail: `code=PATH_TRAVERSAL filePath=${JSON.stringify(input.filePath)}`,
+      });
+      throw new BadRequestException('文件存储路径非法');
+    }
+
+    if (!this.isSafeBucketId(input.fileBucketId)) {
+      await this.logAudit({
+        action: 'file_validation_rejected',
+        teacherId: currentTeacherId,
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        ipAddress: ip,
+        errorMessage: '存储 bucket 标识非法',
+        detail: `code=INVALID_BUCKET bucket=${JSON.stringify(input.fileBucketId)}`,
+      });
+      throw new BadRequestException('存储 bucket 标识非法');
+    }
+
+    // --- persist the SANITISED name and the NORMALISED mime type ------------
+    const updated = await this.db
+      .update(resources)
+      .set({
+        fileName: validation.fileName,
+        fileSize: validation.sizeBytes,
+        fileType: validation.mimeType,
+        fileBucketId: input.fileBucketId,
+        filePath: input.filePath,
+      })
+      .where(and(eq(resources.id, resourceId), this.activeOnly()))
+      .returning({ id: resources.id, fileName: resources.fileName });
+
+    if (updated.length === 0) {
+      throw new NotFoundException('资源不存在');
+    }
+
+    const teacherInfo = await this.getTeacherById(currentTeacherId);
+    await this.logAudit({
+      action: 'resource_file_register',
+      teacherId: currentTeacherId,
+      teacherName: teacherInfo?.name,
+      resourceId: resource.id,
+      resourceTitle: resource.title,
+      program: resource.program,
+      subject: resource.subject,
+      success: true,
+      ipAddress: ip,
+      detail:
+        `文件登记通过：name=${validation.fileName} type=${validation.mimeType} ` +
+        `detected=${validation.kind} size=${validation.sizeBytes} bucket=${input.fileBucketId}`,
+    });
+
+    return {
+      resourceId: resource.id,
+      fileName: validation.fileName,
+      mimeType: validation.mimeType,
+      sizeBytes: validation.sizeBytes,
+      detectedKind: validation.kind,
+      fileBucketId: input.fileBucketId,
+      filePath: input.filePath,
+    };
+  }
+
+  /**
+   * Decode the caller-supplied base64 head.
+   *
+   * Only the first bytes are ever needed, so an oversized or malformed value is
+   * truncated / treated as absent rather than trusted: `validateUpload` then
+   * refuses with MAGIC_BYTES_MISSING instead of validating a value the caller
+   * padded into looking like something else.
+   */
+  private decodeHeadBytes(raw: string): Buffer {
+    if (typeof raw !== 'string' || raw.length === 0) return Buffer.alloc(0);
+    const normalized = raw.replace(/[\s]+/g, '');
+    if (normalized.length === 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) {
+      return Buffer.alloc(0);
+    }
+    const decoded = Buffer.from(normalized, 'base64');
+    return decoded.length > MAX_HEAD_BYTES ? decoded.subarray(0, MAX_HEAD_BYTES) : decoded;
   }
 
   // ========== 提交审核 ==========
@@ -1208,7 +1841,7 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(eq(resources.id, id))
+      .where(and(eq(resources.id, id), this.activeOnly()))
       .limit(1);
 
     if (rows.length === 0) {
@@ -1289,7 +1922,9 @@ export class ResourcesService {
     const pageSize = params.pageSize ?? 20;
     const offset = (page - 1) * pageSize;
 
-    const conditions = [eq(resources.uploaderId, currentTeacherId)];
+    // "My resources" hides what I deleted too: the recycle bin is the single
+    // place that shows deleted rows.
+    const conditions = [eq(resources.uploaderId, currentTeacherId), this.activeOnly()];
     if (params.status) {
       conditions.push(eq(resources.status, params.status));
     }
@@ -1374,15 +2009,47 @@ export class ResourcesService {
 
   // ========== 下载资源 ==========
 
-  async getDownloadUrl(
+  /**
+   * Is a bucket id safe to interpolate into a storage request?
+   *
+   * Bucket ids are opaque platform identifiers, so this is a shape check, not a
+   * charset allowlist: it rejects the characters that would let a stored value
+   * change the request's structure (separators, control characters) and anything
+   * longer than the column that holds it.
+   */
+  private isSafeBucketId(bucketId: unknown): bucketId is string {
+    return (
+      typeof bucketId === 'string' &&
+      bucketId.length > 0 &&
+      bucketId.length <= 100 &&
+      // eslint-disable-next-line no-control-regex
+      !/[\u0000-\u001f\u007f-\u009f/\\]/.test(bucketId) &&
+      !bucketId.includes('..')
+    );
+  }
+
+  /**
+   * Authorise a download and return ONLY what the download path needs.
+   *
+   * This is the SINGLE implementation of the download authorization rules, shared
+   * by both former copies of the URL builder (`getDownloadUrl` and
+   * `getPublicDownloadUrl`) and by the `/api/files/download` endpoint that
+   * consumes the token. Two copies of a permission check is two chances for them
+   * to disagree, and the weaker one wins.
+   *
+   * Every denial writes an audit row (preserved behaviour); success does NOT —
+   * the caller audits what it actually did (minted a link / served bytes), which
+   * keeps the two events distinguishable in the log.
+   */
+  async authorizeDownload(
     id: string,
     currentTeacherId: string,
     ip?: string,
-  ): Promise<{ downloadUrl: string; fileName: string }> {
+  ): Promise<DownloadableResource> {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(eq(resources.id, id))
+      .where(and(eq(resources.id, id), this.activeOnly()))
       .limit(1);
 
     if (rows.length === 0) {
@@ -1448,27 +2115,96 @@ export class ResourcesService {
       throw new NotFoundException('资源文件不存在');
     }
 
-    const teacherInfo = await this.getTeacherById(currentTeacherId);
+    // A stored path is input like any other. Traversal is refused here rather
+    // than passed to the storage layer, and the bucket id is shape-checked.
+    if (!isPathTraversalSafe(resource.filePath) || !this.isSafeBucketId(resource.fileBucketId)) {
+      await this.logAudit({
+        action: 'resource_download_denied',
+        teacherId: currentTeacherId,
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        errorMessage: '存储路径或 bucket 非法',
+        ipAddress: ip,
+        detail: '路径穿越或 bucket 形状校验未通过',
+      });
+      throw new BadRequestException('资源文件路径非法');
+    }
 
+    return {
+      id: resource.id,
+      title: resource.title,
+      program: resource.program,
+      subject: resource.subject,
+      subSubject: resource.subSubject ?? undefined,
+      uploaderId: resource.uploaderId,
+      // Sanitised on READ as well as on write: rows stored before this phase may
+      // hold a hostile name, and the value ends up in a Content-Disposition header.
+      fileName: sanitizeFileName(resource.fileName ?? 'download'),
+      fileBucketId: resource.fileBucketId,
+      filePath: resource.filePath,
+    };
+  }
+
+  /**
+   * Mint the signed, caller-bound, short-lived download URL.
+   *
+   * The URL never contains the bucket or the object path: it contains an
+   * HMAC-signed payload naming the resource and the caller. Verification happens
+   * at `GET /api/files/download`, which also requires a session whose teacher id
+   * equals the one in the token.
+   */
+  private buildSignedDownloadUrl(resourceId: string, teacherId: string): string {
+    const configError = downloadTokenConfigurationError();
+    if (configError) {
+      // Fail CLOSED and loudly. There is no fallback URL: the previous
+      // implementation's fallback WAS the vulnerability.
+      this.logger.error(`download link cannot be signed: ${configError}`);
+      throw new ServiceUnavailableException(
+        '下载链接签名密钥不可用，暂时无法签发下载链接。' +
+          '请检查环境变量 DOWNLOAD_TOKEN_SECRET（openssl rand -base64 32）。',
+      );
+    }
+    const ttlSeconds = downloadTokenTtlSeconds();
+    const token = signDownloadToken({ resourceId, teacherId, ttlSeconds });
+    return `/api/files/download?token=${encodeURIComponent(token)}`;
+  }
+
+  async getDownloadUrl(
+    id: string,
+    currentTeacherId: string,
+    ip?: string,
+  ): Promise<{ downloadUrl: string; fileName: string }> {
+    const target = await this.authorizeDownload(id, currentTeacherId, ip);
+
+    const teacherInfo = await this.getTeacherById(currentTeacherId);
+    const ttlSeconds = downloadTokenTtlSeconds();
+
+    // NOTE ON WHAT IS *NOT* WIRED HERE:
+    // this audits that a LINK was issued. The bytes are served (or refused) later
+    // by GET /api/files/download, which audits the serving attempt separately and
+    // is where the platform object-store integration
+    // (@lark-apaas/file-service / dataloom) is actually called. In this
+    // environment that call cannot succeed, and it fails with an explicit 503
+    // naming the missing integration — never with a silent success.
     await this.logAudit({
       action: 'resource_download',
       teacherId: currentTeacherId,
       teacherName: teacherInfo?.name,
-      resourceId: resource.id,
-      resourceTitle: resource.title,
-      program: resource.program,
-      subject: resource.subject,
+      resourceId: target.id,
+      resourceTitle: target.title,
+      program: target.program,
+      subject: target.subject,
       success: true,
       ipAddress: ip,
+      detail: `已签发临时下载链接（有效期 ${ttlSeconds} 秒，绑定当前账号）`,
     });
 
-    // TODO: 接入真实 dataloom FileService 获取临时下载链接
-    // 目前返回占位 URL
-    const downloadUrl = `/api/__platform__/storage/download?bucket=${resource.fileBucketId}&path=${encodeURIComponent(resource.filePath)}`;
-
     return {
-      downloadUrl,
-      fileName: resource.fileName ?? 'download',
+      downloadUrl: this.buildSignedDownloadUrl(target.id, currentTeacherId),
+      fileName: target.fileName,
     };
   }
 
@@ -1481,7 +2217,7 @@ export class ResourcesService {
     const rows = await this.db
       .select()
       .from(resources)
-      .where(eq(resources.id, resourceId))
+      .where(and(eq(resources.id, resourceId), this.activeOnly()))
       .limit(1);
 
     if (rows.length === 0) {
@@ -1525,7 +2261,7 @@ export class ResourcesService {
       throw new NotFoundException('封面文件路径不存在');
     }
 
-    const fileName = filePath.split('/').pop() || `cover-${index}.jpg`;
+    const fileName = this.coverFileNameFrom(filePath, index);
 
     const possiblePaths = [
       join(__dirname, '../../../assets/prek-english-covers/', fileName),

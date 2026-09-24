@@ -304,6 +304,12 @@ export const translations = {
     'audit.action.teacher_update': '教师更新',
     'audit.action.session_expired': '会话过期',
     'audit.action.storybook_cover_view': '绘本封面查看',
+    'audit.action.resource_delete': '资源移入回收站',
+    'audit.action.resource_restore': '从回收站恢复',
+    'audit.action.resource_purge': '资源永久删除',
+    'audit.action.resource_file_register': '登记资源文件',
+    'audit.action.resource_download_failed': '下载失败',
+    'audit.action.file_validation_rejected': '文件校验拒绝',
 
     // Dashboard
     'dashboard.welcome': '欢迎来到清澜山幼儿园课程资源平台',
@@ -643,6 +649,12 @@ export const translations = {
     'audit.action.teacher_update': 'Teacher Update',
     'audit.action.session_expired': 'Session Expired',
     'audit.action.storybook_cover_view': 'Storybook Cover View',
+    'audit.action.resource_delete': 'Resource Moved To Recycle Bin',
+    'audit.action.resource_restore': 'Resource Restored',
+    'audit.action.resource_purge': 'Resource Purged Permanently',
+    'audit.action.resource_file_register': 'Resource File Registered',
+    'audit.action.resource_download_failed': 'Download Failed',
+    'audit.action.file_validation_rejected': 'File Validation Rejected',
 
     // Dashboard
     'dashboard.welcome': 'Welcome to Qinglan Kindergarten Curriculum Platform',

@@ -228,6 +228,16 @@ export const resources = pgTable("resources", {
   reviewerId: uuid("reviewer_id"),
   reviewComment: text("review_comment"),
   reviewedAt: customTimestamptz("reviewed_at", { precision: 3 }),
+  // Added by migration 0007 (resource recycle bin / soft delete).
+  // NOTE: `deleted_at IS NULL` is the ACTIVE-row predicate. Every read path
+  // (list / search / review / dashboard / my-resources) must carry it; RLS
+  // deliberately does not, because the recycle bin and restore share the same
+  // database role as ordinary reads. See 0007_resource_soft_delete.sql.
+  // `deletedAt` and `purgeAfter` are paired by the DB check constraint
+  // `resources_soft_delete_pairing` — both set, or both NULL.
+  deletedAt: customTimestamptz("deleted_at", { precision: 3 }),
+  deletedBy: uuid("deleted_by"),
+  purgeAfter: customTimestamptz("purge_after", { precision: 3 }),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)
@@ -244,6 +254,14 @@ export const resources = pgTable("resources", {
   index("idx_resources_uploader").on(table.uploaderId),
   index("idx_resources_folder").on(table.program, table.subject, table.folderType),
   index("idx_resources_semester_week").on(table.semester, table.weekNumber),
+  // Partial indexes from migration 0007. The deleted set is small, so indexing
+  // only it keeps the recycle bin and the purge scan cheap; the active set gets
+  // its own partial indexes because every ordinary query now filters on
+  // `deleted_at IS NULL`.
+  index("idx_resources_deleted_at").on(table.deletedAt).where(sql`${table.deletedAt} is not null`),
+  index("idx_resources_purge_after").on(table.purgeAfter).where(sql`${table.deletedAt} is not null`),
+  index("idx_resources_active_status").on(table.status, table.createdAt).where(sql`${table.deletedAt} is null`),
+  index("idx_resources_active_uploader").on(table.uploaderId, table.createdAt).where(sql`${table.deletedAt} is null`),
   foreignKey({
     columns: [table.uploaderId],
     foreignColumns: [teachers.id],
@@ -254,6 +272,11 @@ export const resources = pgTable("resources", {
     foreignColumns: [teachers.id],
     name: "resources_reviewer_id_fkey",
   }),
+  foreignKey({
+    columns: [table.deletedBy],
+    foreignColumns: [teachers.id],
+    name: "resources_deleted_by_fkey",
+  }).onDelete("set null"),
 ]);
 
 export const subjectPermissions = pgTable("subject_permissions", {

@@ -63,7 +63,18 @@ export type AuditAction =
   | 'mfa_failed'
   | 'mfa_recovery_used'
   | 'mfa_recovery_regenerated'
-  | 'mfa_challenge_issued';
+  | 'mfa_challenge_issued'
+  // --- 文件校验与回收站（phase 6 / migration 0007） -------------------------
+  // Every action added here MUST also get a badge colour in
+  // client/src/pages/AuditLog/AuditLogPage.tsx (that map is exhaustive over this
+  // union, so omitting one is a type error) and an `audit.action.*` key for BOTH
+  // zh and en in client/src/i18n/translations.ts.
+  | 'resource_delete'
+  | 'resource_restore'
+  | 'resource_purge'
+  | 'resource_file_register'
+  | 'resource_download_failed'
+  | 'file_validation_rejected';
 
 // === 教师 ===
 export interface Teacher {
@@ -147,6 +158,14 @@ export interface Resource {
   reviewedAt?: string;
   createdAt: string;
   updatedAt: string;
+  // --- 回收站（migration 0007）---------------------------------------------
+  // Set only on rows returned by the recycle bin. `deletedAt` is the soft-delete
+  // marker: a row with it set is invisible to every normal listing and is
+  // restored with POST /api/resources/:id/restore. `purgeAfter` is when the row
+  // becomes eligible for permanent deletion.
+  deletedAt?: string;
+  deletedByName?: string;
+  purgeAfter?: string;
 }
 
 export interface ResourceListResponse {

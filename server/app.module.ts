@@ -9,6 +9,7 @@ import { ViewModule } from './modules/view/view.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { TeachersModule } from './modules/teachers/teachers.module';
 import { ResourcesModule } from './modules/resources/resources.module';
+import { FilesModule } from './modules/files/files.module';
 import { ReviewModule } from './modules/review/review.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
@@ -24,6 +25,10 @@ import { HealthModule } from './modules/health/health.module';
     AuthModule,
     TeachersModule,
     ResourcesModule,
+    // FilesModule owns GET /api/files/download, which consumes the signed download
+    // tokens minted by ResourcesService.getDownloadUrl(). It MUST be listed before
+    // ViewModule, whose catch-all route would otherwise swallow the path.
+    FilesModule,
     ReviewModule,
     AuditModule,
     CurriculumModule,

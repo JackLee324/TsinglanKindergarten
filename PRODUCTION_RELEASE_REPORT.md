@@ -114,6 +114,7 @@ deleted files: 0
   hardening                pass=10 fail=0
   mfa                      pass=36 fail=0
   security-headers         pass=20 fail=0
+  files-http               pass=61 fail=0
 
   ✅ 全部通过
 ```
@@ -134,7 +135,7 @@ deleted files: 0
 | HTTP 鉴权套件 | 24/24 |
 | HTTP 加固套件 | 10/10 |
 | HTTP MFA 套件 | 36/36 |
-| **合计 HTTP 断言** | **90 条，全部通过** |
+| **合计 HTTP 断言** | **151 条，全部通过** |
 
 ### 3.2 契约门禁不是空转 `[已证实]`
 

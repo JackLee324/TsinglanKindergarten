@@ -18,6 +18,8 @@ import {
   CreateResourceDto,
   UpdateResourceDto,
   ResourceIdParamDto,
+  RecycleBinQueryDto,
+  RegisterFileDto,
 } from './resources.dto';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
 import { RequirePermission } from '@server/modules/authz/permission.decorator';
@@ -87,6 +89,30 @@ export class ResourcesController {
     });
   }
 
+  /**
+   * The recycle bin.
+   *
+   * MUST BE DECLARED BEFORE `@Get(':id')`, for exactly the reason documented on
+   * `mine` above: Express matches in declaration order, so a literal path placed
+   * after `:id` is never reached — the request arrives as id='recycle-bin', which
+   * is not a UUID and would surface as a 404/500 instead of the bin.
+   *
+   * Gated by `resource.restore` (held by principal / curriculum_director /
+   * super_admin by default): being able to SEE the bin and being able to empty it
+   * are the same capability, and the service performs no second filter — the
+   * decorator is the gate.
+   */
+  @Get('recycle-bin')
+  @RequirePermission('resource.restore')
+  async listRecycleBin(
+    @Query() query: RecycleBinQueryDto,
+  ) {
+    return this.resourcesService.listDeletedResources({
+      page: query.page,
+      pageSize: query.pageSize,
+    });
+  }
+
   @Get(':id')
   @RequirePermission('resource.view')
   async getResource(
@@ -136,6 +162,58 @@ export class ResourcesController {
     const ip = this.getIp(req);
     await this.resourcesService.deleteResource(params.id, teacher.id, ip);
     return { success: true };
+  }
+
+  /**
+   * Restore a resource from the recycle bin.
+   *
+   * POST (not PATCH/DELETE) because it is a state-changing command on a
+   * sub-resource with its own audit action (`resource_restore`), mirroring
+   * `:id/submit-review`.
+   */
+  @Post(':id/restore')
+  @RequirePermission('resource.restore')
+  async restoreResource(
+    @CurrentTeacher() teacher: AuthUser,
+    @Param() params: ResourceIdParamDto,
+    @Req() req: Request,
+  ) {
+    const ip = this.getIp(req);
+    await this.resourcesService.restoreResource(params.id, teacher.id, ip);
+    return { success: true };
+  }
+
+  /**
+   * Register the file that was uploaded for a resource.
+   *
+   * This is the SERVER-SIDE validation boundary for uploads: name sanitisation,
+   * the extension/MIME allowlist, the size ceiling and the magic-byte consistency
+   * check all run here BEFORE anything is written, and both the rejection and the
+   * success are audited. `storage.upload` is required in addition to
+   * `resource.update` because attaching bytes is an upload, not a metadata edit.
+   */
+  @Post(':id/file')
+  @RequirePermission('resource.update', 'storage.upload')
+  async registerFile(
+    @CurrentTeacher() teacher: AuthUser,
+    @Param() params: ResourceIdParamDto,
+    @Body() dto: RegisterFileDto,
+    @Req() req: Request,
+  ) {
+    const ip = this.getIp(req);
+    return this.resourcesService.registerFile(
+      params.id,
+      teacher.id,
+      {
+        fileName: dto.fileName,
+        mimeType: dto.mimeType,
+        sizeBytes: dto.sizeBytes,
+        head: dto.head,
+        fileBucketId: dto.fileBucketId,
+        filePath: dto.filePath,
+      },
+      ip,
+    );
   }
 
   @Post(':id/submit-review')

@@ -65,6 +65,7 @@ run "authz-http"       node scripts/verify-authz-http.mjs
 run "hardening"        node scripts/verify-hardening.mjs
 run "mfa"              node scripts/verify-mfa.mjs
 run "security-headers"    node scripts/verify-security-headers.mjs
+run "files-http"          node scripts/verify-files-http.mjs
 
 echo
 if [ "$FAILED" -eq 0 ]; then

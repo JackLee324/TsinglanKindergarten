@@ -182,24 +182,39 @@ export function sanitizeFileName(rawName: unknown): string {
 }
 
 /**
- * Is a STORED path (e.g. `resources.file_path`) free of traversal?
+ * Is a STORED path (e.g. `resources.file_path`) suitable for use as a
+ * bucket-RELATIVE object key?
  *
  * Rejects:
  *   * NUL and control characters;
  *   * any `..` segment — the actual ascent primitive, in both separator styles;
  *   * any `.` segment (normalisation bait);
+ *   * a leading `/` or `\`, i.e. an ABSOLUTE path (see the note below);
  *   * a Windows drive prefix (`C:\…`) or UNC prefix (`\\server\share`);
  *   * a leading `~` (home expansion);
  *   * percent-encoded traversal (`%2e%2e`, `%2f`, `%5c`), so a value that is
  *     decoded later cannot turn into traversal after the check;
+ *   * a trailing separator (an empty basename surprises every consumer);
  *   * empty input and anything longer than the column that stores it.
  *
- * A single LEADING `/` is allowed on purpose: the platform's object keys are
- * absolute-looking (its own `parseFilePath()` strips leading slashes), so
- * rejecting them would refuse legitimate stored paths. A leading slash alone
- * cannot ascend — ascent requires a `..` segment, which is rejected. Consumers
- * that build a LOCAL filesystem path from a stored value must still strip the
- * leading slash and must never pass it to `path.resolve()`.
+ * WHY ABSOLUTE PATHS ARE REJECTED
+ * A leading separator makes the first segment empty and the path absolute. The
+ * asymmetry that settled this: `//etc/passwd` was already rejected while
+ * `/etc/passwd` was accepted, which is an oversight, not a policy. More
+ * importantly, the guarantee this function exists to provide depends on HOW the
+ * consumer combines the value: `path.join('/bucket', '/etc/passwd')` stays inside
+ * the bucket, but `path.resolve('/bucket', '/etc/passwd')` yields `/etc/passwd`.
+ * A stored `file_path` arrives from the client through the file-registration
+ * endpoint, so the value is bucket-relative BY CONTRACT and an absolute one is
+ * refused rather than silently normalised.
+ *
+ * CONSEQUENCE, STATED HONESTLY: the platform's own `parseFilePath()` strips
+ * leading slashes before use, so it is conceivable that a row written by an older
+ * direct-to-storage flow holds an absolute-looking key. Such a row is now refused
+ * (HTTP 400 at download time, with an audit row) instead of being served. That is
+ * a deliberate fail-closed choice on a security check; the fix is to re-register
+ * the file through `POST /api/resources/:id/file`, which normalises the name and
+ * re-validates the bytes.
  */
 export function isPathTraversalSafe(storedPath: unknown): boolean {
   if (typeof storedPath !== 'string') return false;
@@ -212,6 +227,12 @@ export function isPathTraversalSafe(storedPath: unknown): boolean {
   if (/%2e|%2f|%5c/i.test(storedPath)) return false;
 
   const segments = storedPath.split(/[\\/]+/);
+  // A leading separator makes the first segment empty, i.e. the value is
+  // ABSOLUTE. Rejected on purpose — see "WHY ABSOLUTE PATHS ARE REJECTED" above:
+  // the guarantee this function provides depends on how a consumer combines the
+  // value, and path.resolve('/bucket', '/etc/passwd') discards the bucket where
+  // path.join does not.
+  if (segments[0] === '') return false;
   if (segments.some((s) => s === '..' || s === '.')) return false;
   // A trailing separator would make the last segment empty; reject it so callers
   // cannot be surprised by an empty basename.
@@ -314,8 +335,22 @@ export function sniffMagicBytes(head: Buffer | Uint8Array | string): DetectedKin
   // Anything that a browser would parse as HTML/SVG. Checked as a *prefix* of the
   // visible content so a renamed `.txt` full of markup is caught: the extension
   // and the declared MIME are claims, the bytes are not.
-  const prefix = buf
-    .subarray(0, 512)
+  //
+  // The UTF-8 BOM must be stripped at the BYTE level, before decoding. Decoding
+  // latin1 first turns the three BOM bytes into the characters 'ï»¿', which no
+  // amount of string-level '\uFEFF' stripping removes — that is exactly how a
+  // BOM-prefixed HTML file was classified as `text` and accepted as a .txt
+  // (found by this module's own test suite, then confirmed as a real bypass).
+  let markupProbe = buf.subarray(0, 512);
+  if (
+    markupProbe.length >= 3 &&
+    markupProbe[0] === 0xef &&
+    markupProbe[1] === 0xbb &&
+    markupProbe[2] === 0xbf
+  ) {
+    markupProbe = markupProbe.subarray(3);
+  }
+  const prefix = markupProbe
     .toString('latin1')
     .replace(/^\uFEFF/, '')
     .replace(/^[\s\u0000]+/, '')
