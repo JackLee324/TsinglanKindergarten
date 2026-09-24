@@ -382,6 +382,22 @@ try {
   });
   check('a zero-byte upload is REJECTED', emptyFile.status, 400);
 
+  // A LEADING-SLASH path is the platform's real key shape. The strict predicate
+  // refuses it, so the registration boundary must NORMALISE it (as the platform's
+  // own parseFilePath does) and persist the bucket-relative form — never store the
+  // absolute one. This is the check that keeps the strict predicate from breaking
+  // real platform data.
+  const absolutePath = await req('POST', `/api/resources/${resourceId}/file`, {
+    fileName: 'cover.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 4096,
+    head: PDF_HEAD_B64,
+    fileBucketId: 'bucket_probe_0001',
+    filePath: '/curriculum-resources/probe/cover.pdf',
+  });
+  check('a leading-slash platform path is ACCEPTED (normalised, not rejected)', absolutePath.status, 201);
+  check('  -> the stored path is bucket-relative', absolutePath.data?.filePath, 'curriculum-resources/probe/cover.pdf');
+
   const badBucket = await req('POST', `/api/resources/${resourceId}/file`, {
     fileName: 'ok.pdf',
     mimeType: 'application/pdf',
@@ -392,8 +408,9 @@ try {
   });
   check('a malformed bucket id is REJECTED', badBucket.status, 400);
 
-  // Every rejection above must have left the ONE valid file untouched.
-  check('rejections left the previously registered file intact', (await req('GET', `/api/resources/${resourceId}/download`)).status, 302);
+  // Everything above either succeeded with a normalised path or was rejected, and
+  // the resource still downloads.
+  check('the resource still downloads after the validation matrix', (await req('GET', `/api/resources/${resourceId}/download`)).status, 302);
 
   const auditRows = await sql`
     select action, success from audit_logs

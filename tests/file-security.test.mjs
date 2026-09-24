@@ -45,6 +45,7 @@ const downloadToken = await import(
 const {
   sanitizeFileName,
   isPathTraversalSafe,
+  toBucketRelativePath,
   sniffMagicBytes,
   normalizeMimeType,
   validateUpload,
@@ -195,30 +196,35 @@ describe('sanitizeFileName', () => {
 // 2. stored-path traversal
 // ===========================================================================
 describe('isPathTraversalSafe', () => {
-  test('accepts a single leading slash — the platform\'s real object-key shape', () => {
-    // VERIFIED AGAINST REAL DATA, not assumed: the seeded curriculum stores
-    // covers as "/curriculum-resources/prek-english-covers/<id>.jpg"
-    // (server/database/seed-curriculum.sql) and the storybook-cover endpoint feeds
-    // exactly that value through this function. An earlier revision rejected a
-    // leading slash outright, which turned every Pre-K English cover into a 400.
-    assert.equal(isPathTraversalSafe('/curriculum-resources/prek-english-covers/1876907126277273.jpg'), true);
-    assert.equal(isPathTraversalSafe('/uploads/2024/lesson.pdf'), true);
-    assert.equal(isPathTraversalSafe('uploads/2024/lesson.pdf'), true);
-    assert.equal(isPathTraversalSafe('uploads/2026/plan.pdf'), true);
-    assert.equal(isPathTraversalSafe('bucket_123/教案.pdf'), true);
-  });
-
-  test('the leading slash never buys an escape — traversal behind it is still rejected', () => {
+  test('rejects ABSOLUTE paths (leading / or \\) — a stored file_path must be bucket-relative', () => {
+    // A predicate that answers "is this value safe?" cannot know whether a future
+    // consumer will `path.join` (leading separator harmless) or `path.resolve`
+    // (leading separator DISCARDS the bucket). It must therefore never answer
+    // `true` for an absolute value. The old behaviour accepted `/etc/passwd`
+    // while rejecting `//etc/passwd` — an inconsistency, not a policy.
+    assert.equal(isPathTraversalSafe('/etc/passwd'), false);
+    assert.equal(isPathTraversalSafe('/etc/shadow'), false);
+    assert.equal(isPathTraversalSafe('\\etc\\passwd'), false);
+    assert.equal(isPathTraversalSafe('/'), false);
+    assert.equal(isPathTraversalSafe('\\'), false);
+    assert.equal(isPathTraversalSafe('/uploads/2024/lesson.pdf'), false);
+    // ...even when the traversal is hidden behind the leading separator
     assert.equal(isPathTraversalSafe('/uploads/../../etc/passwd'), false);
     assert.equal(isPathTraversalSafe('/../etc/passwd'), false);
-    assert.equal(isPathTraversalSafe('/a/./b'), false);
+  });
+
+  test('accepts ordinary bucket-relative stored paths', () => {
+    assert.equal(isPathTraversalSafe('uploads/2026/plan.pdf'), true);
+    assert.equal(isPathTraversalSafe('uploads/2024/lesson.pdf'), true);
+    assert.equal(isPathTraversalSafe('bucket_123/教案.pdf'), true);
+    assert.equal(isPathTraversalSafe('a/b.txt'), true);
   });
 
   test('rejects doubled separators, drive letters, home and UNC shapes', () => {
     assert.equal(isPathTraversalSafe('//etc/passwd'), false);
     assert.equal(isPathTraversalSafe('//host/share/x'), false);
-    assert.equal(isPathTraversalSafe('\\windows\\system32'), false);
-    assert.equal(isPathTraversalSafe('\\server\\share\\x'), false);
+    assert.equal(isPathTraversalSafe('\\\\windows\\system32'), false);
+    assert.equal(isPathTraversalSafe('\\\\server\\share\\x'), false);
     assert.equal(isPathTraversalSafe('C:\\Windows\\system32'), false);
     assert.equal(isPathTraversalSafe('~/x.pdf'), false);
   });
@@ -244,6 +250,56 @@ describe('isPathTraversalSafe', () => {
     assert.equal(isPathTraversalSafe(undefined), false);
     assert.equal(isPathTraversalSafe(42), false);
     assert.equal(isPathTraversalSafe(`a/${'b'.repeat(600)}`), false);
+  });
+});
+
+// ===========================================================================
+// 2b. the platform's real key shape, normalised EXPLICITLY
+// ===========================================================================
+describe('toBucketRelativePath', () => {
+  test('normalises the real leading-slash platform key (evidence, not theory)', () => {
+    // VERIFIED REAL DATA: the seeded curriculum stores storybook covers as
+    //   "filePath": "/curriculum-resources/prek-english-covers/1876907126277273.jpg"
+    // (server/database/seed-curriculum.sql) and the storybook-cover endpoint feeds
+    // exactly that value through this module. Strict validation + an explicit
+    // normaliser keeps that working; loosening the predicate would have made it
+    // accept /etc/passwd too.
+    assert.equal(
+      toBucketRelativePath('/curriculum-resources/prek-english-covers/1876907126277273.jpg'),
+      'curriculum-resources/prek-english-covers/1876907126277273.jpg',
+    );
+    assert.equal(
+      isPathTraversalSafe(toBucketRelativePath('/curriculum-resources/prek-english-covers/1876907126277273.jpg')),
+      true,
+    );
+    // A single leading backslash is the Windows spelling of the same shape.
+    assert.equal(toBucketRelativePath('\\uploads\\x.pdf'), 'uploads\\x.pdf');
+  });
+
+  test('returns null for anything that cannot be made safe', () => {
+    for (const bad of [
+      '/', '\\', '', '   ',
+      '/etc/../etc/passwd',
+      '../../etc/passwd',
+      '//etc/passwd',          // doubled separator is NOT laundered into a key
+      '\\\\host\\share\\x',
+      'C:\\Windows\\system32',
+      '~/.ssh/id_rsa',
+      'a/b/../c.pdf',
+      'uploads/%2e%2e/secret',
+      'uploads/trailing/',
+      'a\u0000b.pdf',
+    ]) {
+      assert.equal(toBucketRelativePath(bad), null, `expected null for ${JSON.stringify(bad)}`);
+    }
+    assert.equal(toBucketRelativePath(null), null);
+    assert.equal(toBucketRelativePath(7), null);
+  });
+
+  test('is idempotent on an already-normalised key', () => {
+    const once = toBucketRelativePath('/uploads/2026/plan.pdf');
+    assert.equal(once, 'uploads/2026/plan.pdf');
+    assert.equal(toBucketRelativePath(once), 'uploads/2026/plan.pdf');
   });
 });
 

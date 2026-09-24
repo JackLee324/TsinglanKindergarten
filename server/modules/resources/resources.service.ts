@@ -54,7 +54,10 @@ import {
 } from '@server/common/crypto/download-token';
 import {
   validateUpload,
-  isPathTraversalSafe,
+  // Every stored/consumed path goes through the normaliser, which itself applies
+  // the strict bucket-relative predicate — so this module never calls
+  // `isPathTraversalSafe` directly (two spellings of the same rule is how they drift).
+  toBucketRelativePath,
   sanitizeFileName,
   FALLBACK_FILENAME,
 } from '@server/common/files/file-validation';
@@ -178,15 +181,24 @@ export class ResourcesService {
    * This is the one place where a stored path is turned into a local filesystem
    * path (`join(<assets dir>, fileName)`), so it is exactly where traversal must
    * be stopped: a stored value ending in `..` would otherwise make `join()` climb
-   * out of the covers directory. `isPathTraversalSafe` rejects the ascent
-   * primitive, and `sanitizeFileName` reduces whatever remains to a single safe
-   * component — the two checks answer different questions and both are needed.
+   * out of the covers directory.
+   *
+   * THREE steps, because each answers a different question:
+   *   1. `toBucketRelativePath` normalises the platform's real key shape
+   *      (`/curriculum-resources/…`, leading slash — see seed-curriculum.sql) into
+   *      the bucket-relative form and refuses anything that cannot be made safe
+   *      (traversal, UNC, drive letters, `~`, doubled separators);
+   *   2. the BASENAME is taken, so no separator can survive into the join;
+   *   3. `sanitizeFileName` reduces what remains to one safe component.
+   * Skipping (1) would reject every real Pre-K English cover; skipping (2) or (3)
+   * would leave the filesystem join trusting a client-influenced value.
    */
   private coverFileNameFrom(storedPath: string, index: number): string {
-    if (!isPathTraversalSafe(storedPath)) {
+    const bucketRelative = toBucketRelativePath(storedPath);
+    if (bucketRelative === null) {
       throw new BadRequestException('封面文件路径非法');
     }
-    const lastSegment = storedPath.split(/[\\/]+/).pop() ?? '';
+    const lastSegment = bucketRelative.split(/[\\/]+/).pop() ?? '';
     const sanitized = sanitizeFileName(lastSegment);
     return sanitized === FALLBACK_FILENAME ? `cover-${index}.jpg` : sanitized;
   }
@@ -1737,7 +1749,14 @@ export class ResourcesService {
       throw new BadRequestException(`文件校验失败：${validation.message}`);
     }
 
-    if (!isPathTraversalSafe(input.filePath)) {
+    // The incoming path is a CLIENT value; the stored one must be a
+    // bucket-relative key. Normalise first (the platform's own keys are
+    // absolute-looking), then require the normalised form to pass the strict
+    // predicate — and persist THAT, never the raw input. New rows are therefore
+    // canonical, while legacy rows written by the old direct-to-storage flow are
+    // handled at read time by the same normaliser (see `authorizeDownload`).
+    const bucketRelativePath = toBucketRelativePath(input.filePath);
+    if (bucketRelativePath === null) {
       await this.logAudit({
         action: 'file_validation_rejected',
         teacherId: currentTeacherId,
@@ -1747,7 +1766,7 @@ export class ResourcesService {
         subject: resource.subject,
         success: false,
         ipAddress: ip,
-        errorMessage: '文件路径非法（疑似路径穿越）',
+        errorMessage: '文件路径非法（疑似路径穿越或绝对路径）',
         detail: `code=PATH_TRAVERSAL filePath=${JSON.stringify(input.filePath)}`,
       });
       throw new BadRequestException('文件存储路径非法');
@@ -1777,7 +1796,8 @@ export class ResourcesService {
         fileSize: validation.sizeBytes,
         fileType: validation.mimeType,
         fileBucketId: input.fileBucketId,
-        filePath: input.filePath,
+        // The NORMALISED key, not `input.filePath`.
+        filePath: bucketRelativePath,
       })
       .where(and(eq(resources.id, resourceId), this.activeOnly()))
       .returning({ id: resources.id, fileName: resources.fileName });
@@ -1809,7 +1829,7 @@ export class ResourcesService {
       sizeBytes: validation.sizeBytes,
       detectedKind: validation.kind,
       fileBucketId: input.fileBucketId,
-      filePath: input.filePath,
+      filePath: bucketRelativePath,
     };
   }
 
@@ -2115,9 +2135,13 @@ export class ResourcesService {
       throw new NotFoundException('资源文件不存在');
     }
 
-    // A stored path is input like any other. Traversal is refused here rather
-    // than passed to the storage layer, and the bucket id is shape-checked.
-    if (!isPathTraversalSafe(resource.filePath) || !this.isSafeBucketId(resource.fileBucketId)) {
+    // A stored path is input like any other. It is NORMALISED first (the platform
+    // writes absolute-looking keys, and rows predating this phase may hold one),
+    // then required to pass the strict bucket-relative predicate; the normalised
+    // value is what the storage client receives, so the raw stored string never
+    // reaches it. The bucket id is shape-checked at the same time.
+    const bucketRelativePath = toBucketRelativePath(resource.filePath);
+    if (bucketRelativePath === null || !this.isSafeBucketId(resource.fileBucketId)) {
       await this.logAudit({
         action: 'resource_download_denied',
         teacherId: currentTeacherId,
@@ -2128,7 +2152,7 @@ export class ResourcesService {
         success: false,
         errorMessage: '存储路径或 bucket 非法',
         ipAddress: ip,
-        detail: '路径穿越或 bucket 形状校验未通过',
+        detail: '路径穿越、绝对路径或 bucket 形状校验未通过',
       });
       throw new BadRequestException('资源文件路径非法');
     }
@@ -2144,7 +2168,8 @@ export class ResourcesService {
       // hold a hostile name, and the value ends up in a Content-Disposition header.
       fileName: sanitizeFileName(resource.fileName ?? 'download'),
       fileBucketId: resource.fileBucketId,
-      filePath: resource.filePath,
+      // Bucket-RELATIVE, guaranteed by the check above.
+      filePath: bucketRelativePath,
     };
   }
 

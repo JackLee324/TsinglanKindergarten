@@ -94,25 +94,49 @@ check('empty file REJECTED', V.validateUpload({ fileName:'e.pdf', mimeType:'appl
 const big = V.validateUpload({ fileName:'b.pdf', mimeType:'application/pdf', sizeBytes:V.HARD_CAP_UPLOAD_BYTES + 1, head:PDF });
 check('oversize REJECTED', big.ok, false);
 
-console.log('\n=== E. stored-path traversal ===');
+console.log('\n=== E. stored-path traversal / absolute paths ===');
 check('"../../etc/passwd" flagged', V.isPathTraversalSafe('../../etc/passwd'), false);
-// CORRECTED ASSERTION. This originally expected `false` and was WRONG.
-// A leading '/' is the PLATFORM'S NORMAL SHAPE for a bucket path, verified
-// against real data in this repository:
-//   "/curriculum-resources/prek-english-covers/1876907126277273.jpg"
-// The path is handed to a bucket-scoped storage client and resolved against the
-// bucket root, never the filesystem, so an absolute-looking key is harmless.
-// What must be rejected is traversal, UNC, drive letters, '~' and encoded
-// traversal - all of which are checked below. The module's own test suite
-// (tests/file-security.test.mjs) caught this wrong assumption.
-check(
-  'leading-slash bucket path allowed (real platform shape)',
-  V.isPathTraversalSafe('/curriculum-resources/prek-covers/1876907126277273.jpg'),
-  true,
-);
+// CONTRACT (revised after adversarial review of this very probe): the PREDICATE
+// answers "is this value safe?", and it can not know whether a caller will
+// `path.join` (leading separator harmless) or `path.resolve` (leading separator
+// DISCARDS the bucket). It therefore rejects EVERY absolute value:
+//   isPathTraversalSafe('/etc/passwd')            === false
+//   isPathTraversalSafe('/curriculum-resources/…') === false
+// An earlier revision of this probe asserted the opposite for the second one, on
+// the (correct) observation that the platform's real keys look absolute. That
+// observation is honoured — but by an explicit normaliser, not by loosening the
+// predicate, so the real shape still works where it is actually consumed:
+//   toBucketRelativePath('/curriculum-resources/prek-covers/1876907126277273.jpg')
+//     -> 'curriculum-resources/prek-english-covers/1876907126277273.jpg' (accepted)
+// ResourcesService.authorizeDownload()/coverFileNameFrom()/registerFile() all go
+// through it, and the live suite asserts the real seeded cover still renders.
+check('"/etc/passwd" flagged (absolute)', V.isPathTraversalSafe('/etc/passwd'), false);
+check('"\\etc\\passwd" flagged (absolute)', V.isPathTraversalSafe('\\etc\\passwd'), false);
+check('"/" flagged', V.isPathTraversalSafe('/'), false);
 check('UNC-style "//host/share" rejected', V.isPathTraversalSafe('//etc/passwd'), false);
 check('"a/b/../c.pdf" flagged', V.isPathTraversalSafe('a/b/../c.pdf'), false);
 check('"uploads/2026/plan.pdf" allowed', V.isPathTraversalSafe('uploads/2026/plan.pdf'), true);
+
+console.log('\n=== F. real platform key shape (explicit normalisation) ===');
+const REAL_KEY = '/curriculum-resources/prek-english-covers/1876907126277273.jpg';
+check(
+  'the seeded cover key is FLAGGED by the strict predicate',
+  V.isPathTraversalSafe(REAL_KEY),
+  false,
+);
+check(
+  'toBucketRelativePath normalises it to a bucket-relative key',
+  V.toBucketRelativePath(REAL_KEY),
+  'curriculum-resources/prek-english-covers/1876907126277273.jpg',
+);
+check(
+  'the normalised key passes the predicate',
+  V.isPathTraversalSafe(V.toBucketRelativePath(REAL_KEY)),
+  true,
+);
+check('toBucketRelativePath refuses traversal', V.toBucketRelativePath('/a/../../etc/passwd'), null);
+check('toBucketRelativePath refuses UNC', V.toBucketRelativePath('//host/share/x'), null);
+check('toBucketRelativePath keeps a relative key unchanged', V.toBucketRelativePath('uploads/x.pdf'), 'uploads/x.pdf');
 
 console.log(`\n=== RESULT ===\n  pass=${pass} fail=${fail}`);
 process.exit(fail > 0 ? 1 : 0);

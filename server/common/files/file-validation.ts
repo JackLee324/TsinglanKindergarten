@@ -285,8 +285,11 @@ export function toBucketRelativePath(storedPath: unknown): string | null {
     ? storedPath.slice(1)
     : storedPath;
 
-  // A value that was only a separator (`/`, `\`) becomes empty here.
-  if (withoutOneLeadingSeparator.length === 0) return null;
+  // A value that was only a separator (`/`, `\`) becomes empty here, and a value
+  // that is only whitespace is not a usable object key either. (The PREDICATE
+  // still accepts whitespace: it answers "is this safe?", and `'   '` cannot
+  // escape anything. Requiring USABLE content is this function's job.)
+  if (withoutOneLeadingSeparator.trim().length === 0) return null;
   if (!isPathTraversalSafe(withoutOneLeadingSeparator)) return null;
 
   return withoutOneLeadingSeparator;
