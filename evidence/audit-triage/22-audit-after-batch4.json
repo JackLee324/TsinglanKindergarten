@@ -1,0 +1,1637 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "@angular-devkit/core": {
+      "name": "@angular-devkit/core",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "ajv"
+      ],
+      "effects": [
+        "@angular-devkit/schematics",
+        "@angular-devkit/schematics-cli",
+        "@nestjs/cli",
+        "@nestjs/schematics"
+      ],
+      "range": "12.0.0-next.0 - 19.2.21 || 20.0.0-next.0 - 20.3.17 || 21.0.0-next.0 - 21.1.4 || 21.2.0-next.0 - 21.2.0-rc.2",
+      "nodes": [
+        "node_modules/@angular-devkit/core"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    },
+    "@angular-devkit/schematics": {
+      "name": "@angular-devkit/schematics",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@angular-devkit/core"
+      ],
+      "effects": [],
+      "range": "12.0.0-next.0 - 19.2.21 || 20.0.0-next.0 - 20.3.17 || 21.0.0-next.0 - 21.1.4 || 21.2.0-next.0 - 21.2.0-rc.2",
+      "nodes": [
+        "node_modules/@angular-devkit/schematics"
+      ],
+      "fixAvailable": true
+    },
+    "@angular-devkit/schematics-cli": {
+      "name": "@angular-devkit/schematics-cli",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@angular-devkit/core",
+        "@angular-devkit/schematics",
+        "inquirer"
+      ],
+      "effects": [],
+      "range": "0.12.0-beta.0 - 19.2.21 || 20.0.0-next.0 - 20.3.17 || 21.0.0-next.0 - 21.1.4 || 21.2.0-next.0 - 21.2.0-rc.2",
+      "nodes": [
+        "node_modules/@angular-devkit/schematics-cli"
+      ],
+      "fixAvailable": true
+    },
+    "@hey-api/openapi-ts": {
+      "name": "@hey-api/openapi-ts",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1139367,
+          "name": "@hey-api/openapi-ts",
+          "dependency": "@hey-api/openapi-ts",
+          "title": "@hey-api/openapi-ts's `buildClientParams` template: prototype chain substitution via unknown `$<slot>___proto__` key",
+          "url": "https://github.com/advisories/GHSA-hhx9-57xq-r5rw",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-1321"
+          ],
+          "cvss": {
+            "score": 4.8,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+          },
+          "range": "<0.97.3"
+        }
+      ],
+      "effects": [
+        "@lark-apaas/hey-api-custom-client-axios",
+        "@lark-apaas/nestjs-openapi-devtools"
+      ],
+      "range": "<0.97.3",
+      "nodes": [
+        "node_modules/@hey-api/openapi-ts"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/cache-service": {
+      "name": "@lark-apaas/cache-service",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-common",
+        "@lark-apaas/nestjs-logger",
+        "@lark-apaas/nestjs-observable",
+        "@nestjs/core"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/cache-service"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/client-toolkit": {
+      "name": "@lark-apaas/client-toolkit",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@lark-apaas/observable-web"
+      ],
+      "effects": [],
+      "range": "1.1.35-alpha.0 - 1.1.35-alpha.dataloom.0 || >=1.1.37-alpha.30",
+      "nodes": [
+        "node_modules/@lark-apaas/client-toolkit"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/client-toolkit",
+        "version": "1.1.36",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/fullstack-nestjs-core": {
+      "name": "@lark-apaas/fullstack-nestjs-core",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@lark-apaas/cache-service",
+        "@lark-apaas/nestjs-authnpaas",
+        "@lark-apaas/nestjs-authzpaas",
+        "@lark-apaas/nestjs-capability",
+        "@lark-apaas/nestjs-common",
+        "@lark-apaas/nestjs-datapaas",
+        "@lark-apaas/nestjs-http-forwarder",
+        "@lark-apaas/nestjs-logger",
+        "@lark-apaas/nestjs-mcp",
+        "@lark-apaas/nestjs-observable",
+        "@lark-apaas/nestjs-openapi-devtools",
+        "@lark-apaas/nestjs-trigger",
+        "@nestjs/common",
+        "@nestjs/core",
+        "@nestjs/platform-express",
+        "@nestjs/swagger"
+      ],
+      "effects": [],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/fullstack-nestjs-core"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/hey-api-custom-client-axios": {
+      "name": "@lark-apaas/hey-api-custom-client-axios",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@hey-api/openapi-ts"
+      ],
+      "effects": [],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/hey-api-custom-client-axios"
+      ],
+      "fixAvailable": true
+    },
+    "@lark-apaas/nestjs-authnpaas": {
+      "name": "@lark-apaas/nestjs-authnpaas",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-common",
+        "@nestjs/core",
+        "@nestjs/swagger"
+      ],
+      "effects": [
+        "@lark-apaas/nestjs-authzpaas"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-authnpaas"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-authzpaas": {
+      "name": "@lark-apaas/nestjs-authzpaas",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-authnpaas",
+        "@lark-apaas/nestjs-common",
+        "@nestjs/core",
+        "@nestjs/swagger"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-authzpaas"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-capability": {
+      "name": "@lark-apaas/nestjs-capability",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-common",
+        "@nestjs/common",
+        "@nestjs/core",
+        "@nestjs/swagger"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-capability"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-common": {
+      "name": "@lark-apaas/nestjs-common",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@nestjs/common"
+      ],
+      "effects": [
+        "@lark-apaas/nestjs-authnpaas",
+        "@lark-apaas/nestjs-http-forwarder",
+        "@lark-apaas/nestjs-logger"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-common"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-datapaas": {
+      "name": "@lark-apaas/nestjs-datapaas",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-common",
+        "@lark-apaas/nestjs-observable",
+        "@nestjs/core"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-datapaas"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-http-forwarder": {
+      "name": "@lark-apaas/nestjs-http-forwarder",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-common",
+        "@nestjs/core"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-http-forwarder"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-logger": {
+      "name": "@lark-apaas/nestjs-logger",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-common",
+        "@lark-apaas/nestjs-observable",
+        "@nestjs/common",
+        "@nestjs/core"
+      ],
+      "effects": [],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-logger"
+      ],
+      "fixAvailable": true
+    },
+    "@lark-apaas/nestjs-mcp": {
+      "name": "@lark-apaas/nestjs-mcp",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@nestjs/core",
+        "@nestjs/swagger"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-mcp"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-observable": {
+      "name": "@lark-apaas/nestjs-observable",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "@lark-apaas/nestjs-common",
+        "@lark-apaas/observable",
+        "@nestjs/common",
+        "@nestjs/core"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core",
+        "@lark-apaas/nestjs-datapaas",
+        "@lark-apaas/nestjs-logger"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-observable"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-openapi-devtools": {
+      "name": "@lark-apaas/nestjs-openapi-devtools",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@hey-api/openapi-ts",
+        "@lark-apaas/hey-api-custom-client-axios",
+        "@nestjs/common",
+        "@nestjs/swagger"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-openapi-devtools"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/fullstack-nestjs-core",
+        "version": "1.1.3",
+        "isSemVerMajor": true
+      }
+    },
+    "@lark-apaas/nestjs-trigger": {
+      "name": "@lark-apaas/nestjs-trigger",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@nestjs/core",
+        "@nestjs/swagger"
+      ],
+      "effects": [],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/nestjs-trigger"
+      ],
+      "fixAvailable": true
+    },
+    "@lark-apaas/observable": {
+      "name": "@lark-apaas/observable",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/sdk-logs",
+        "@opentelemetry/sdk-node"
+      ],
+      "effects": [],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/observable"
+      ],
+      "fixAvailable": true
+    },
+    "@lark-apaas/observable-web": {
+      "name": "@lark-apaas/observable-web",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/sdk-logs"
+      ],
+      "effects": [
+        "@lark-apaas/client-toolkit"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@lark-apaas/observable-web"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/client-toolkit",
+        "version": "1.1.36",
+        "isSemVerMajor": true
+      }
+    },
+    "@nestjs/cli": {
+      "name": "@nestjs/cli",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@angular-devkit/core",
+        "@angular-devkit/schematics",
+        "@angular-devkit/schematics-cli",
+        "@nestjs/schematics",
+        "inquirer",
+        "webpack"
+      ],
+      "effects": [],
+      "range": "2.0.0-rc.1 - 11.0.16 || 12.0.0-alpha.0 - 12.0.0-alpha.9",
+      "nodes": [
+        "node_modules/@nestjs/cli"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    },
+    "@nestjs/common": {
+      "name": "@nestjs/common",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "file-type"
+      ],
+      "effects": [
+        "@lark-apaas/nestjs-common"
+      ],
+      "range": "10.4.16 - 10.4.22 || 11.0.16 - 11.1.16 || 12.0.0-alpha.0 - 12.0.0-alpha.7",
+      "nodes": [
+        "node_modules/@nestjs/common"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/common",
+        "version": "12.1.0",
+        "isSemVerMajor": true
+      }
+    },
+    "@nestjs/core": {
+      "name": "@nestjs/core",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@nestjs/platform-express",
+        {
+          "source": 1117063,
+          "name": "@nestjs/core",
+          "dependency": "@nestjs/core",
+          "title": "@nestjs/core Improperly Neutralizes Special Elements in Output Used by a Downstream Component ('Injection')",
+          "url": "https://github.com/advisories/GHSA-36xv-jgw5-4q75",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-74"
+          ],
+          "cvss": {
+            "score": 6.1,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:N/A:L"
+          },
+          "range": "<=11.1.17"
+        }
+      ],
+      "effects": [
+        "@lark-apaas/cache-service",
+        "@lark-apaas/fullstack-nestjs-core",
+        "@lark-apaas/nestjs-authnpaas",
+        "@lark-apaas/nestjs-authzpaas",
+        "@lark-apaas/nestjs-capability",
+        "@lark-apaas/nestjs-datapaas",
+        "@lark-apaas/nestjs-http-forwarder",
+        "@lark-apaas/nestjs-logger",
+        "@lark-apaas/nestjs-mcp",
+        "@lark-apaas/nestjs-observable",
+        "@lark-apaas/nestjs-trigger",
+        "@nestjs/platform-express",
+        "@nestjs/swagger"
+      ],
+      "range": "<=11.1.17",
+      "nodes": [
+        "node_modules/@nestjs/core"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/core",
+        "version": "12.1.0",
+        "isSemVerMajor": true
+      }
+    },
+    "@nestjs/platform-express": {
+      "name": "@nestjs/platform-express",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@nestjs/core"
+      ],
+      "effects": [
+        "@lark-apaas/fullstack-nestjs-core",
+        "@nestjs/core"
+      ],
+      "range": "<=11.0.0-next.4",
+      "nodes": [
+        "node_modules/@nestjs/platform-express"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/platform-express",
+        "version": "12.1.0",
+        "isSemVerMajor": true
+      }
+    },
+    "@nestjs/schematics": {
+      "name": "@nestjs/schematics",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@angular-devkit/core",
+        "@angular-devkit/schematics"
+      ],
+      "effects": [
+        "@nestjs/cli"
+      ],
+      "range": "8.0.0 - 11.0.9",
+      "nodes": [
+        "node_modules/@nestjs/schematics"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    },
+    "@nestjs/swagger": {
+      "name": "@nestjs/swagger",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@nestjs/core"
+      ],
+      "effects": [],
+      "range": "<=8.1.1 || 12.0.0-alpha.0 - 12.0.0-alpha.2",
+      "nodes": [
+        "node_modules/@nestjs/swagger"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/swagger",
+        "version": "12.0.2",
+        "isSemVerMajor": true
+      }
+    },
+    "@opentelemetry/core": {
+      "name": "@opentelemetry/core",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1153174,
+          "name": "@opentelemetry/core",
+          "dependency": "@opentelemetry/core",
+          "title": "OpenTelemetry Core: Unbounded memory allocation in W3C Baggage propagation",
+          "url": "https://github.com/advisories/GHSA-8988-4f7v-96qf",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-770"
+          ],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": "<2.8.0"
+        }
+      ],
+      "effects": [
+        "@opentelemetry/exporter-logs-otlp-grpc",
+        "@opentelemetry/exporter-logs-otlp-http",
+        "@opentelemetry/exporter-logs-otlp-proto",
+        "@opentelemetry/exporter-metrics-otlp-grpc",
+        "@opentelemetry/exporter-metrics-otlp-http",
+        "@opentelemetry/exporter-metrics-otlp-proto",
+        "@opentelemetry/exporter-prometheus",
+        "@opentelemetry/exporter-trace-otlp-grpc",
+        "@opentelemetry/exporter-trace-otlp-http",
+        "@opentelemetry/exporter-trace-otlp-proto",
+        "@opentelemetry/exporter-zipkin",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-grpc-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/propagator-b3",
+        "@opentelemetry/propagator-jaeger",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-logs",
+        "@opentelemetry/sdk-metrics",
+        "@opentelemetry/sdk-node",
+        "@opentelemetry/sdk-trace-base",
+        "@opentelemetry/sdk-trace-node"
+      ],
+      "range": "<2.8.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-logs-otlp-grpc/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-logs-otlp-http/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-logs-otlp-proto/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-grpc/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-http/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-proto/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-prometheus/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-trace-otlp-grpc/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-trace-otlp-http/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-trace-otlp-proto/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/exporter-zipkin/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/otlp-exporter-base/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/otlp-grpc-exporter-base/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/otlp-transformer/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/propagator-b3/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/propagator-jaeger/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/sdk-logs/node_modules/@opentelemetry/core",
+        "node_modules/@opentelemetry/sdk-node/node_modules/@opentelemetry/core"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/client-toolkit",
+        "version": "1.1.36",
+        "isSemVerMajor": true
+      }
+    },
+    "@opentelemetry/exporter-logs-otlp-grpc": {
+      "name": "@opentelemetry/exporter-logs-otlp-grpc",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-grpc-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/sdk-logs"
+      ],
+      "effects": [],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-logs-otlp-grpc"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-logs-otlp-http": {
+      "name": "@opentelemetry/exporter-logs-otlp-http",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/sdk-logs"
+      ],
+      "effects": [],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-logs-otlp-http"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-logs-otlp-proto": {
+      "name": "@opentelemetry/exporter-logs-otlp-proto",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-logs",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "effects": [
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-logs-otlp-proto"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-metrics-otlp-grpc": {
+      "name": "@opentelemetry/exporter-metrics-otlp-grpc",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/exporter-metrics-otlp-http",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-grpc-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-metrics"
+      ],
+      "effects": [
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-metrics-otlp-grpc"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-metrics-otlp-http": {
+      "name": "@opentelemetry/exporter-metrics-otlp-http",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-metrics"
+      ],
+      "effects": [],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-metrics-otlp-http"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-metrics-otlp-proto": {
+      "name": "@opentelemetry/exporter-metrics-otlp-proto",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/exporter-metrics-otlp-http",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-metrics"
+      ],
+      "effects": [],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-metrics-otlp-proto"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-prometheus": {
+      "name": "@opentelemetry/exporter-prometheus",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-metrics",
+        {
+          "source": 1120253,
+          "name": "@opentelemetry/exporter-prometheus",
+          "dependency": "@opentelemetry/exporter-prometheus",
+          "title": "Prometheus exporter process crash via malformed HTTP request",
+          "url": "https://github.com/advisories/GHSA-q7rr-3cgh-j5r3",
+          "severity": "high",
+          "cwe": [
+            "CWE-755"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<0.217.0"
+        }
+      ],
+      "effects": [
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-prometheus"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-trace-otlp-grpc": {
+      "name": "@opentelemetry/exporter-trace-otlp-grpc",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-grpc-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "effects": [],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-trace-otlp-grpc"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-trace-otlp-http": {
+      "name": "@opentelemetry/exporter-trace-otlp-http",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "effects": [
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-trace-otlp-http"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-trace-otlp-proto": {
+      "name": "@opentelemetry/exporter-trace-otlp-proto",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "effects": [],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-trace-otlp-proto"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/exporter-zipkin": {
+      "name": "@opentelemetry/exporter-zipkin",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "effects": [],
+      "range": "<=2.7.1",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-zipkin"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/otlp-exporter-base": {
+      "name": "@opentelemetry/otlp-exporter-base",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-transformer"
+      ],
+      "effects": [
+        "@opentelemetry/exporter-logs-otlp-grpc",
+        "@opentelemetry/exporter-metrics-otlp-grpc",
+        "@opentelemetry/exporter-metrics-otlp-http",
+        "@opentelemetry/exporter-metrics-otlp-proto",
+        "@opentelemetry/exporter-trace-otlp-grpc",
+        "@opentelemetry/exporter-trace-otlp-http",
+        "@opentelemetry/exporter-trace-otlp-proto"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/otlp-exporter-base"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/otlp-grpc-exporter-base": {
+      "name": "@opentelemetry/otlp-grpc-exporter-base",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-transformer"
+      ],
+      "effects": [
+        "@opentelemetry/exporter-metrics-otlp-grpc",
+        "@opentelemetry/exporter-trace-otlp-grpc"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/otlp-grpc-exporter-base"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/otlp-transformer": {
+      "name": "@opentelemetry/otlp-transformer",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-logs",
+        "@opentelemetry/sdk-metrics",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "effects": [
+        "@opentelemetry/exporter-metrics-otlp-grpc",
+        "@opentelemetry/exporter-metrics-otlp-http",
+        "@opentelemetry/exporter-metrics-otlp-proto",
+        "@opentelemetry/exporter-trace-otlp-grpc",
+        "@opentelemetry/exporter-trace-otlp-http",
+        "@opentelemetry/exporter-trace-otlp-proto",
+        "@opentelemetry/otlp-exporter-base",
+        "@opentelemetry/otlp-grpc-exporter-base"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/otlp-transformer"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/propagator-b3": {
+      "name": "@opentelemetry/propagator-b3",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core"
+      ],
+      "effects": [
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "0.19.1-alpha.11 - 2.7.1",
+      "nodes": [
+        "node_modules/@opentelemetry/propagator-b3"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/propagator-jaeger": {
+      "name": "@opentelemetry/propagator-jaeger",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        {
+          "source": 1124011,
+          "name": "@opentelemetry/propagator-jaeger",
+          "dependency": "@opentelemetry/propagator-jaeger",
+          "title": "OpenTelemetry JavaScript: Denial of service in `JaegerPropagator` via unhandled exception on a malformed header",
+          "url": "https://github.com/advisories/GHSA-45rx-2jwx-cxfr",
+          "severity": "high",
+          "cwe": [
+            "CWE-248"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<2.9.0"
+        }
+      ],
+      "effects": [
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=2.8.0",
+      "nodes": [
+        "node_modules/@opentelemetry/propagator-jaeger"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/resources": {
+      "name": "@opentelemetry/resources",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core"
+      ],
+      "effects": [
+        "@opentelemetry/exporter-prometheus",
+        "@opentelemetry/exporter-zipkin"
+      ],
+      "range": "0.8.0 - 2.7.1",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-logs-otlp-proto/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-grpc/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-http/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-proto/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-prometheus/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-trace-otlp-grpc/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-trace-otlp-http/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-trace-otlp-proto/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/exporter-zipkin/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/otlp-transformer/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/sdk-logs/node_modules/@opentelemetry/resources",
+        "node_modules/@opentelemetry/sdk-node/node_modules/@opentelemetry/resources"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/sdk-logs": {
+      "name": "@opentelemetry/sdk-logs",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/resources"
+      ],
+      "effects": [
+        "@lark-apaas/observable-web",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=0.218.0",
+      "nodes": [
+        "node_modules/@opentelemetry/sdk-logs"
+      ],
+      "fixAvailable": {
+        "name": "@lark-apaas/client-toolkit",
+        "version": "1.1.36",
+        "isSemVerMajor": true
+      }
+    },
+    "@opentelemetry/sdk-metrics": {
+      "name": "@opentelemetry/sdk-metrics",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/resources"
+      ],
+      "effects": [
+        "@opentelemetry/exporter-metrics-otlp-grpc",
+        "@opentelemetry/exporter-metrics-otlp-http",
+        "@opentelemetry/exporter-metrics-otlp-proto",
+        "@opentelemetry/exporter-prometheus",
+        "@opentelemetry/otlp-transformer",
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=2.7.1",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-metrics-otlp-grpc/node_modules/@opentelemetry/sdk-metrics",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-http/node_modules/@opentelemetry/sdk-metrics",
+        "node_modules/@opentelemetry/exporter-metrics-otlp-proto/node_modules/@opentelemetry/sdk-metrics",
+        "node_modules/@opentelemetry/exporter-prometheus/node_modules/@opentelemetry/sdk-metrics",
+        "node_modules/@opentelemetry/otlp-transformer/node_modules/@opentelemetry/sdk-metrics",
+        "node_modules/@opentelemetry/sdk-node/node_modules/@opentelemetry/sdk-metrics"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/sdk-node": {
+      "name": "@opentelemetry/sdk-node",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/exporter-logs-otlp-grpc",
+        "@opentelemetry/exporter-logs-otlp-http",
+        "@opentelemetry/exporter-logs-otlp-proto",
+        "@opentelemetry/exporter-metrics-otlp-grpc",
+        "@opentelemetry/exporter-metrics-otlp-http",
+        "@opentelemetry/exporter-metrics-otlp-proto",
+        "@opentelemetry/exporter-prometheus",
+        "@opentelemetry/exporter-trace-otlp-grpc",
+        "@opentelemetry/exporter-trace-otlp-http",
+        "@opentelemetry/exporter-trace-otlp-proto",
+        "@opentelemetry/exporter-zipkin",
+        "@opentelemetry/propagator-b3",
+        "@opentelemetry/propagator-jaeger",
+        "@opentelemetry/resources",
+        "@opentelemetry/sdk-logs",
+        "@opentelemetry/sdk-metrics",
+        "@opentelemetry/sdk-trace-base",
+        "@opentelemetry/sdk-trace-node",
+        {
+          "source": 1120252,
+          "name": "@opentelemetry/sdk-node",
+          "dependency": "@opentelemetry/sdk-node",
+          "title": "Prometheus exporter process crash via malformed HTTP request",
+          "url": "https://github.com/advisories/GHSA-q7rr-3cgh-j5r3",
+          "severity": "high",
+          "cwe": [
+            "CWE-755"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<0.217.0"
+        }
+      ],
+      "effects": [
+        "@lark-apaas/observable"
+      ],
+      "range": "<=0.219.0",
+      "nodes": [
+        "node_modules/@opentelemetry/sdk-node"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/sdk-trace-base": {
+      "name": "@opentelemetry/sdk-trace-base",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/resources"
+      ],
+      "effects": [
+        "@opentelemetry/exporter-zipkin",
+        "@opentelemetry/sdk-node"
+      ],
+      "range": "<=2.7.1",
+      "nodes": [
+        "node_modules/@opentelemetry/exporter-logs-otlp-proto/node_modules/@opentelemetry/sdk-trace-base",
+        "node_modules/@opentelemetry/exporter-trace-otlp-grpc/node_modules/@opentelemetry/sdk-trace-base",
+        "node_modules/@opentelemetry/exporter-trace-otlp-http/node_modules/@opentelemetry/sdk-trace-base",
+        "node_modules/@opentelemetry/exporter-trace-otlp-proto/node_modules/@opentelemetry/sdk-trace-base",
+        "node_modules/@opentelemetry/exporter-zipkin/node_modules/@opentelemetry/sdk-trace-base",
+        "node_modules/@opentelemetry/otlp-transformer/node_modules/@opentelemetry/sdk-trace-base",
+        "node_modules/@opentelemetry/sdk-node/node_modules/@opentelemetry/sdk-trace-base"
+      ],
+      "fixAvailable": true
+    },
+    "@opentelemetry/sdk-trace-node": {
+      "name": "@opentelemetry/sdk-trace-node",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@opentelemetry/core",
+        "@opentelemetry/sdk-trace-base"
+      ],
+      "effects": [],
+      "range": "<=2.7.1",
+      "nodes": [
+        "node_modules/@opentelemetry/sdk-node/node_modules/@opentelemetry/sdk-trace-node"
+      ],
+      "fixAvailable": true
+    },
+    "@swc/cli": {
+      "name": "@swc/cli",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@xhmikosr/bin-wrapper"
+      ],
+      "effects": [],
+      "range": "0.5.1 - 0.8.0",
+      "nodes": [
+        "node_modules/@swc/cli"
+      ],
+      "fixAvailable": {
+        "name": "@swc/cli",
+        "version": "0.8.1",
+        "isSemVerMajor": true
+      }
+    },
+    "@xhmikosr/archive-type": {
+      "name": "@xhmikosr/archive-type",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "file-type"
+      ],
+      "effects": [
+        "@xhmikosr/downloader"
+      ],
+      "range": "6.0.0 - 7.1.0",
+      "nodes": [
+        "node_modules/@xhmikosr/archive-type"
+      ],
+      "fixAvailable": {
+        "name": "@swc/cli",
+        "version": "0.8.1",
+        "isSemVerMajor": true
+      }
+    },
+    "@xhmikosr/bin-wrapper": {
+      "name": "@xhmikosr/bin-wrapper",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@xhmikosr/downloader"
+      ],
+      "effects": [
+        "@swc/cli"
+      ],
+      "range": "10.0.0 - 13.2.0",
+      "nodes": [
+        "node_modules/@xhmikosr/bin-wrapper"
+      ],
+      "fixAvailable": {
+        "name": "@swc/cli",
+        "version": "0.8.1",
+        "isSemVerMajor": true
+      }
+    },
+    "@xhmikosr/decompress": {
+      "name": "@xhmikosr/decompress",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@xhmikosr/decompress-tar",
+        "@xhmikosr/decompress-tarbz2",
+        "@xhmikosr/decompress-targz",
+        "@xhmikosr/decompress-unzip"
+      ],
+      "effects": [],
+      "range": "8.0.0 - 10.2.2",
+      "nodes": [
+        "node_modules/@xhmikosr/decompress"
+      ],
+      "fixAvailable": true
+    },
+    "@xhmikosr/decompress-tar": {
+      "name": "@xhmikosr/decompress-tar",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "file-type"
+      ],
+      "effects": [
+        "@xhmikosr/decompress-tarbz2",
+        "@xhmikosr/decompress-targz"
+      ],
+      "range": "6.0.0 - 8.1.0",
+      "nodes": [
+        "node_modules/@xhmikosr/decompress-tar"
+      ],
+      "fixAvailable": true
+    },
+    "@xhmikosr/decompress-tarbz2": {
+      "name": "@xhmikosr/decompress-tarbz2",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@xhmikosr/decompress-tar",
+        "file-type"
+      ],
+      "effects": [],
+      "range": "6.0.0 - 9.0.0",
+      "nodes": [
+        "node_modules/@xhmikosr/decompress-tarbz2"
+      ],
+      "fixAvailable": true
+    },
+    "@xhmikosr/decompress-targz": {
+      "name": "@xhmikosr/decompress-targz",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@xhmikosr/decompress-tar",
+        "file-type"
+      ],
+      "effects": [
+        "@xhmikosr/decompress"
+      ],
+      "range": "6.0.0 - 9.0.0",
+      "nodes": [
+        "node_modules/@xhmikosr/decompress-targz"
+      ],
+      "fixAvailable": true
+    },
+    "@xhmikosr/decompress-unzip": {
+      "name": "@xhmikosr/decompress-unzip",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "file-type"
+      ],
+      "effects": [],
+      "range": "6.0.0 - 7.1.0",
+      "nodes": [
+        "node_modules/@xhmikosr/decompress-unzip"
+      ],
+      "fixAvailable": true
+    },
+    "@xhmikosr/downloader": {
+      "name": "@xhmikosr/downloader",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        "@xhmikosr/archive-type",
+        "@xhmikosr/decompress",
+        "file-type"
+      ],
+      "effects": [
+        "@xhmikosr/bin-wrapper"
+      ],
+      "range": "10.0.0 - 10.0.1 || 12.0.0 - 15.2.0",
+      "nodes": [
+        "node_modules/@xhmikosr/downloader"
+      ],
+      "fixAvailable": {
+        "name": "@swc/cli",
+        "version": "0.8.1",
+        "isSemVerMajor": true
+      }
+    },
+    "ajv": {
+      "name": "ajv",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1113715,
+          "name": "ajv",
+          "dependency": "ajv",
+          "title": "ajv has ReDoS when using `$data` option",
+          "url": "https://github.com/advisories/GHSA-2g4f-4pwh-qvx6",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-400",
+            "CWE-1333"
+          ],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": ">=7.0.0-alpha.0 <8.18.0"
+        }
+      ],
+      "effects": [
+        "@angular-devkit/core"
+      ],
+      "range": "7.0.0-alpha.0 - 8.17.1",
+      "nodes": [
+        "node_modules/ajv"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    },
+    "external-editor": {
+      "name": "external-editor",
+      "severity": "low",
+      "isDirect": false,
+      "via": [
+        "tmp"
+      ],
+      "effects": [
+        "inquirer"
+      ],
+      "range": ">=1.1.1",
+      "nodes": [
+        "node_modules/external-editor"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    },
+    "file-type": {
+      "name": "file-type",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1114301,
+          "name": "file-type",
+          "dependency": "file-type",
+          "title": "file-type affected by infinite loop in ASF parser on malformed input with zero-size sub-header",
+          "url": "https://github.com/advisories/GHSA-5v7r-6r5c-r473",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-835"
+          ],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": ">=13.0.0 <21.3.1"
+        },
+        {
+          "source": 1114726,
+          "name": "file-type",
+          "dependency": "file-type",
+          "title": "file-type: ZIP Decompression Bomb DoS via [Content_Types].xml entry",
+          "url": "https://github.com/advisories/GHSA-j47w-4g3g-c36v",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-400",
+            "CWE-409"
+          ],
+          "cvss": {
+            "score": 5.3,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+          },
+          "range": ">=20.0.0 <=21.3.1"
+        }
+      ],
+      "effects": [
+        "@nestjs/common",
+        "@xhmikosr/archive-type",
+        "@xhmikosr/decompress-tar",
+        "@xhmikosr/decompress-tarbz2",
+        "@xhmikosr/decompress-targz",
+        "@xhmikosr/decompress-unzip",
+        "@xhmikosr/downloader"
+      ],
+      "range": "13.0.0 - 21.3.1",
+      "nodes": [
+        "node_modules/@xhmikosr/archive-type/node_modules/file-type",
+        "node_modules/@xhmikosr/decompress-tar/node_modules/file-type",
+        "node_modules/@xhmikosr/decompress-tarbz2/node_modules/file-type",
+        "node_modules/@xhmikosr/decompress-targz/node_modules/file-type",
+        "node_modules/@xhmikosr/decompress-unzip/node_modules/file-type",
+        "node_modules/@xhmikosr/downloader/node_modules/file-type",
+        "node_modules/file-type"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/common",
+        "version": "12.1.0",
+        "isSemVerMajor": true
+      }
+    },
+    "inquirer": {
+      "name": "inquirer",
+      "severity": "low",
+      "isDirect": false,
+      "via": [
+        "external-editor"
+      ],
+      "effects": [
+        "@angular-devkit/schematics-cli",
+        "@nestjs/cli"
+      ],
+      "range": "3.0.0 - 8.2.6 || 9.0.0 - 9.3.7",
+      "nodes": [
+        "node_modules/@angular-devkit/schematics-cli/node_modules/inquirer",
+        "node_modules/inquirer"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    },
+    "tmp": {
+      "name": "tmp",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1109537,
+          "name": "tmp",
+          "dependency": "tmp",
+          "title": "tmp allows arbitrary temporary file / directory write via symbolic link `dir` parameter",
+          "url": "https://github.com/advisories/GHSA-52f5-9888-hmc6",
+          "severity": "low",
+          "cwe": [
+            "CWE-59"
+          ],
+          "cvss": {
+            "score": 2.5,
+            "vectorString": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N"
+          },
+          "range": "<=0.2.3"
+        },
+        {
+          "source": 1120654,
+          "name": "tmp",
+          "dependency": "tmp",
+          "title": "tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape",
+          "url": "https://github.com/advisories/GHSA-ph9p-34f9-6g65",
+          "severity": "high",
+          "cwe": [
+            "CWE-22"
+          ],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<0.2.6"
+        }
+      ],
+      "effects": [
+        "external-editor"
+      ],
+      "range": "<=0.2.5",
+      "nodes": [
+        "node_modules/tmp"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    },
+    "uuid": {
+      "name": "uuid",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        {
+          "source": 1119441,
+          "name": "uuid",
+          "dependency": "uuid",
+          "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+          "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-787",
+            "CWE-1285"
+          ],
+          "cvss": {
+            "score": 7.5,
+            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N"
+          },
+          "range": "<11.1.1"
+        }
+      ],
+      "effects": [],
+      "range": "<11.1.1",
+      "nodes": [
+        "node_modules/uuid"
+      ],
+      "fixAvailable": {
+        "name": "uuid",
+        "version": "11.1.1",
+        "isSemVerMajor": false
+      }
+    },
+    "webpack": {
+      "name": "webpack",
+      "severity": "low",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1113041,
+          "name": "webpack",
+          "dependency": "webpack",
+          "title": "webpack buildHttp: allowedUris allow-list bypass via URL userinfo (@) leading to build-time SSRF behavior",
+          "url": "https://github.com/advisories/GHSA-8fgc-7cc6-rx7x",
+          "severity": "low",
+          "cwe": [
+            "CWE-918"
+          ],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:L/I:L/A:N"
+          },
+          "range": ">=5.49.0 <=5.104.0"
+        },
+        {
+          "source": 1113042,
+          "name": "webpack",
+          "dependency": "webpack",
+          "title": "webpack buildHttp HttpUriPlugin allowedUris bypass via HTTP redirects → SSRF + cache persistence",
+          "url": "https://github.com/advisories/GHSA-38r7-794h-5758",
+          "severity": "low",
+          "cwe": [
+            "CWE-918"
+          ],
+          "cvss": {
+            "score": 3.7,
+            "vectorString": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:L/I:L/A:N"
+          },
+          "range": ">=5.49.0 <5.104.0"
+        }
+      ],
+      "effects": [
+        "@nestjs/cli"
+      ],
+      "range": "5.49.0 - 5.104.0",
+      "nodes": [
+        "node_modules/@nestjs/cli/node_modules/webpack"
+      ],
+      "fixAvailable": {
+        "name": "@nestjs/cli",
+        "version": "12.0.6",
+        "isSemVerMajor": true
+      }
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 3,
+      "moderate": 57,
+      "high": 6,
+      "critical": 0,
+      "total": 66
+    },
+    "dependencies": {
+      "prod": 470,
+      "dev": 1035,
+      "optional": 16,
+      "peer": 74,
+      "peerOptional": 0,
+      "total": 1505
+    }
+  }
+}

@@ -51,7 +51,6 @@
     "dayjs": "^1.11.15",
     "dotenv": "^17.2.2",
     "drizzle-orm": "0.45.3",
-    "express": "4.22.3",
     "hbs": "^4.2.0",
     "reflect-metadata": "^0.1.14",
     "tslib": "^2.8.1"
@@ -155,9 +154,7 @@
     "drizzle-orm": "0.45.3",
     "@nestjs/cli": {
       "glob": "10.5.0"
-    },
-    "qs": "6.16.0",
-    "body-parser@1.20.4": "1.20.8"
+    }
   },
   "engines": {
     "node": ">=22.0.0",
