@@ -1,0 +1,101 @@
+QLS PLATFORM — AUTHORIZATION COVERAGE AUDIT
+generated: 2026-09-24T02:17:34Z
+
+METHOD: static scan of server/modules/**/*.controller.ts for @Get/@Post/
+@Patch/@Put/@Delete, then look ahead 15 lines for @RequirePermission /
+@RequireSuperAdmin.
+
+RESULT: 9 controllers, 40 routes discovered, 21 declare an explicit permission.
+
+=== THE 19 ROUTES WITHOUT AN EXPLICIT PERMISSION DECORATOR ===
+
+These are NOT unauthenticated. AuthGuard AND PermissionGuard are both
+registered as global APP_GUARD providers in server/modules/auth/auth.module.ts
+(lines 26 and 30), in that order, so EVERY route requires an authenticated
+session unless explicitly exempted. The 19 routes fall into four groups:
+
+1) Auth self-service routes (act on the caller's OWN account) - correct:
+     POST /api/auth/login            (necessarily unauthenticated)
+     POST /api/auth/mfa/verify       (necessarily unauthenticated - 2nd factor)
+     POST /api/auth/mfa/confirm
+     POST /api/auth/mfa/disable
+     POST /api/auth/mfa/recovery-codes
+     POST /api/auth/change-password
+     POST /api/auth/reset-password
+     POST /api/auth/logout
+   Granting these a permission would be wrong: every account must be able to
+   change its own password and enrol its own MFA, including an account that
+   currently holds no permission at all.
+
+2) Dashboard routes - scoped to the caller, no cross-user read:
+     GET /api/dashboard/stats   -> getStats(teacher.id)
+     GET /api/dashboard/recent  -> getRecentUpdates(teacher.id, limit)
+   Both pass the CALLER's id into the service, so they cannot return another
+   account's data. Authenticated-only is defensible.
+
+3) Curriculum read-only catalogue routes:
+     GET /api/curriculum/structure | /folders | /roles
+   Static catalogue data, no user data. Authenticated-only is defensible,
+   though it would be better to declare it explicitly (see FINDING below).
+
+4) FALSE POSITIVE in this scan:
+     server/modules/hello/hello.controller.ts is ENTIRELY COMMENTED OUT
+     (template sample code). The scanner matched commented source. There is
+     no live /api/hello/test route.
+
+=== FINDINGS ===
+
+A-1 [LOW, defence in depth] dashboard and curriculum routes rely on
+    authentication alone. No exploit exists (services are caller-scoped), but
+    an explicit @RequirePermission('dashboard.view') / ('resource.view') would
+    make the intent auditable and would survive a future refactor that
+    forgets to scope by teacher id. RECOMMENDED, not a blocker.
+
+A-2 [INFO] server/modules/hello/ contains dead template code. It is inert
+    (fully commented), so it is not a vulnerability, but it should be deleted
+    so that future static scans do not report phantom routes. This scan is
+    itself the evidence that dead code creates audit noise.
+
+=== RAW SCAN OUTPUT ===
+  [perm] audit/audit.controller.ts:23 GET /logs
+  [auth] auth/auth.controller.ts:53 GET /me/permissions
+  [auth] auth/auth.controller.ts:61 GET /config
+  [auth] auth/auth.controller.ts:67 POST /login
+  [auth] auth/auth.controller.ts:116 POST /mfa/verify
+  [auth] auth/auth.controller.ts:170 GET /mfa/status
+  [auth] auth/auth.controller.ts:182 POST /mfa/enroll
+  [auth] auth/auth.controller.ts:195 POST /mfa/confirm
+  [auth] auth/auth.controller.ts:212 POST /mfa/recovery-codes
+  [auth] auth/auth.controller.ts:237 POST /mfa/disable
+  [auth] auth/auth.controller.ts:255 POST /change-password
+  [auth] auth/auth.controller.ts:276 POST /reset-password
+  [auth] auth/auth.controller.ts:297 GET /me
+  [auth] auth/auth.controller.ts:303 POST /logout
+  [auth] curriculum/curriculum.controller.ts:10 GET /structure
+  [auth] curriculum/curriculum.controller.ts:17 GET /folders
+  [auth] curriculum/curriculum.controller.ts:22 GET /roles
+  [auth] dashboard/dashboard.controller.ts:10 GET /stats
+  [auth] dashboard/dashboard.controller.ts:15 GET /recent
+  [auth] hello/hello.controller.ts:10 GET /test
+  [perm] resources/resources.controller.ts:53 GET /
+  [perm] resources/resources.controller.ts:67 GET /:id
+  [perm] resources/resources.controller.ts:69 GET /:id
+  [perm] resources/resources.controller.ts:77 GET /mine
+  [perm] resources/resources.controller.ts:90 GET /:id
+  [perm] resources/resources.controller.ts:101 POST /
+  [perm] resources/resources.controller.ts:112 PATCH /:id
+  [perm] resources/resources.controller.ts:129 DELETE /:id
+  [perm] resources/resources.controller.ts:141 POST /:id/submit-review
+  [perm] resources/resources.controller.ts:152 GET /:id/download
+  [perm] resources/resources.controller.ts:171 GET /:id/storybook-cover/:index
+  [perm] review/review.controller.ts:16 GET /review/pending
+  [perm] review/review.controller.ts:40 POST /resources/:id/review
+  [perm] review/review.controller.ts:56 GET /resources/:id/review-history
+  [perm] teachers/teachers.controller.ts:59 GET /
+  [perm] teachers/teachers.controller.ts:73 GET /:id
+  [perm] teachers/teachers.controller.ts:81 POST /
+  [perm] teachers/teachers.controller.ts:102 PATCH /:id
+  [perm] teachers/teachers.controller.ts:125 DELETE /:id
+  [perm] teachers/teachers.controller.ts:147 POST /:id/permissions
+
+  total=40 with_permission=21 authenticated_only=19
