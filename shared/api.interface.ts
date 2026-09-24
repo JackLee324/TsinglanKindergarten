@@ -1,29 +1,15 @@
 // 前后端共享类型定义
 
 // === 角色 ===
-export type RoleCode =
-  | 'principal'
-  | 'curriculum_director'
-  | 'prek_head'
-  | 'k_head'
-  | 'pe_specialist'
-  | 'prek_assistant'
-  | 'k_assistant'
-  | 'visitor';
-
-export const ROLE_CODES: RoleCode[] = [
-  'principal',
-  'curriculum_director',
-  'prek_head',
-  'k_head',
-  'pe_specialist',
-  'prek_assistant',
-  'k_assistant',
-  'visitor',
-];
-
-// === 班型/目录 ===
-export type ProgramCode = 'prek' | 'k';
+// SINGLE SOURCE OF TRUTH: roles, permissions and scope are defined in
+// ./rbac.ts and re-exported here for backwards compatibility, so that existing
+// `import { RoleCode } from '@shared/api.interface'` call sites keep working.
+// Do NOT re-declare roles in this file — that is how the original 5-way drift
+// (8 roles here / 7 in curriculum.data.ts / 7 in client app.tsx / missing
+// k_assistant) happened.
+import type { RoleCode, ProgramCode, PermissionCode, ScopeKind } from './rbac';
+export type { RoleCode, ProgramCode, PermissionCode, ScopeKind };
+export { ROLE_CODES } from './rbac';
 
 // === 资源状态 ===
 export type ResourceStatus = 'draft' | 'pending_review' | 'published' | 'rejected';

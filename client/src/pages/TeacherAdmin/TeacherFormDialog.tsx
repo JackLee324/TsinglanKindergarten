@@ -31,6 +31,7 @@ import type {
 } from '@shared/api.interface';
 
 const ROLE_BADGE_COLORS: Record<RoleCode, string> = {
+  super_admin: 'bg-rose-100 text-rose-700 border-rose-300',
   principal: 'bg-purple-100 text-purple-700 border-purple-200',
   curriculum_director: 'bg-blue-100 text-blue-700 border-blue-200',
   prek_head: 'bg-green-100 text-green-700 border-green-200',

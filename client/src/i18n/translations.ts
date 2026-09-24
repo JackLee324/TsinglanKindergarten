@@ -92,6 +92,7 @@ export const translations = {
     'status.rejected': '已退回',
 
     // 角色
+    'role.super_admin': '系统超级管理员',
     'role.principal': '园长/管理员',
     'role.curriculum_director': '教学主任',
     'role.prek_head': 'Pre-K 主教',
@@ -421,6 +422,7 @@ export const translations = {
     'status.rejected': 'Rejected',
 
     // Roles
+    'role.super_admin': 'System Super Admin',
     'role.principal': 'Principal',
     'role.curriculum_director': 'Curriculum Director',
     'role.prek_head': 'Pre-K Head Teacher',

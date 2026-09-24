@@ -178,54 +178,15 @@ export const FOLDER_DEFINITIONS: FolderDefinition[] = [
   { key: 'research_archive', name: '教研归档', nameEn: 'Teaching Research Archive' },
 ];
 
-export interface RoleDefinition {
-  code: RoleCode;
-  name: string;
-  nameEn: string;
-  description: string;
-}
-
-export const ROLE_DEFINITIONS: RoleDefinition[] = [
-  {
-    code: 'principal',
-    name: '园长/平台管理员',
-    nameEn: 'Principal',
-    description: '全部权限，教师/角色/权限管理',
-  },
-  {
-    code: 'curriculum_director',
-    name: '教学主任/教研主管',
-    nameEn: 'Curriculum Director',
-    description: '审核发布、全部课程查看、教师权限分配',
-  },
-  {
-    code: 'prek_head',
-    name: 'Pre-K 主教',
-    nameEn: 'Pre-K Head Teacher',
-    description: 'Pre-K 全部科目上传、提交审核',
-  },
-  {
-    code: 'k_head',
-    name: 'K 主教',
-    nameEn: 'K Head Teacher',
-    description: 'K 全部科目上传、提交审核',
-  },
-  {
-    code: 'pe_specialist',
-    name: '体能专科教师',
-    nameEn: 'PE Specialist',
-    description: '体能类科目上传、提交审核',
-  },
-  {
-    code: 'prek_assistant',
-    name: 'Pre-K 配班/代课',
-    nameEn: 'Pre-K Assistant',
-    description: 'Pre-K 只读（可配置部分上传）',
-  },
-  {
-    code: 'visitor',
-    name: '普通访客/家长',
-    nameEn: 'Visitor',
-    description: '不能进入课程内容',
-  },
-];
+// =============================================================================
+// ROLE DEFINITIONS
+// =============================================================================
+// MOVED to shared/rbac.ts — the single source of truth for roles, permissions
+// and scope. This local copy had drifted: it listed only 7 roles and was
+// MISSING `k_assistant`, so `GET /api/curriculum/roles` could not label that
+// role in the permission-matrix UI, while `RoleCode` claimed 8 roles.
+//
+// Re-exported here so existing imports of ROLE_DEFINITIONS from this module
+// keep working without change.
+export type { RoleDefinition } from '@shared/rbac';
+export { ROLE_DEFINITIONS } from '@shared/rbac';
