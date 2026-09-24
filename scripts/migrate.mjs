@@ -278,6 +278,7 @@ async function cmdUp(sql, targetVersion) {
       log(`\n  ${c.bold}→ ${m.version}_${m.name}${c.reset}`);
       try {
         await sql.unsafe('BEGIN');
+        await applyMigrationGucs(sql);
         await sql.unsafe(m.sql);
         const ms = Date.now() - started;
         await sql`
@@ -336,6 +337,7 @@ async function cmdDown(sql, targetVersion) {
       log(`\n  ${c.bold}← ${m.version}_${m.name}${c.reset}`);
       try {
         await sql.unsafe('BEGIN');
+        await applyMigrationGucs(sql);
         await sql.unsafe(downSql);
         await sql`DELETE FROM schema_migrations WHERE version = ${m.version}`;
         await sql.unsafe('COMMIT');
@@ -352,6 +354,57 @@ async function cmdDown(sql, targetVersion) {
     ok('Rollback complete.');
     return 0;
   });
+}
+
+/**
+ * Apply operator-supplied GUCs to the current migration transaction.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * A guarded `.down.sql` needs a deliberate escape hatch: `0007` refuses to drop
+ * the soft-delete columns while rows are in the recycle bin, and its error
+ * message tells the operator to "re-run with QLS_SOFT_DELETE_FORCE_DOWN=on".
+ * That message was originally a LIE — the SQL reads the GUC
+ * `qls.soft_delete_force_down`, but nothing anywhere mapped the documented
+ * environment variable onto it, so following the instruction did nothing and the
+ * rollback refused again. A refusal that cannot be overridden is not a guard, it
+ * is a wall, and an error message that names a non-existent switch is worse than
+ * no message at all.
+ *
+ * Two forms are supported:
+ *   1. QLS_MIGRATION_GUC_<name>=<value>   -> sets GUC  qls.<name>
+ *      The general mechanism, so future guarded migrations do not each need
+ *      bespoke plumbing.
+ *   2. QLS_SOFT_DELETE_FORCE_DOWN=<on|1|true|yes>
+ *      An explicit alias for the switch 0007 already documents.
+ *
+ * `set_config(..., is_local => true)` is transaction-scoped, identical to
+ * SET LOCAL: the value cannot leak into another migration or another connection
+ * even if the transaction is rolled back.
+ */
+async function applyMigrationGucs(sql) {
+  const gucs = new Map();
+
+  for (const [key, raw] of Object.entries(process.env)) {
+    if (!key.startsWith('QLS_MIGRATION_GUC_')) continue;
+    const name = key.slice('QLS_MIGRATION_GUC_'.length).toLowerCase();
+    if (!/^[a-z0-9_]+$/.test(name)) {
+      fail(`Ignoring ${key}: GUC name must be [a-z0-9_]+`);
+      continue;
+    }
+    if (raw !== undefined) gucs.set(`qls.${name}`, raw);
+  }
+
+  const forceDown = (process.env.QLS_SOFT_DELETE_FORCE_DOWN ?? '').trim().toLowerCase();
+  if (['on', '1', 'true', 'yes'].includes(forceDown)) {
+    gucs.set('qls.soft_delete_force_down', 'on');
+  }
+
+  for (const [name, value] of gucs) {
+    // Parameterised, so an operator cannot inject SQL through an env var.
+    await sql`SELECT set_config(${name}, ${value}, true)`;
+    warn(`  migration GUC: ${name}=${value}`);
+  }
 }
 
 async function cmdBaseline(sql, targetVersion) {

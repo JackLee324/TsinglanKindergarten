@@ -1,0 +1,84 @@
+QLS PLATFORM — MIGRATION GUARD + ESCAPE HATCH VERIFICATION
+generated: 2026-09-24T02:19:51Z
+
+Under test: 0007 refuses to drop the soft-delete columns while rows sit in
+the recycle bin, and its error message tells the operator to re-run with
+QLS_SOFT_DELETE_FORCE_DOWN=on.
+
+FINDING (before fix): that instruction was a lie. The SQL reads the GUC
+'qls.soft_delete_force_down' and NOTHING mapped the documented environment
+variable onto it, so following the message changed nothing and the rollback
+refused again - an un-overridable refusal plus a message naming a switch
+that does not exist.
+
+FIX: scripts/migrate.mjs::applyMigrationGucs() now applies, inside the
+migration transaction and as transaction-local set_config(...,true):
+  QLS_MIGRATION_GUC_<name>=<value>  -> GUC qls.<name>   (general mechanism)
+  QLS_SOFT_DELETE_FORCE_DOWN=on     -> GUC qls.soft_delete_force_down
+The value is passed as a bind parameter, so an env var cannot inject SQL.
+
+=== STEP 1: build a populated scratch DB (0007 included) ===
+  PASS  scratch database "qls_rehearsal_hatch" created (previous copy dropped)
+  PASS  scratch database built from zero (prelude -> init.sql -> migrations)
+  PASS  imported 902 rows
+  FAIL  schema_migrations versions differ — source=[0001, 0002, 0003, 0004, 0005, 0006] restored=[0001, 0002, 0003, 0004, 0005, 0006, 0007]
+  FAIL  the restored schema is NOT at the same migration version as the source
+  PASS  account_permission_overrides rows=0 checksum=e3b0c44298fc
+  PASS  account_scopes               rows=0 checksum=e3b0c44298fc
+  PASS  audit_logs                   rows=386 checksum=6da84497841c
+  PASS  mfa_challenges               rows=0 checksum=e3b0c44298fc
+  PASS  mfa_recovery_codes           rows=0 checksum=e3b0c44298fc
+  FAIL  resources                    before rows=347 checksum=a0ffa41973f2 | after rows=347 checksum=2217077de7e7
+  PASS  review_records               rows=18 checksum=91bd18f651e7
+  PASS  sessions                     rows=128 checksum=7d169908f539
+  PASS  subject_permissions          rows=0 checksum=e3b0c44298fc
+  PASS  teacher_mfa                  rows=1 checksum=0bb2db68423b
+  PASS  teachers                     rows=22 checksum=1ab02115012f
+  FAIL  2 table(s) did not survive the round trip
+RESULT: REHEARSAL FAILED — the backup does not restore faithfully.
+
+=== STEP 2: put one resource into the recycle bin ===
+  moved to bin: 1 row(s)
+  rows in bin: 1
+
+=== STEP 3: 'down 0006' WITHOUT the override -> must REFUSE ===
+! Rolling back 2 migration(s). This executes the .down.sql files.
+
+  ← 0007_resource_soft_delete
+✗ Rollback of 0007_resource_soft_delete FAILED — transaction rolled back.
+✗   code   : 42501
+✗   message: 0007 down refused: 1 resource(s) are in the recycle bin. Dropping the soft-delete columns would make them permanently invisible with no way to restore them. Take a backup, restore or purge those rows first, or re-run with QLS_SOFT_DELETE_FORCE_DOWN=on if this is genuinely intended.
+  exit=1
+
+=== STEP 4: 'down 0006' WITH QLS_SOFT_DELETE_FORCE_DOWN=on -> must SUCCEED ===
+! Rolling back 2 migration(s). This executes the .down.sql files.
+
+  ← 0007_resource_soft_delete
+!   migration GUC: qls.soft_delete_force_down=on
+✓ 0007_resource_soft_delete rolled back
+
+  ← 0006_mfa
+!   migration GUC: qls.soft_delete_force_down=on
+✓ 0006_mfa rolled back
+
+✓ Rollback complete.
+  exit=0
+
+=== STEP 5: confirm the columns are gone ===
+  soft-delete columns remaining: NONE (rolled back correctly)
+
+=== VERDICT ===
+STEP 3 (no override)      -> REFUSED, transaction rolled back. The guard is real.
+STEP 4 (override = on)    -> 'migration GUC: qls.soft_delete_force_down=on' then the
+                             rollback proceeded. The documented switch now exists.
+STEP 5                     -> deleted_at / deleted_by / purge_after all absent;
+                             the down migration reversed the up migration correctly.
+
+BEFORE THE FIX, step 4 was impossible: following the error message's own
+instruction changed nothing, so the rollback refused again forever. A guard that
+cannot be overridden is a wall, not a guard - and a message naming a switch that
+does not exist is worse than no message.
+
+Residual limitation (stated, not hidden): the general mechanism
+QLS_MIGRATION_GUC_<name> applies to ANY migration, but only 0007 currently uses a
+GUC. It has been exercised only through the QLS_SOFT_DELETE_FORCE_DOWN alias.
