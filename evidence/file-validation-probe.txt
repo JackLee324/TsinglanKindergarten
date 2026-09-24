@@ -1,0 +1,84 @@
+QLS PLATFORM — FILE VALIDATION: INDEPENDENT ADVERSARIAL PROBE
+generated: 2026-09-24T02:21:21Z
+
+Method: tests the BUILT artifact (dist/server/common/files/file-validation.js),
+not the TypeScript source, because the source is not what ships.
+Checks were written by ATTACKING the module rather than by reading it.
+
+$ node scripts/probe-file-validation.mjs
+=== A. filename sanitisation (path traversal / injection) ===
+  PASS  ../../etc/passwd keeps no slash                               -> false
+  PASS  ../../etc/passwd resolves to basename                         -> passwd
+  PASS  ..\\..\\windows\\system32\\cmd.exe -> cmd.exe                 -> cmd.exe
+  PASS  NUL byte removed                                              -> false
+  PASS  leading dot stripped (no hidden file)                         -> false
+  PASS  ".." alone is not returned as a usable name                   -> true
+  PASS  empty -> fallback                                             -> unnamed-file
+  PASS  over-long name is truncated                                   -> true
+  PASS  extension preserved when truncating                           -> true
+  PASS  newline stripped                                              -> false
+
+=== B. magic-byte sniffing ===
+  PASS  PDF detected                                                  -> pdf
+  PASS  ZIP detected                                                  -> zip
+  PASS  PNG detected                                                  -> png
+  PASS  JPEG detected                                                 -> jpeg
+  PASS  OLE2 (legacy Office) detected                                 -> ole2
+
+=== C. content/declaration mismatch (anti-spoofing) ===
+  PASS  EXE bytes named .pdf REJECTED                                 -> false
+  PASS  HTML named .pdf REJECTED                                      -> false
+  PASS  text named .pdf REJECTED                                      -> false
+  PASS  ZIP named .pdf REJECTED                                       -> false
+
+=== D. allowlist / size ===
+  PASS  x.html REJECTED (stored-XSS / executable)                     -> false
+  PASS  x.svg REJECTED (stored-XSS / executable)                      -> false
+  PASS  x.js REJECTED (stored-XSS / executable)                       -> false
+  PASS  x.exe REJECTED (stored-XSS / executable)                      -> false
+  PASS  genuine PDF ACCEPTED                                          -> true
+  PASS  genuine JPEG ACCEPTED                                         -> true
+  PASS  empty file REJECTED                                           -> false
+  PASS  oversize REJECTED                                             -> false
+
+=== E. stored-path traversal ===
+  PASS  "../../etc/passwd" flagged                                    -> false
+  FAIL  "/etc/passwd" flagged                                         -> true   expected false
+  PASS  "a/b/../c.pdf" flagged                                        -> false
+  PASS  "uploads/2026/plan.pdf" allowed                               -> true
+
+=== RESULT ===
+  pass=30 fail=1
+exit=1
+
+=== DEFECT FOUND (1 of 31) ===
+  isPathTraversalSafe('/etc/passwd') -> true   (expected false)
+
+  A POSIX-absolute path is accepted as safe. Cause: the function rejects
+  '\\\\' (UNC) and '//', a drive letter, '~', encoded traversal and '.'/'..'
+  segments, but never a SINGLE leading separator. For '/etc/passwd',
+  split(/[\\/]+/) yields ['', 'etc', 'passwd'] - no '.'/'..' segment and a
+  non-empty last segment - so it falls through to 'return true'.
+
+  The asymmetry is the giveaway that this is an oversight, not a deliberate
+  allowance: '//etc/passwd' IS rejected while '/etc/passwd' is not.
+
+  Impact: a stored file_path is meant to be bucket-relative. If a consumer
+  RESOLVES it instead of joining it - path.resolve('/bucket','/etc/passwd')
+  yields '/etc/passwd', unlike path.join - the guarantee is gone. The value
+  arrives from the client via the file-registration endpoint.
+
+  Reported to the module's author with a suggested one-line fix
+  (reject when the first split segment is empty). Re-run this probe after
+  the fix to confirm 31/31.
+
+=== VERIFIED CORRECT (the other 30) ===
+  filename sanitisation: traversal, backslash traversal, NUL, hidden files,
+    '..' alone, empty, over-long WITH extension preserved, newline
+  magic bytes: pdf, zip, png, jpeg, ole2
+  anti-spoofing: EXE-as-.pdf, HTML-as-.pdf, text-as-.pdf, ZIP-as-.pdf all
+    REJECTED - this is the check that matters most and it works
+  allowlist: .html/.svg/.js/.exe rejected; real PDF/JPEG accepted; zero-byte
+    rejected; oversize rejected
+  stored path: '../../etc/passwd' and 'a/b/../c.pdf' flagged;
+    'uploads/2026/plan.pdf' allowed
