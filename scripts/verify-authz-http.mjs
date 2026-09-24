@@ -13,6 +13,27 @@ async function req(method,path,body){
   return {status:res.status,data};
 }
 let pass=0,fail=0;
+const DBURL=process.env.AUTHZ_TEST_DB||null;
+const crypto0=await import('node:crypto');
+const PgMod=await import('postgres');
+const Pg=(PgMod.default||PgMod);
+function pwHash(pw){const salt=crypto0.randomBytes(16).toString('base64');
+  return 'scrypt$16384$8$1$'+salt+'$'+crypto0.scryptSync(pw,salt,32,{N:16384,r:8,p:1}).toString('base64');}
+/**
+ * Reset the fixture accounts before asserting.
+ * This suite MUTATES state (section D demotes an administrator to prove instant
+ * revocation), so without a reset a second run starts from a demoted database and
+ * reports failures that are artefacts of the previous run rather than real bugs.
+ */
+async function resetFixtures(){
+  if(!DBURL) return;
+  const sql=Pg(DBURL,{onnotice:()=>{}});
+  const h=pwHash(PW);
+  await sql`update teachers set password_hash=${h}, roles=array['prek_assistant'], status='active' where username='prek-teacher01'`;
+  await sql`update teachers set password_hash=${h}, roles=array['principal'], status='active' where username='qlsadmin'`;
+  await sql`update teachers set password_hash=${h}, roles=array['curriculum_director'], status='active' where username='qlsdirector'`;
+  await sql.end();
+}
 function check(label,actual,expected){
   const ok=Array.isArray(expected)?expected.includes(actual):actual===expected;
   console.log('  '+(ok?'PASS':'FAIL')+'  '+label.padEnd(58)+'-> '+actual+(ok?'':'   expected '+expected));
@@ -26,6 +47,7 @@ async function login(user){
   return r;
 }
 (async()=>{
+  await resetFixtures();
   const sv=await req('GET','/');
   console.log('=== CSRF BOOTSTRAP ===');
   check('GET / issues suda-csrf-token cookie', !!jar['suda-csrf-token'], true);
@@ -71,7 +93,6 @@ async function login(user){
   const before=(await req('GET','/api/resources')).status;
   check('resources reachable before change', before, 200);
   const postgres=(await import('postgres')).default;
-  const DBURL=process.env.AUTHZ_TEST_DB;
   if(!DBURL){console.log('  (AUTHZ_TEST_DB not set; skipping revocation assertion)');process.exit(fail?1:0);}
   const sql=postgres(DBURL,{onnotice:()=>{}});
   await sql`update teachers set roles=array['visitor'] where username='qlsadmin'`;
