@@ -101,7 +101,7 @@ deleted files: 0
 
 ```
 === 自动化测试 ===
-  npm test                 # tests 106 # pass 106 # fail 0
+  npm test                 # tests 183 # pass 183 # fail 0
 === 类型检查 ===
   typecheck server         PASS
   typecheck client         PASS
@@ -114,7 +114,8 @@ deleted files: 0
   hardening                pass=10 fail=0
   mfa                      pass=36 fail=0
   security-headers         pass=20 fail=0
-  files-http               pass=71 fail=0
+  files-http               pass=73 fail=0
+  naming-http              pass=49 fail=0
 
   ✅ 全部通过
 ```
@@ -127,7 +128,7 @@ deleted files: 0
 
 | 项目 | 结果 |
 |------|------|
-| 单元测试 | **106/106** 通过（最近一次稳定运行） |
+| 单元测试 | **183/183** 通过 |
 | 服务端类型检查 | 通过（`tsc --noEmit`） |
 | 客户端类型检查 | 通过 |
 | 生产构建 | 通过（exit 0） |
@@ -135,7 +136,7 @@ deleted files: 0
 | HTTP 鉴权套件 | 24/24 |
 | HTTP 加固套件 | 10/10 |
 | HTTP MFA 套件 | 36/36 |
-| **合计 HTTP 断言** | **161 条，全部通过** |
+| **合计 HTTP 断言** | **212 条，全部通过**（6 个套件） |
 
 ### 3.2 契约门禁不是空转 `[已证实]`
 
@@ -700,3 +701,41 @@ body:   {"error":{...,"requestId":"deadbeef-1111-2222-3333-444455556666",...}}
 | — | `scripts/predeploy-check.sh` **不存在**，但被 `package.json` 的 `predeploy` 引用 | 待修 |
 | **G-18** | **`POST /api/auth/reset-password` 绕过 RBAC**：无 `@RequirePermission`，仅靠硬编码 `roles.includes('principal')`，可重置**他人**口令，缺 `403`（返回 `404`），且**没有任何测试覆盖** | **未修复**，详见 `evidence/g18-reset-password.txt` |
 | — | **未实现优雅退出**；无 Dockerfile / CI 流水线 | 待补 |
+
+---
+
+## 附录 D：B4 命名漂移 —— 已修复并有真实计数
+
+**目标事实（`select … group by … from resources where deleted_at is null`，347 行）**：
+subject 为 `montessori` 293 / `english` 44 / `virtue` 11；`sub_subject` **只存 snake_case**
+（`practical_life` 80、`english_language` 43、`chinese_language` 1、`culture` 99、`math` 37、
+`sensorial` 33、NULL 54）；theme 为中文标签。`server/ client/ shared/ scripts/ tests/`
+中**不存在任何转换代码**。
+
+| 分组 | 前端发送 | 列中实际存储 | 行数 | 修复前可达 | 修复后 |
+|------|----------|--------------|------|------------|--------|
+| `/prek/montessori/practical-life` | `practical-life` | `practical_life` | 80 | **0** | **80** |
+| `/prek/montessori/english-language` | `english-language` | `english_language` | 43 | **0** | **43** |
+| `/prek/montessori/chinese-language` | `chinese-language` | `chinese_language` | 1 | **0** | **1** |
+| 6 × `/k/english/:theme` | `Myself` … `Around the World` | `主题1：我自己` … `主题6：环游世界` | 44 | **0** | **44** |
+| `sensorial`/`math`/`culture` 等 | 两边一致 | 两边一致 | 169 | 169 | 169 |
+
+**不可达资源：修复前 167 → 修复后 0。**
+
+**兼容性**：**未改写任何一行数据**。请求在边界被翻译（`theme=myself` → `WHERE theme='主题1：我自己'`），
+canonical 拼写仍然可用。别名表**只来源于真实值**，每条别名都标注了来源文件。
+
+**文件缺失情况（从库中确认，非假设）**：**总计 347 · 有文件 0 · 无文件 347**。
+**未创建任何占位文件、假行或存储条目。** `has_stored_file` 为
+`GENERATED ALWAYS AS (…) STORED` 生成列——两值、不可手写；`coalesce` 是关键（首次运行
+没有它时迁移自身的后置断言 347/347 失败，已记录在案）。检测脚本
+`scripts/report-missing-files.mjs` 直接读视图、不重新推导谓词，任何失败模式都返回非零。
+
+**新增迁移 `0008_resource_file_presence`**：生成列 + 部分索引 + 两个视图 + 前后置断言；
+`up → down 0008 → up` 全流程在独立库上演练通过，`down` 断言文件列存活。
+
+**顺带修复**：`npm run type:check:server` 在该工作开始前是**红的**（`shared/curriculum.ts`
+预存重构留下 5 个 `TS2304`），而 `npm run build` 却通过——正是 SWC 不检查类型的陷阱。
+
+**`[无法验证]`**：真实对象存储不可达，"有文件的资源端到端可下载"未经验证；
+已验证的是它**通过文件校验并抵达存储调用（302）**，而仅有元数据的资源**停在 404**。

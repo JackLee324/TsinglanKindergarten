@@ -623,10 +623,16 @@ $ AUTHZ_TEST_DB=... bash scripts/verify-all.sh
   hardening                pass=10 fail=0
   mfa                      pass=36 fail=0
   security-headers         pass=20 fail=0
-  files-http               pass=71 fail=0
+  files-http               pass=73 fail=0
 
   ✅ 全部通过
 ```
+
+(`files-http` reports 73 rather than 71 in this run: the server used for the final
+gate was started with the `DOWNLOAD_TOKEN_TTL_SECONDS` a previous agent's work
+documents as required for its two live token-expiry checks to run instead of being
+skipped. Both numbers are green; the difference is two checks that execute rather
+than skip.)
 
 **Both typechecks were RED when this session started, and `npm run build` did not
 care.** Recorded verbatim, because it is the exact trap the task warned about:
@@ -654,10 +660,17 @@ the same class of error appeared once while wiring the home pages
 `tests/curriculum-tokens.test.mjs` contributes 70 tests with a database and 65
 without (the five difference is the database group, which reports SKIP loudly).
 The `npm test` total before this work was 113; it is 183 now, so 70 of the 183 are
-new here. `scripts/verify-files-http.mjs` was **not modified**; it reported
-pass=71 fail=0 in the gate run above.
+new here. `scripts/verify-files-http.mjs` was **not modified** by me; it reported
+pass=73 fail=0 in the final gate run above (pass=71 in an earlier run of the same
+gate, the two-check difference being the live token-expiry checks that skip unless
+the server is given a short `DOWNLOAD_TOKEN_TTL_SECONDS`).
 
 ### 4.6 Files added / changed by this work
+
+> Repository state at the end of this session: every artefact listed below is
+> committed at `e006308`, and the only working-tree modification is this report.
+> (Another agent's commit `e006308` swept the tree while my session was running.
+> Nothing of mine was reverted; verified file by file against `HEAD`.)
 
 **Important provenance note.** A `git status` at the start of this session showed
 that a *previous* pass had already committed part of this work at `HEAD`
