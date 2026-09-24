@@ -197,24 +197,32 @@ export function sanitizeFileName(rawName: unknown): string {
  *   * a trailing separator (an empty basename surprises every consumer);
  *   * empty input and anything longer than the column that stores it.
  *
- * WHY ABSOLUTE PATHS ARE REJECTED
- * A leading separator makes the first segment empty and the path absolute. The
- * asymmetry that settled this: `//etc/passwd` was already rejected while
- * `/etc/passwd` was accepted, which is an oversight, not a policy. More
- * importantly, the guarantee this function exists to provide depends on HOW the
- * consumer combines the value: `path.join('/bucket', '/etc/passwd')` stays inside
- * the bucket, but `path.resolve('/bucket', '/etc/passwd')` yields `/etc/passwd`.
- * A stored `file_path` arrives from the client through the file-registration
- * endpoint, so the value is bucket-relative BY CONTRACT and an absolute one is
- * refused rather than silently normalised.
+ * WHY ONE LEADING '/' IS ALLOWED (and two are not)
+ * This caused a real, twice-made mistake, so the evidence is recorded here.
  *
- * CONSEQUENCE, STATED HONESTLY: the platform's own `parseFilePath()` strips
- * leading slashes before use, so it is conceivable that a row written by an older
- * direct-to-storage flow holds an absolute-looking key. Such a row is now refused
- * (HTTP 400 at download time, with an audit row) instead of being served. That is
- * a deliberate fail-closed choice on a security check; the fix is to re-register
- * the file through `POST /api/resources/:id/file`, which normalises the name and
- * re-validates the bytes.
+ * A first version rejected every leading separator as "absolute". That breaks
+ * REAL data in this repository: the seeded curriculum stores storybook covers as
+ *
+ *     /curriculum-resources/prek-english-covers/1876907126277273.jpg
+ *
+ * (see seed-curriculum.sql), and `getStorybookCoverStream()` passes that value
+ * through this function. Rejecting it turned every Pre-K English cover into a
+ * 400. A leading slash is the PLATFORM'S NORMAL SHAPE for an object key: the
+ * value is handed to a bucket-SCOPED storage client and resolved against the
+ * bucket root, never the filesystem (the platform's own `parseFilePath()` strips
+ * leading slashes), so an absolute-looking key is harmless there.
+ *
+ * What IS refused, and is what actually matters:
+ *   * `..` segments — the ONLY ascent primitive, checked under both separators,
+ *     including when they sit behind a leading slash
+ *     (`/uploads/../../etc/passwd` is rejected);
+ *   * doubled leading separators (`//host/share`, `\\host\share`) and any
+ *     leading backslash: real object keys are POSIX-style and single-rooted;
+ *   * control characters, drive letters, `~`, and percent-encoded traversal.
+ *
+ * Consumers that turn a stored value into a LOCAL filesystem path must still take
+ * the BASENAME and sanitise it (see `ResourcesService.coverFileNameFrom`), which
+ * is what makes a leading slash irrelevant rather than merely tolerated.
  */
 export function isPathTraversalSafe(storedPath: unknown): boolean {
   if (typeof storedPath !== 'string') return false;
@@ -222,17 +230,13 @@ export function isPathTraversalSafe(storedPath: unknown): boolean {
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(storedPath)) return false;
   if (/^[a-zA-Z]:/.test(storedPath)) return false;
-  if (storedPath.startsWith('\\\\') || storedPath.startsWith('//')) return false;
+  // Any leading backslash, and doubled leading separators, are not platform key
+  // shapes. A SINGLE leading '/' is deliberately allowed — see the note above.
+  if (storedPath.startsWith('\\') || storedPath.startsWith('//')) return false;
   if (storedPath.startsWith('~')) return false;
   if (/%2e|%2f|%5c/i.test(storedPath)) return false;
 
   const segments = storedPath.split(/[\\/]+/);
-  // A leading separator makes the first segment empty, i.e. the value is
-  // ABSOLUTE. Rejected on purpose — see "WHY ABSOLUTE PATHS ARE REJECTED" above:
-  // the guarantee this function provides depends on how a consumer combines the
-  // value, and path.resolve('/bucket', '/etc/passwd') discards the bucket where
-  // path.join does not.
-  if (segments[0] === '') return false;
   if (segments.some((s) => s === '..' || s === '.')) return false;
   // A trailing separator would make the last segment empty; reject it so callers
   // cannot be surprised by an empty basename.

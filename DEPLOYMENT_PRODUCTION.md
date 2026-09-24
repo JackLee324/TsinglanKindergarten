@@ -101,6 +101,10 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 | `CSP_MODE` | report-only | `enforce` 才真正拦截 CSP；`off` 关闭 | `security-headers.middleware.ts:86-91` |
 | `MIGRATION_LOCK_TIMEOUT_MS` | `30000` | 迁移 advisory lock 等待上限 | `scripts/migrate.mjs:169` |
 | `MIGRATION_APPLIED_BY` | `$USER` | 写入 `schema_migrations.applied_by` 的操作者标识 | `scripts/migrate.mjs:274` |
+| `DOWNLOAD_TOKEN_TTL_SECONDS` | `300`（**硬上限 3600**） | 下载令牌有效期；超上限会被钳到 3600，非正数则报错 | `server/common/crypto/download-token.ts:54,57,63,138-149` |
+| `QLS_MIGRATION_GUC_<NAME>` | — | 迁移期间注入事务级 GUC `qls.<name>`（`down` 的强制逃生门）。值走绑定参数，不能注入 SQL | `scripts/migrate.mjs` `applyMigrationGucs()` |
+| `QLS_SOFT_DELETE_FORCE_DOWN` | — | `0007 down` 的显式别名（`on`/`1`/`true`/`yes`）；回收站非空时放行回滚 | 同上 + `0007_resource_soft_delete.down.sql:27,46` |
+| `QLS_STRICT_PLATFORM_CLI` | `0` | 构建期：`capabilities/` 存在但平台 CLI 不可用时是否硬失败 | `scripts/postinstall.mjs:55`、`scripts/build.sh:40-43` |
 
 > `LOGIN_IP_RATE_LIMIT_*` 在**模块加载时读取一次**（`auth.service.ts:41-51`），
 > 改值必须重启进程才生效。 [已证实]
@@ -125,23 +129,33 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 
 而代码**实际读取但 `.env.example` 未列出**的：`SERVER_HOST`、`SERVER_PORT`、
 `NODE_ENV`、`CSRF_STATE_TTL_SECONDS`、`CLIENT_BASE_PATH`、`DATABASE_URL`、
-`SUDA_DATABASE_URL`、`MIGRATION_*`。 [已证实]（`PRODUCTION_READINESS.md` §G-12 记录过同类问题）
+`SUDA_DATABASE_URL`、`MIGRATION_*`、`DOWNLOAD_TOKEN_SECRET`、
+`DOWNLOAD_TOKEN_TTL_SECONDS`、`CSP_MODE`、`QLS_*`。 [已证实]（`PRODUCTION_READINESS.md` §G-12 记录过同类问题）
 
 > 日志采集**不要**依赖 `LOG_DIR`。本应用没有文件日志配置，
-> Nest `Logger` 全部写 stdout/stderr。见 §12。
+> Nest `Logger` 全部写 stdout/stderr。见 §10。
 
 ---
 
 ## 3. 密钥生成
 
 ```bash
-# MFA TOTP 密钥加密键（AES-256-GCM，必须恰好 32 字节）
+# ① MFA TOTP 密钥加密键（AES-256-GCM，必须恰好 32 字节）
 openssl rand -base64 32
-#   → 例：<44 字符 Base64 字符串>          ← 这个值一旦丢失，所有已绑定 MFA 的账号无法登录
+#   → 44 字符 Base64          ← 丢失后：所有已绑定 MFA 的账号（含 super_admin）永久无法登录
 
-# 也可以用 hex（代码同样接受）
+# ② 下载令牌签名密钥（HMAC-SHA256，至少 32 字节）
+openssl rand -base64 32
+#   → 44 字符 Base64          ← 丢失/更换后：已发出的短时下载链接作废，重新登录下载即可，无长期影响
+
+# 也可以用 hex（两处代码都接受 64 位 hex）
 openssl rand -hex 32
 ```
+
+> ⚠️ **两个密钥的管理语义不同，不要混放、不要一起轮换**：
+> `MFA_ENCRYPTION_KEY` 必须与数据库备份**配对且分开**保管（丢一个都不可逆）；
+> `DOWNLOAD_TOKEN_SECRET` 可以随时轮换（见 [`RUNBOOK.md`](RUNBOOK.md) §7）。
+> 详见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §3.3。
 
 `mfa-crypto.ts:198-217` 的校验规则 [已证实]：
 - 只接受 Base64 或 **64 位 hex**；
@@ -156,7 +170,7 @@ openssl rand -hex 32
 |---|---|
 | JWT / session 签名密钥 | **不存在**。会话是不透明随机令牌（`randomBytes(32)`），服务端只存 `sha256`。`session.service.ts` 全文无任何签名密钥。 [已证实] |
 | 加密的会话 Cookie | **不存在**。Cookie 只有会话 id 本身，无内容。 |
-| 下载签名密钥 | **不存在**。当前下载链接是手拼的、**未签名、无过期**的平台代理 URL（`resources.service.ts:1465-1467`）。`FileService.createSignedUrl` 从未被调用。 [已证实] |
+| 下载签名密钥 | **存在**（写作期间新增）。`DOWNLOAD_TOKEN_SECRET`（HMAC-SHA256，≥32 字节）用于签发**带过期、绑定调用者**的下载令牌；实际文件直链由平台 `FileService` 签名。缺失该密钥时下载接口按设计 **fail closed**（503）。见 `server/common/crypto/download-token.ts`。 [已证实：文件头与实现] |
 
 **因此"轮换会话密钥"在本系统的正确对应操作是：**
 
@@ -169,7 +183,8 @@ openssl rand -hex 32
 2. 让所有账号重新登录。
 3. 其余相关配置（`SESSION_TTL_SECONDS`）不是秘密，无需轮换。
 
-**当务之急不是轮换，而是先实现签名下载**（[`SECURITY.md`](SECURITY.md) §12 G-3）。
+会话类**没有**签名密钥可轮换；下载令牌**有**（`DOWNLOAD_TOKEN_SECRET`），
+轮换步骤见 [`RUNBOOK.md`](RUNBOOK.md) §7.4。
 
 ---
 
@@ -207,20 +222,21 @@ GRANT service_role_   TO <app_role>;
 不执行会出现 `42501 permission denied`，表现为**登录报"用户名或密码错误"但不写审计**
 （`0004` 文件头 §4-2 记录的实测现象）。
 
-### 4.3 迁移的两种入口
+### 4.3 建库的三种入口
 
 | 场景 | 做法 |
 |---|---|
-| **全新库** | 直接 `node scripts/migrate.mjs up`（见 §5） |
-| **已存在的平台库**（表已由平台/历史 `init.sql` 建好） | 先 `snapshot` 留底（§6.2），再 `node scripts/migrate.mjs baseline <version>` 把已有 migration 标记为已应用**而不执行**，然后 `up` 应用剩余项 |
+| **全新库（非平台）** | 用 `node scripts/db-bootstrap.mjs`（写作期间新增）。它按唯一可行的顺序执行：**幂等前导（`user_profile` 类型 + 三个 DB 角色，源码取自 `0001` 本身）→ `init.sql` → `migrate up`**。原因是 `init.sql` 需要类型与角色、而 `0001` 需要表，**两者互相依赖**，谁都不能单独先跑。 [已证实：文件头] |
+| **平台库**（妙搭已提供类型与角色） | 直接 `node scripts/migrate.mjs up`（见 §5）——平台已把前导做好，**不需要** `db-bootstrap` |
+| **已存在的库**（表已由平台/历史 `init.sql` 建好，但无迁移记录） | 先 `snapshot` 留底（§6.2），再 `node scripts/migrate.mjs baseline <version>` 把已有 migration 标记为已应用**而不执行**，然后 `up` 应用剩余项 |
 
 > `baseline` 的使用前提：**该库已经具备被 baseline 的那几个 migration 的效果**。
-> 用错会把"没建的表"标记为已建。执行前务必用 [`MIGRATION.md`](MIGRATION.md) §6 的核对清单人工确认。
-> `scripts/migrate.mjs:357-381` 会打印醒目警告，但**不会替你判断**。 [已证实]
+> 用错会把"没建的表"标记为已建。执行前务必用 [`MIGRATION.md`](MIGRATION.md) §6.2 的核对清单人工确认。
+> `migrate.mjs` 会打印醒目警告，但**不会替你判断**。 [已证实]
 
-### 4.4 历史 `init.sql` 不要用于新库
+### 4.4 历史 `init.sql` 不要单独用于新库
 
-- `server/database/init.sql` 在原生 PostgreSQL 上**无法执行**（`42704 type "user_profile" does not exist`），
+- `server/database/init.sql` **单独**在原生 PostgreSQL 上**无法执行**（`42704 type "user_profile" does not exist`），
   重复执行会失败（`42710 policy ... already exists`），且缺少 6 个认证列。
   证据：`PRODUCTION_READINESS.md` §E-1/E-3/E-4 [已证实]。
 - **新库一律走 `migrations/`**；`init.sql` 仅作为历史平台库的对照参考。

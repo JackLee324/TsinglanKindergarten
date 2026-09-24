@@ -138,7 +138,7 @@
 | **I-6** | 匿名角色读取 `sessions` 的 IP / UA（PII） | `0005` 的列级 `SELECT` **刻意排除** `ip_address` / `user_agent` / `device`（`0005:152-166`） | ✅ 实测（策略与授权一致） |
 | **I-7** | 发布产物中带 `.env`（含数据库口令、MFA 密钥） | ❌ **无控制**：`build.sh:214-218` 在存在 `.env` 时**复制进 dist** | ⚠️ **高（未缓解）**。已列入发布前检查（[`DEPLOYMENT_PRODUCTION.md`](DEPLOYMENT_PRODUCTION.md) §6.4） |
 | **I-8** | 通过日志读到口令/Cookie/MFA 密钥 | ❌ **无脱敏白名单** | ⚠️ **中（未缓解）**（[`SECURITY.md`](SECURITY.md) §12 G-10） |
-| **I-9** | 签名下载链接经 `Referer` 泄露给第三方 | 新中间件设 `Referrer-Policy: strict-origin-when-cross-origin`（`security-headers.middleware.ts:140`） | ⚠️ **当前无效**：运行中的实例**尚未输出该头**（§9 / [`SECURITY.md`](SECURITY.md) §10.2）。且下载链接目前的真正问题是**根本没签名** |
+| **I-9** | 签名下载链接经 `Referer` 泄露给第三方 | 新中间件设 `Referrer-Policy: strict-origin-when-cross-origin`（`security-headers.middleware.ts:140`）；下载令牌本身**短时效 + 绑定账号**，因此即使泄露给第三方，别人也用不了 | ⚠️ **响应头当前无效**：运行中的实例**尚未输出该头**（§9 / [`SECURITY.md`](SECURITY.md) §10.2）。但**令牌层面的控制已经生效**（300s + teacherId 绑定 + HMAC），所以该风险已显著降低 [已证实：文件头与导出] |
 | **I-10** | 20 个初始账号口钥哈希公开在仓库 → 离线爆破 | ❌ 无控制 | ⚠️ **高**：`seed-teachers.ts:11-172`（§D-2）。**必须在部署前确认这些口令已轮换** |
 | **I-11** | 平台内其他租户猜测 bucket/路径直读文件 | **[无法验证]**（依赖平台 bucket 策略）。且当前客户端可自选 `filePath`（T-5）→ 若 bucket 是共享/可猜测命名，风险上升 | ⚠️ **无法验证** |
 | **I-12** | CSP 缺失导致注入脚本后外传数据 | 新中间件带 CSP，但**默认 report-only**，且**尚未生效** | ⚠️ **中**（§9 G-12） |
@@ -201,36 +201,61 @@
 
 ### 5.1 客户端直传对象存储（绕过服务端校验）
 
-**现状（已证实）**
+> ⚠️ **本节在写作期间发生了变化。** 另一个 agent 落地了真实下载链路
+> （`server/common/crypto/download-token.ts` + `server/modules/files/*` + `server/common/files/file-validation.ts`）。
+> 因此下面明确区分「**已经改变的部分**」与「**仍然存在且未缓解的部分**」。
 
-- 前端**没有任何真实上传**：`UploadPage.tsx:157-160`
+#### 5.1.1 已经改变的部分（下载侧）
+
+| 项 | 旧状态 | 新状态 |
+|---|---|---|
+| 下载链接 | 手拼 `/api/__platform__/storage/download?bucket=…&path=…`：**未签名、无过期、泄露对象在私有 bucket 中的位置** | **HMAC-SHA256 签名的令牌**：`base64url(payload).base64url(sig)`，payload 绑定 `resourceId`+`teacherId`+`exp`+`nonce`；默认 TTL **300s**、硬上限 **3600s** |
+| 与调用者的关系 | 无 | **绑定账号**：`/api/files/download` 还要求会话的 teacherId 与令牌一致 → 泄露的 URL 对别人无用 |
+| 实际文件直链 | 无 | 由平台 `FileService` 签名取得 |
+| 存储不可用时 | 返回一个看起来正常但无效的 URL | **返回明确的 503**，并说明原因，**不返回占位/伪造地址** |
+| 密钥缺失时 | 无此概念 | **fail closed**（`DOWNLOAD_TOKEN_SECRET` 未配置 → 503） |
+| 路由与权限 | 无 | `GET /api/files/download`，`@RequirePermission('resource.download','storage.download')` |
+
+证据：`server/common/crypto/download-token.ts:16-40,52-63,92-116,138-149`、
+`server/modules/files/files.controller.ts:71,85,90`、
+`server/modules/files/files.service.ts:11-33`。 [已证实：文件头与关键导出]
+
+→ **旧攻击路径"下载链接外泄即长期有效"已被有效缓解**（时效 + 账号绑定 + 不可伪造）。
+我**只读了文件头与导出，未做完整审阅**，也**未运行**新增的验证套件；
+验收前应视为"已实现、待独立复审"。
+
+#### 5.1.2 仍然存在、未缓解的部分（上传侧与坐标信任）
+
+- 前端**仍然没有真实上传**，且**仍然捏造存储坐标**：`UploadPage.tsx:157-160`
   ```ts
   // TODO: Integrate dataloom storage SDK for real file upload
   // Flow: get pre-signed URL -> upload to storage -> get file_path/bucket -> submit
   const fileBucketId = selectedFile ? 'placeholder-bucket' : undefined;
   const filePath = selectedFile ? `uploads/${Date.now()}/${selectedFile.name}` : undefined;
   ```
-  → **存储坐标由前端捏造**，字节从未上传到任何地方。
-- 服务端**接受并落库**客户端给的值：`resources.dto.ts:164,168`（创建）、`:218,222`（更新）；
-  `resources.service.ts:993-994,1090-1091`。
-- `FileService` 已注入构造函数（`resources.service.ts:55`）但**全仓库零引用**。
+- 服务端**仍然接受并落库**客户端传入的 `fileBucketId`/`filePath`：
+  `resources.dto.ts:164,168`（创建）、`:218,222`（更新）；`resources.service.ts` 落库。
+  **服务端生成 key 是否已实现，我未确认** [未验证]。
+- `resources.dto.ts` 对这些字段**没有** bucket/path 形状与穿越校验
+  （新加的 `server/common/files/file-validation.ts` 我未逐行阅读，其接入点未确认）。
+- 数据库中**仍然没有任何一条资源带文件引用**（347 行 / 0 行有 `file_bucket_id`/`file_path`，
+  本次复核仍为 0）→ **当前这个面不可被实际利用**，但一旦真实上传上线就立刻可被利用。
 
-**攻击路径（当前与未来）**
+**攻击路径（仍然有效）**
 
 | 阶段 | 路径 | 影响 |
 |---|---|---|
-| **现在** | 攻击者 `POST /api/resources` 带 `fileBucketId`/`filePath` 指向**他人的文件路径** | 让一条"自己的资源"指向别人的文件；一旦下载实现上线，即成为**越权取文件的跳板** |
-| **按 TODO 实现后** | 若沿用"客户端拿预签名 URL 直传 bucket，再把路径回传后端"的设计：攻击者**跳过服务端校验**上传任意类型/大小/内容（含可执行文件、超长文件名、`../` 路径穿越），后端只收到一个可信度为零的路径字符串 | 恶意文件托管在**校方域名下的 bucket**、XSS/钓鱼载体、存储成本滥用 |
-| **下载侧** | 当前下载返回**未签名、无过期**的手拼 URL（`resources.service.ts:1465-1467`）：`/api/__platform__/storage/download?bucket=…&path=…`。该端点**由平台提供、本仓库未定义**（§G-15） | 链接一旦外泄即长期有效；`bucket`/`path` 若可猜则直接取文件 |
+| **现在** | 攻击者 `POST /api/resources` 带 `fileBucketId`/`filePath` 指向**他人的文件路径** | 让一条"自己的资源"指向别人的文件。**下载侧已加固**（令牌绑定 resourceId + 账号，且服务端在发链接前会做资源权限判定），因此危害降低为"元数据污染"；但**存储坐标仍由客户端决定**，一旦有任何读取路径信任它，即成为越权取文件的跳板 |
+| **按 TODO 实现上传后** | 若沿用"客户端拿预签名 URL 直传 bucket，再把路径回传后端"：攻击者**跳过服务端校验**上传任意类型/大小/内容（可执行文件、超长文件名、`../` 穿越） | 恶意文件托管在**校方 bucket**、XSS/钓鱼载体、存储成本滥用 |
 
-**必须的控制（尚未实现，属 [`SECURITY.md`](SECURITY.md) §12 G-3）**
+**仍然必须做的控制**（属 [`SECURITY.md`](SECURITY.md) §12 G-3）
 
 1. **服务端生成存储 key**（`uploads/<resourceId>/<random>.<ext>`），**忽略**客户端传入的 bucket/path；
 2. 服务端校验：扩展名白名单 + **Magic Bytes**、大小上限、请求体上限；
 3. 防**路径穿越**（拒绝 `..`、绝对路径、控制字符）与 **ZIP 炸弹**；
-4. 下载改为**短时效、与调用者绑定**的签名 URL（`FileService.createSignedUrl` 或 S3 兼容签名）；
-5. 软删除 + 回收站 + 永久删除需更高权限与二次认证（`0007` 已提供持久化，应用层待接）。
-6. 删除全部"渲染给用户的 TODO 文案"与 `placeholder-bucket` 伪造值。
+4. ✅ 下载已改为**短时效、与调用者绑定**的令牌（见 5.1.1）——**已实现，待复审**；
+5. 软删除 + 回收站已由 migration `0007` 提供持久化；**应用层接入未确认**；
+6. 清理 `placeholder-bucket` 伪造值与渲染给用户的 "TODO:" 文案。
 
 ### 5.2 进程内限流（多实例失效）
 
@@ -386,8 +411,9 @@
 | TB-3 | RLS 行级隔离 | ❌ **不成立**（全 `USING(true)`、无 `FORCE RLS`；单一角色） | §4；实测 FORCE RLS = 0 |
 | TB-3 | 迁移校验和 / 幂等 / 事务 | ✅ | `migrate.mjs`；实测无漂移 |
 | TB-3 | 备份与恢复 | ❌ **从未演练** | [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) |
-| TB-4 | 服务端生成存储 key | ❌ 未实现 | §5.1 |
-| TB-4 | 签名下载 | ❌ 未实现（未签名无过期 URL） | `resources.service.ts:1465-1467` |
+| TB-4 | 服务端生成存储 key | ❌ **未确认**（DTO 仍接受客户端 `fileBucketId`/`filePath`） | §5.1.2 |
+| TB-4 | 签名下载（短时效 + 绑定调用者） | ⚠️ **已实现，待独立复审**：`DOWNLOAD_TOKEN_SECRET` HMAC 令牌 + 平台 `FileService` 签名直链，TTL 默认 300s / 上限 3600s，缺密钥 fail closed | `server/common/crypto/download-token.ts`、`server/modules/files/*` [已证实：文件头与导出] |
+| TB-4 | 上传侧服务端校验（类型/大小/穿越） | ❌ **未确认**（`server/common/files/file-validation.ts` 存在，但接入点我未核对；上传本身仍未实现） | §5.1.2 |
 | TB-5 | 平台注入行为（角色切换 / HBS / 发布） | **[无法验证]** | 无平台访问 |
 
 ---

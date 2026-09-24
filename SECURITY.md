@@ -549,13 +549,34 @@ x-request-id: 9df81526-…
 | 名称 | 用途 | 生成方式 | 缺省时的行为 |
 |---|---|---|---|
 | `MFA_ENCRYPTION_KEY` | AES-256-GCM 加密 TOTP 密钥 | `openssl rand -base64 32`（必须解出 32 字节） | **fail closed**：无法开始绑定、已启用 MFA 的账号登录失败 |
+| `DOWNLOAD_TOKEN_SECRET`（写作期间新增） | HMAC-SHA256 签发下载令牌 | `openssl rand -base64 32`（**≥32 字节**） | **fail closed**：下载接口返回 503，**不会**发出无法签名的链接（`download-token.ts:92-116`） |
 | 数据库连接串 | 应用与迁移 | 平台注入 `SUDA_DATABASE_URL` 或部署侧提供 `DATABASE_URL` | 应用无法查询任何数据；`/api/health/ready` 返回 503 |
 | 会话/Cookie 相关 | `SESSION_COOKIE_NAME`、`SESSION_TTL_SECONDS` | 配置值，非密钥 | 有安全默认值（`qls_session` / 86400s） |
 | 平台凭据（`FORCE_AUTHN_INNERAPI_DOMAIN` 等） | 妙搭平台集成 | 平台控制台 | **进程直接退出**（`PRODUCTION_READINESS.md` §O-1） |
 
-> **不存在"会话签名密钥"**。会话是不透明随机令牌 + 服务端 SHA-256 存储，
+> **会话本身不存在"签名密钥"**：会话是不透明随机令牌 + 服务端 SHA-256 存储，
 > 没有 JWT、没有 HMAC 签名密钥。任何文档若提到"轮换会话签名密钥"都是误解 ——
 > 应改为"轮换/失效全部会话"（见 `RUNBOOK.md` §6）。 [已证实：`session.service.ts` 全文]
+>
+> 但**下载令牌确实有签名密钥**（`DOWNLOAD_TOKEN_SECRET`），它的轮换是安全的
+> （只影响默认 300 秒的短时链接），与 MFA 密钥的不可逆性完全不同。
+> 两者的备份/轮换策略**必须分开**，见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §3.3。
+
+### 11.1.1 下载授权的新实现（写作期间落地，已读文件头/导出）
+
+| 项 | 实现 | 证据 |
+|---|---|---|
+| 令牌形态 | `base64url(payload).base64url(hmac-sha256)`，payload 含 `resourceId` + `teacherId` + `exp` + `nonce` | `server/common/crypto/download-token.ts:16-30` [已证实] |
+| 绑定 | 一个令牌只对一个资源 + 一个账号有效；`/api/files/download` 还要求会话的 teacherId 与令牌一致 | 同上 |
+| 时效 | 默认 **300s**，硬上限 **3600s**；非正数配置直接报错 | `download-token.ts:57,63,138-149` |
+| 服务端校验 | 常数时间比较（`timingSafeEqual`） | `download-token.ts:6,220+` |
+| 实际直链 | 由平台 `FileService` 签名；平台存储不可用时返回 **503** 并说明原因，**不返回占位/伪造 URL** | `server/modules/files/files.service.ts:11-33` [已证实] |
+| 路由与权限 | `GET /api/files/download`，`@RequirePermission('resource.download','storage.download')` | `server/modules/files/files.controller.ts:71,85,90` |
+| 明确**不是**什么 | **不是加密**：payload 可被持有者读取（base64url），安全性来自 HMAC 不可伪造 + 会话绑定 + 短时效。不要把机密放进 payload | `download-token.ts:33-40` [已证实] |
+
+> ⚠️ 我**只读了文件头与关键导出**，未做完整审阅，也**未运行**新增的
+> `scripts/probe-file-validation.mjs` / `verify-security-headers.mjs`。
+> 因此在验收前，这一项应标为"已实现、待独立复审"。 [已证实：文件内容]
 
 ### 11.2 密钥管理期望（部署方必须满足）
 
@@ -590,7 +611,7 @@ x-request-id: 9df81526-…
 |---|---|---|---|
 | G-1 | **限流为进程内 Map**，多实例下失效；Map 无清理会持续增长 | §2.4；`PRODUCTION_READINESS.md` §D-12、§R-4④ | 多副本时暴破防护被稀释 N 倍 |
 | G-2 | **RLS 不提供行级保护**（全 `USING(true)`，无 `FORCE RLS`）。**且独立部署下每个请求都跑在匿名 DB 角色**，DB 角色无法区分应用用户 | §8.1、§8.2 | 应用层一旦出现越权漏洞，数据库层不会兜底 |
-| G-3 | **文件上传/下载未生产化**：客户端可自选存储坐标；下载返回**未签名、无过期**的手拼 URL；`FileService.createSignedUrl` 从未被调用；客户端的浏览器直传绕过服务端校验 | `resources.service.ts:1465-1467`（`// TODO: 接入真实 dataloom FileService`）、`resources.dto.ts:164,218`、`PRODUCTION_READINESS.md` §B1-B3/§D-8 | 越权取文件、无过期链接外泄 |
+| G-3 | **文件链路：写入期间已部分落地，但未完整审阅**。旧的"未签名、无过期手拼 URL"实现已被替换为 `DOWNLOAD_TOKEN_SECRET` 签名的、**绑定 resourceId + teacherId + exp + nonce** 的令牌（默认 TTL 300s，硬上限 3600s，缺密钥 fail closed），实际直链由平台 `FileService` 签名；平台存储不可用时返回明确 503。**但**：`resources.dto.ts:164,168,218,222` 仍接受客户端传入的 `fileBucketId`/`filePath`（服务端生成 key 尚未确认），上传端仍是前端伪造坐标（`UploadPage.tsx:157-160` 的 `placeholder-bucket`），且我**未逐行审阅**新增的 `server/modules/files/*`、`server/common/files/file-validation.ts` | `server/common/crypto/download-token.ts`、`server/modules/files/files.{service,controller}.ts`（写作期间新增）；旧实现见 `PRODUCTION_READINESS.md` §B1-B3/§D-8 | 中（已显著降低；剩余为"服务端是否仍信任客户端存储坐标"与"新代码未经完整审阅"） |
 | G-4 | **`getPublicDownloadUrl` / `getPublicStorybookCoverStream` 是不校验科目权限的死代码**，一旦被接上公开路由即权限失效 | `resources.service.ts:758,786`、`PRODUCTION_READINESS.md` §D-7 | 高（潜在） |
 | G-5 | **没有 `whitelist` / `forbidNonWhitelisted`**。全局 `ValidationPipe` 确实存在（`PRODUCTION_READINESS.md` §Q-1 更正了此前判断），但未知字段**既不剥离也不拒绝** | `PRODUCTION_READINESS.md` §Q-1、§R-4① | mass-assignment 面 |
 | G-6 | **无强制改密**：`mustChangePassword` 只被赋 `false`，前端不读该字段 | §2.2；`PRODUCTION_READINESS.md` §B4/C1 | 初始口令长期有效 |

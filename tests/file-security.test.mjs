@@ -195,21 +195,32 @@ describe('sanitizeFileName', () => {
 // 2. stored-path traversal
 // ===========================================================================
 describe('isPathTraversalSafe', () => {
-  test('accepts ordinary bucket-relative stored paths', () => {
+  test('accepts a single leading slash — the platform\'s real object-key shape', () => {
+    // VERIFIED AGAINST REAL DATA, not assumed: the seeded curriculum stores
+    // covers as "/curriculum-resources/prek-english-covers/<id>.jpg"
+    // (server/database/seed-curriculum.sql) and the storybook-cover endpoint feeds
+    // exactly that value through this function. An earlier revision rejected a
+    // leading slash outright, which turned every Pre-K English cover into a 400.
+    assert.equal(isPathTraversalSafe('/curriculum-resources/prek-english-covers/1876907126277273.jpg'), true);
+    assert.equal(isPathTraversalSafe('/uploads/2024/lesson.pdf'), true);
     assert.equal(isPathTraversalSafe('uploads/2024/lesson.pdf'), true);
     assert.equal(isPathTraversalSafe('uploads/2026/plan.pdf'), true);
     assert.equal(isPathTraversalSafe('bucket_123/教案.pdf'), true);
   });
 
-  test('rejects ABSOLUTE paths — a stored file_path is bucket-relative by contract', () => {
-    // A leading separator cannot ascend by itself, but it makes the value
-    // absolute, and `path.resolve('/bucket', '/etc/passwd')` DISCARDS the bucket
-    // where `path.join` does not. Rejecting both spellings is the only answer that
-    // does not depend on which API a future consumer happens to use.
-    assert.equal(isPathTraversalSafe('/etc/passwd'), false);
-    assert.equal(isPathTraversalSafe('/uploads/2024/lesson.pdf'), false);
+  test('the leading slash never buys an escape — traversal behind it is still rejected', () => {
+    assert.equal(isPathTraversalSafe('/uploads/../../etc/passwd'), false);
+    assert.equal(isPathTraversalSafe('/../etc/passwd'), false);
+    assert.equal(isPathTraversalSafe('/a/./b'), false);
+  });
+
+  test('rejects doubled separators, drive letters, home and UNC shapes', () => {
     assert.equal(isPathTraversalSafe('//etc/passwd'), false);
+    assert.equal(isPathTraversalSafe('//host/share/x'), false);
     assert.equal(isPathTraversalSafe('\\windows\\system32'), false);
+    assert.equal(isPathTraversalSafe('\\server\\share\\x'), false);
+    assert.equal(isPathTraversalSafe('C:\\Windows\\system32'), false);
+    assert.equal(isPathTraversalSafe('~/x.pdf'), false);
   });
 
   test('rejects traversal, escapes and normalisation bait', () => {
@@ -218,9 +229,6 @@ describe('isPathTraversalSafe', () => {
     assert.equal(isPathTraversalSafe('a/b/../c.pdf'), false);
     assert.equal(isPathTraversalSafe('a/./b'), false);
     assert.equal(isPathTraversalSafe('..\\..\\windows\\system32'), false);
-    assert.equal(isPathTraversalSafe('C:\\Windows\\system32'), false);
-    assert.equal(isPathTraversalSafe('\\\\server\\share\\x'), false);
-    assert.equal(isPathTraversalSafe('~/.ssh/id_rsa'), false);
     assert.equal(isPathTraversalSafe('uploads/trailing/'), false);
   });
 

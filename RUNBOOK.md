@@ -620,19 +620,40 @@ curl -sI "$BASE/api/health" | grep -iE 'x-content-type|x-frame|referrer-policy|c
 
 ### 5.8 上传/下载"点了没反应"
 
-**当前是已知未实现的功能，不是故障**：
-- 347 条资源中**没有任何一条**带 `file_bucket_id` / `file_path`（实测 0 行）；
-- 服务端下载仍是 `// TODO: 接入真实 dataloom FileService` + 手拼**未签名、无过期**URL
-  （`resources.service.ts:1465-1467`）；
-- 上传是前端伪造坐标（`UploadPage.tsx:157-160`，`placeholder-bucket`）。
+**先分清「数据现状」与「代码现状」——写作期间两者已经不一致了。**
 
+**数据现状（未变，实测）**：347 条资源中**没有任何一条**带 `file_bucket_id` / `file_path`。
 ```sql
 SELECT count(*) AS total,
        count(*) FILTER (WHERE file_bucket_id IS NOT NULL AND file_bucket_id <> '') AS with_file
 FROM resources;
 -- 期望与实测一致：347 / 0
 ```
-见 [`SECURITY.md`](SECURITY.md) §12 G-3、[`THREAT_MODEL.md`](THREAT_MODEL.md) §5.1。
+
+**代码现状（已变化）**：旧的
+`// TODO: 接入真实 dataloom FileService` + 手拼未签名 URL 的实现已被替换为：
+- `GET /api/files/download`（`@RequirePermission('resource.download','storage.download')`），
+  校验**HMAC 签名的下载令牌**（`DOWNLOAD_TOKEN_SECRET`，默认 TTL 300s、上限 3600s，
+  payload 绑定 `resourceId` + `teacherId`）；
+- 实际直链由平台 `FileService` 签名取得；
+- **平台存储不可用 → 明确 503**（`STORAGE_UNAVAILABLE_MESSAGE`），**不返回伪造 URL**；
+- **`DOWNLOAD_TOKEN_SECRET` 未配置 → 同样 503**（fail closed）。
+
+因此现在"下载点了没反应"的可能原因按顺序排查：
+
+| # | 检查 | 命令 / 期望 |
+|---|---|---|
+| 1 | 资源**有没有文件**（最可能） | 上面的 SQL：期望 `347 / 0` → 没有文件，**没有任何东西可下载**。这是**数据问题**，不是故障 |
+| 2 | `DOWNLOAD_TOKEN_SECRET` 是否配置 | 未配置时下载接口返回 **503** 并说明原因。检查部署环境变量（≥32 字节） |
+| 3 | 平台文件服务是否可用 | 503 且 body 含"文件存储后端不可用…" → **独立部署的正常表现**（平台未接入）；妙搭部署则说明文件服务配置/网络有问题 |
+| 4 | 权限 | 需要 `resource.download` + `storage.download`；缺权限是 403 并写审计 |
+| 5 | 上传仍是未实现的 | 前端仍是 `placeholder-bucket` 伪造坐标（`UploadPage.tsx:157-160`）→ **上传功能尚未可用** |
+
+> 排查时请用响应里的 `requestId` 关联服务端日志 —— 存储失败的真实原因只写在日志里，
+> 不会回显给客户端（这是有意的，见 `files.service.ts` 文件头）。
+
+见 [`SECURITY.md`](SECURITY.md) §11.1.1 与 §12 G-3、
+[`THREAT_MODEL.md`](THREAT_MODEL.md) §5.1。
 
 ---
 
