@@ -21,6 +21,7 @@ import {
 } from './resources.dto';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
 import { RequirePermission } from '@server/modules/authz/permission.decorator';
+import { getClientIp } from '@server/common/http/client-ip';
 import type { AuthUser } from '@shared/api.interface';
 
 /**
@@ -40,12 +41,13 @@ import type { AuthUser } from '@shared/api.interface';
 export class ResourcesController {
   constructor(private readonly resourcesService: ResourcesService) {}
 
+  /**
+   * Client IP for audit records.
+   * Delegates to the shared trust-aware resolver — see client-ip.ts for why the
+   * previous hand-parsed `x-forwarded-for` was unsafe.
+   */
   private getIp(req: Request): string | undefined {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (typeof forwarded === 'string') {
-      return forwarded.split(',')[0]?.trim();
-    }
-    return req.ip;
+    return getClientIp(req) || undefined;
   }
 
   @Get()

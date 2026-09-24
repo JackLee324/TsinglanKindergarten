@@ -27,6 +27,7 @@ import type {
 } from '@shared/api.interface';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
 import { RequirePermission } from '@server/modules/authz/permission.decorator';
+import { getClientIp as resolveClientIp } from '@server/common/http/client-ip';
 
 interface TeacherListResponse {
   items: Teacher[];
@@ -43,10 +44,12 @@ interface TeacherListResponse {
 // declares the capability it needs via @RequirePermission, enforced centrally by
 // PermissionGuard and backed by the database guards from migration 0003.
 
-function getClientIp(req: Request): string | undefined {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string') return fwd.split(',')[0]?.trim();
-  return req.ip;
+/**
+ * Client IP for audit records.
+ * Delegates to the shared trust-aware resolver — see client-ip.ts.
+ */
+function auditClientIp(req: Request): string | undefined {
+  return resolveClientIp(req) || undefined;
 }
 
 @Controller('api/teachers')
@@ -86,7 +89,7 @@ export class TeachersController {
     @Body() dto: CreateTeacherDto,
     @Req() req: Request,
   ): Promise<TeacherDetail> {
-    const ip = getClientIp(req);
+    const ip = auditClientIp(req);
 
     return this.teachersService.createTeacher(
       dto,
@@ -108,7 +111,7 @@ export class TeachersController {
     @Body() dto: UpdateTeacherDto,
     @Req() req: Request,
   ): Promise<Teacher> {
-    const ip = getClientIp(req);
+    const ip = auditClientIp(req);
 
     return this.teachersService.updateTeacher(
       id,
@@ -131,7 +134,7 @@ export class TeachersController {
     @Param('id') id: string,
     @Req() req: Request,
   ): Promise<void> {
-    const ip = getClientIp(req);
+    const ip = auditClientIp(req);
 
     await this.teachersService.deleteTeacher(
       id,
@@ -153,7 +156,7 @@ export class TeachersController {
     @Body() body: UpdatePermissionsDto,
     @Req() req: Request,
   ): Promise<{ permissions: SubjectPermission[] }> {
-    const ip = getClientIp(req);
+    const ip = auditClientIp(req);
 
     const permissions = await this.teachersService.updatePermissions(
       id,

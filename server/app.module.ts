@@ -4,6 +4,7 @@ import { PlatformModule } from '@lark-apaas/fullstack-nestjs-core';
 
 import { GlobalExceptionFilter } from './common/filters/exception.filter';
 import { CsrfCheckMiddleware } from './modules/auth/csrf-check.middleware';
+import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { ViewModule } from './modules/view/view.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { TeachersModule } from './modules/teachers/teachers.module';
@@ -12,6 +13,7 @@ import { ReviewModule } from './modules/review/review.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -26,6 +28,10 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     AuditModule,
     CurriculumModule,
     DashboardModule,
+    // HealthModule must be listed BEFORE ViewModule: ViewModule registers the
+    // catch-all `@Get(['/', '*'])` route, and a catch-all placed earlier would
+    // swallow /api/health and make the readiness probe silently return the SPA.
+    HealthModule,
     // ====== @route-section: business-modules END ======
 
     // ⚠️ @route-order: last
@@ -41,6 +47,12 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
+    // Request id first, for every route: it must be attached before anything can
+    // fail, so the error filter and the logs can always correlate a request.
+    // Applied to all routes rather than only /api/* so that an error while
+    // rendering the SPA shell is traceable too.
+    consumer.apply(RequestIdMiddleware).forRoutes('*');
+
     consumer.apply(CsrfCheckMiddleware).forRoutes(
       { path: 'api/*', method: RequestMethod.POST },
       { path: 'api/*', method: RequestMethod.PUT },

@@ -11,6 +11,7 @@ import {
 import type { Request, Response } from 'express';
 
 import { AuthService } from './auth.service';
+import { getClientIp } from '@server/common/http/client-ip';
 import { Public, CurrentTeacher } from './auth.guard';
 import { AuthorizationService } from '../authz/authorization.service';
 import type {
@@ -149,11 +150,15 @@ export class AuthController {
     return { success: true };
   }
 
+  /**
+   * Client IP for rate limiting and audit.
+   *
+   * Delegates to the shared trust-aware resolver. This method previously read
+   * `x-forwarded-for` and took its FIRST element — the value the client itself
+   * supplies — which made the per-IP login rate limit bypassable and every audit
+   * row forgeable (audit finding D-10).
+   */
   private getIpAddress(req: Request): string {
-    const xForwardedFor = req.headers['x-forwarded-for'];
-    if (typeof xForwardedFor === 'string' && xForwardedFor.length > 0) {
-      return xForwardedFor.split(',')[0].trim();
-    }
-    return req.ip || '';
+    return getClientIp(req);
   }
 }
