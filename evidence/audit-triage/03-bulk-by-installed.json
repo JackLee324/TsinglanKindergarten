@@ -1,0 +1,218 @@
+[
+  {
+    "pkg": "drizzle-orm",
+    "ver": "0.44.6",
+    "sev": "high",
+    "id": "1116251",
+    "vr": "<0.45.2",
+    "title": "Drizzle ORM has SQL injection via improperly escaped SQL ide",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "high",
+    "id": "1113635",
+    "vr": "<2.1.0",
+    "title": "Multer vulnerable to Denial of Service via incomplete cleanu",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "high",
+    "id": "1113636",
+    "vr": "<2.1.0",
+    "title": "Multer vulnerable to Denial of Service via resource exhausti",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "high",
+    "id": "1113996",
+    "vr": "<2.1.1",
+    "title": "Multer Vulnerable to Denial of Service via Uncontrolled Recu",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "high",
+    "id": "1121089",
+    "vr": ">=1.0.0 <2.2.0",
+    "title": "Multer vulnerable to Denial of Service via deeply nested fie",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "moderate",
+    "id": "1121091",
+    "vr": ">=2.0.0-alpha.1 <2.2.0",
+    "title": "Multer vulnerable to Denial of Service via incomplete cleanu",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "high",
+    "id": "1193790",
+    "vr": "<2.3.0",
+    "title": "multer vulnerable to Denial of Service via crafted multipart",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "low",
+    "id": "1193792",
+    "vr": "<2.3.0",
+    "title": "multer vulnerable to file size limit bypass via async fileFi",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "multer",
+    "ver": "2.0.2",
+    "sev": "high",
+    "id": "1193793",
+    "vr": "<2.3.0",
+    "title": "multer vulnerable to Denial of Service via oversized array i",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "lodash",
+    "ver": "4.17.21",
+    "sev": "moderate",
+    "id": "1120370",
+    "vr": ">=4.0.0 <=4.17.22",
+    "title": "Lodash has Prototype Pollution Vulnerability in `_.unset` an",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "lodash",
+    "ver": "4.17.21",
+    "sev": "high",
+    "id": "1115806",
+    "vr": ">=4.0.0 <=4.17.23",
+    "title": "lodash vulnerable to Code Injection via `_.template` imports",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "lodash",
+    "ver": "4.17.21",
+    "sev": "moderate",
+    "id": "1115810",
+    "vr": "<=4.17.23",
+    "title": "lodash vulnerable to Prototype Pollution via array path bypa",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "js-yaml",
+    "ver": "4.1.0",
+    "sev": "moderate",
+    "id": "1112715",
+    "vr": ">=4.0.0 <4.1.1",
+    "title": "js-yaml has prototype pollution in merge (<<)",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "js-yaml",
+    "ver": "4.1.0",
+    "sev": "moderate",
+    "id": "1121860",
+    "vr": ">=4.0.0 <=4.1.1",
+    "title": "JS-YAML: Quadratic-complexity DoS in merge key handling via ",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "js-yaml",
+    "ver": "4.1.0",
+    "sev": "high",
+    "id": "1123911",
+    "vr": ">=4.0.0 <4.3.0",
+    "title": "js-yaml: YAML merge-key chains can force quadratic CPU consu",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "js-yaml",
+    "ver": "4.1.0",
+    "sev": "high",
+    "id": "1138115",
+    "vr": ">=4.0.0 <4.3.1",
+    "title": "JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "js-yaml",
+    "ver": "4.1.0",
+    "sev": "high",
+    "id": "1193727",
+    "vr": ">=4.0.0 <4.3.2",
+    "title": "js-yaml: maxTotalMergeKeys does not limit CPU use for empty ",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "picomatch",
+    "ver": "4.0.1",
+    "sev": "moderate",
+    "id": "1115551",
+    "vr": ">=4.0.0 <4.0.4",
+    "title": "Picomatch: Method Injection in POSIX Character Classes cause",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "picomatch",
+    "ver": "4.0.1",
+    "sev": "high",
+    "id": "1115554",
+    "vr": ">=4.0.0 <4.0.4",
+    "title": "Picomatch has a ReDoS vulnerability via extglob quantifiers",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "tmp",
+    "ver": "0.0.33",
+    "sev": "low",
+    "id": "1109537",
+    "vr": "<=0.2.3",
+    "title": "tmp allows arbitrary temporary file / directory write via sy",
+    "verdict": "范围外/需人工"
+  },
+  {
+    "pkg": "tmp",
+    "ver": "0.0.33",
+    "sev": "high",
+    "id": "1120654",
+    "vr": "<0.2.6",
+    "title": "tmp has Path Traversal via unsanitized prefix/postfix that e",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "@opentelemetry/sdk-node",
+    "ver": "0.208.0",
+    "sev": "high",
+    "id": "1120252",
+    "vr": "<0.217.0",
+    "title": "Prometheus exporter process crash via malformed HTTP request",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "@opentelemetry/exporter-prometheus",
+    "ver": "0.208.0",
+    "sev": "high",
+    "id": "1120253",
+    "vr": "<0.217.0",
+    "title": "Prometheus exporter process crash via malformed HTTP request",
+    "verdict": "★命中"
+  },
+  {
+    "pkg": "@opentelemetry/propagator-jaeger",
+    "ver": "2.2.0",
+    "sev": "high",
+    "id": "1124011",
+    "vr": "<2.9.0",
+    "title": "OpenTelemetry JavaScript: Denial of service in `JaegerPropag",
+    "verdict": "★命中"
+  }
+]

@@ -814,7 +814,7 @@ naming-http              pass=49 fail=0
 | **C-1** | **没有任何可用的 super_admin**：唯一持有者是测试夹具 `__rbac_keeper`，它被**刻意设计为没有 `password_hash`**，且 `AuthGuard` 对该角色在 MFA 未绑定前拒绝一切路由 → 最高权限能力**当前完全不可达** | predeploy `FAIL [07]`；`auth.service.ts` + `auth.guard.ts` |
 | **C-2** | **教师管理功能不可用**：`PATCH /api/teachers/:id` 与 `DELETE /api/teachers/:id` 因与 G-18 同源的 `anon_` 列权限问题**返回 500**（改名未生效、停用失败） | 由 auth 负责代理实测报告；**未修复**（不在其文件范围） |
 | **C-3** | **平台级明文日志泄露仅被部分封堵**：`HTTPTraceInterceptor` 对**所有模块**无条件记录请求/响应体；auth 模块已闭环，但 `POST /api/teachers` 仍会返回 `temporaryPassword` 并被平台写入日志 | 由 auth 代理验证 |
-| **C-4** | 依赖漏洞：**16 HIGH / 0 CRITICAL**（含 `drizzle-orm` 直接 SQL 注入公告、`@nestjs/platform-express`、`@lark-apaas/fullstack-nestjs-core`）。门禁**拒绝豁免**此类真实漏洞 | predeploy 依赖检查 |
+| **C-4** | 依赖漏洞：**6 HIGH / 0 CRITICAL**（升级前 16 HIGH；已修复 8 个包：`drizzle-orm` 0.44.6→0.45.3、`multer` 2.0.2→2.4.0、`lodash` 4.18.1、`js-yaml` 4.3.2、`picomatch` 4.0.7、`@nestjs/cli` 下 `glob` 10.5.0）。剩余 6 项中 **3 项经代码取证不可达**（OpenTelemetry Prometheus/Jaeger：全树 `PrometheusExporter` / `JaegerPropagator` **零引用**，且平台 `NodeSDK` 仅传三个自有 exporter 参数）、**1 项为 dev-only 且无同 major 修复版**（`tmp@0.0.33` 经 `external-editor` 锁死，`--omit=dev` 实测不在生产树）。门禁**仍拒绝豁免真实漏洞**：`FAIL [20] npm audit reports 6 HIGH`。证据 `evidence/audit-triage/TRIAGE-SUMMARY.md` | 已大幅收敛（16→6），残余 6 项有取证 |
 | **C-5** | 生产环境变量未配置：`NODE_ENV`、`MFA_ENCRYPTION_KEY`、`DOWNLOAD_TOKEN_SECRET`、`HTTPS_ENABLED`/`TRUST_PROXY` | predeploy `FAIL [01][03][10][11]` |
 | **C-6** | 单实例架构约束（已接受）：进程内限流，扩容前必须先迁移到共享存储 | `DEPLOYMENT_PRODUCTION.md` 附录 |
 | **C-7** | 平台缺陷：`app.close()` 在本应用**无法完成**（`DRIZZLE_DATABASE` Proxy 在池断开后于 Nest 钩子自省时抛错，已用裸 `NestFactory.create` 独立复现）。已定位并在应用侧绕过并降级为 WARN，但 Nest 的关闭钩子不会运行 | shutdown 代理实测 |
@@ -823,10 +823,16 @@ naming-http              pass=49 fail=0
 
 1. **回收站 UI** — 按指示保持 deferred；后端 soft delete / restore / 永久删除已有测试覆盖。
 2. **多实例限流** — 迁移到 Redis/shared store（C-6 的解除条件）。
-3. **`scripts/predeploy-check.sh` 在 CI 中接入公网 registry 的 npm audit**，使 C-4 从 UNVERIFIED 变为稳定可测。
+3. ~~npm audit 接入公网 registry~~ **已完成**：`predeploy-check.sh` 已接入 `PREDEPLOY_AUDIT_REGISTRY`，npm audit 由 UNVERIFIED 变为稳定可测（并因此真实暴露并收敛了 C-4）。
 4. **审计覆盖度**：独立复核为 42 路由 / 23 条显式权限；本机早期扫描为 40/21（因 look-ahead 窗口把 `resources GET /:id` 重复计了 3 次）。以复核数字为准，差异已记录。
 5. **未实现**：优雅退出的编排层验证（无 k8s）、`rm -rf dist` 与服务并发时的瞬态中断端到端复现、`/assets/*` 由平台 CDN 提供（设计如此，非缺陷）。
 6. Dockerfile / CI 待真实环境首次构建后回归。
+7. 新增 `scripts/ci-check-drizzle-api.mjs`（防 Drizzle 危险 API 回归的静态闸门）与
+   `scripts/repair-local-native-bindings.sh`（lockfile 为 linux/x64 专用，`npm install` 会剪掉
+   macOS 原生绑定；本会话已两次踩到，该脚本含 `--check`）。
+8. 依赖 triage 过程中该代理自查出并修正了自身两个错误：`glob` override 一度是全局的，
+   把 `react-dev-utils` 的嵌套 `glob` 从 7.2.3 跨大版本拉到 10.5.0（已收紧为
+   `overrides['@nestjs/cli'].glob`）；两次 `npm install` 剪掉 macOS 原生绑定导致构建失败（已修）。
 
 ---
 

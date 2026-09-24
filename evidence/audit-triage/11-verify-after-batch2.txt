@@ -1,0 +1,76 @@
+########## 批次2（drizzle-orm 0.44.6 -> 0.45.3）验证 ##########
+时间: 2026-09-24T06:12:04Z
+
+===== drizzle API 兼容性闸门 =====
+drizzle-orm API 兼容性检查
+  已装版本: 0.45.3
+
+平台包依赖的内部符号（@lark-apaas/nestjs-datapaas monkey patch）:
+  ✓ drizzle-orm 导出 "sql"
+  ✓ drizzle-orm/postgres-js 导出 "drizzle"
+  ✓ drizzle-orm/postgres-js 导出 "PostgresJsPreparedQuery"
+  ✓ PostgresJsPreparedQuery.prototype.execute 存在
+
+本应用使用的 API:
+  ✓ 全部 25 个符号存在
+  · 类型导出（SQLWrapper 等）不在运行时检查范围，由 tsc 覆盖
+
+RESULT: PASS — drizzle-orm 提供平台包与应用所需的全部运行时符号
+rc=0
+
+===== npm test =====
+  ...
+1..22
+# tests 230
+# suites 27
+# pass 230
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 19085.098125
+
+===== typecheck server =====
+
+> fullstack-nestjs-template@2.3.0 type:check:server
+> tsc --noEmit --project tsconfig.node.json
+
+rc=0
+
+===== typecheck client =====
+
+> fullstack-nestjs-template@2.3.0 type:check:client
+> tsc --noEmit --project tsconfig.app.json
+
+rc=0
+
+===== npm run build =====
+   ⏱️  耗时: 11.583s
+
+📊 构建产物统计:
+   产物大小:         11M
+   node_modules: (未裁剪，未复制到产物目录)
+
+rc=0
+
+===== 全部 HTTP 安全套件 + predeploy 门禁 =====
+  gate lock  acquired (exclusive advisory lock on the shared environment)
+=== 自动化测试 ===
+  npm test                 # tests 230 # pass 230 # fail 0 
+=== 类型检查 ===
+  typecheck server         PASS
+  typecheck client         PASS
+=== 构建 ===
+  npm run build            PASS
+=== 前后端 API 契约（静态检查，无需运行服务） ===
+  api-contracts             matched
+=== HTTP 验证套件（需要运行中的服务） ===
+  authz-http               pass=74 fail=0
+  hardening                pass=10 fail=0
+  mfa                      pass=55 fail=0
+  security-headers         pass=20 fail=0
+  files-http               pass=73 fail=0
+  naming-http              pass=49 fail=0
+
+  ✅ 全部通过
+rc=0

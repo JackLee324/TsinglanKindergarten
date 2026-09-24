@@ -1,0 +1,59 @@
+########## 批次1（multer/lodash/js-yaml/picomatch override）验证 ##########
+时间: 2026-09-24T06:08:08Z
+
+===== npm test =====
+  ...
+1..22
+# tests 230
+# suites 27
+# pass 230
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 19064.544875
+
+===== typecheck server =====
+
+> fullstack-nestjs-template@2.3.0 type:check:server
+> tsc --noEmit --project tsconfig.node.json
+
+rc=0
+
+===== typecheck client =====
+
+> fullstack-nestjs-template@2.3.0 type:check:client
+> tsc --noEmit --project tsconfig.app.json
+
+rc=0
+
+===== npm run build =====
+   ⏱️  耗时: 8.379s
+
+📊 构建产物统计:
+   产物大小:         11M
+   node_modules: (未裁剪，未复制到产物目录)
+
+rc=0
+
+===== 全部 HTTP 安全套件 (scripts/verify-all.sh 含 npm test/typecheck/build) =====
+  gate lock  acquired (exclusive advisory lock on the shared environment)
+=== 自动化测试 ===
+  npm test                 # tests 230 # pass 230 # fail 0 
+=== 类型检查 ===
+  typecheck server         PASS
+  typecheck client         PASS
+=== 构建 ===
+  npm run build            PASS
+=== 前后端 API 契约（静态检查，无需运行服务） ===
+  api-contracts             matched
+=== HTTP 验证套件（需要运行中的服务） ===
+  authz-http               pass=74 fail=0
+  hardening                pass=10 fail=0
+  mfa                      pass=55 fail=0
+  security-headers         pass=20 fail=0
+  files-http               pass=73 fail=0
+  naming-http              pass=49 fail=0
+
+  ✅ 全部通过
+rc=0

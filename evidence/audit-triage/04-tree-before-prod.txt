@@ -1,0 +1,1040 @@
+fullstack-nestjs-template@2.3.0 /Users/jacklee/Desktop/幼儿园/HenryWeb/qls-kindergarten-resource-platform-v1.3.0
++-- @lark-apaas/fullstack-nestjs-core@1.1.64
+| +-- @lark-apaas/cache-service@0.1.2
+| | +-- @keyv/redis@5.1.6
+| | | +-- @redis/client@5.12.1
+| | | | +-- UNMET OPTIONAL DEPENDENCY @node-rs/xxhash@^1.1.0
+| | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | `-- cluster-key-slot@1.1.2 deduped
+| | | +-- cluster-key-slot@1.1.2
+| | | +-- hookified@1.15.1
+| | | `-- keyv@5.6.0 deduped
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @lark-apaas/nestjs-logger@1.0.18 deduped
+| | +-- @lark-apaas/nestjs-observable@0.0.12 deduped
+| | +-- @nestjs/cache-manager@3.1.3 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- cache-manager@6.4.3 deduped
+| | +-- keyv@5.6.0 deduped
+| | `-- reflect-metadata@0.1.14 deduped
+| +-- @lark-apaas/file-service@0.1.2
+| +-- @lark-apaas/http-client@0.1.7
+| +-- @lark-apaas/nestjs-authnpaas@1.0.8
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- @nestjs/swagger@7.4.2 deduped
+| | `-- reflect-metadata@0.1.14 deduped
+| +-- @lark-apaas/nestjs-authzpaas@0.1.15
+| | +-- @casl/ability@6.8.1
+| | | `-- @ucast/mongo2js@1.4.1
+| | |   +-- @ucast/core@1.10.2
+| | |   +-- @ucast/js@3.1.0
+| | |   | `-- @ucast/core@1.10.2 deduped
+| | |   `-- @ucast/mongo@2.4.3
+| | |     `-- @ucast/core@1.10.2 deduped
+| | +-- @lark-apaas/nestjs-authnpaas@1.0.8 deduped
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- @nestjs/swagger@7.4.2 deduped
+| | +-- jsonwebtoken@9.0.3
+| | | +-- jws@4.0.1
+| | | | +-- jwa@2.0.1
+| | | | | +-- buffer-equal-constant-time@1.0.1
+| | | | | +-- ecdsa-sig-formatter@1.0.11
+| | | | | | `-- safe-buffer@5.2.1 deduped
+| | | | | `-- safe-buffer@5.2.1 deduped
+| | | | `-- safe-buffer@5.2.1 deduped
+| | | +-- lodash.includes@4.3.0
+| | | +-- lodash.isboolean@3.0.3
+| | | +-- lodash.isinteger@4.0.4
+| | | +-- lodash.isnumber@3.0.3
+| | | +-- lodash.isplainobject@4.0.6
+| | | +-- lodash.isstring@4.0.1
+| | | +-- lodash.once@4.1.1
+| | | +-- ms@2.1.3
+| | | `-- semver@7.7.2
+| | +-- reflect-metadata@0.1.14 deduped
+| | `-- uuid@13.0.2
+| +-- @lark-apaas/nestjs-capability@0.1.14
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- @nestjs/swagger@7.4.2 deduped
+| | +-- chokidar@3.6.0
+| | | +-- anymatch@3.1.3
+| | | | +-- normalize-path@3.0.0 deduped
+| | | | `-- picomatch@2.3.2
+| | | +-- braces@3.0.3
+| | | | `-- fill-range@7.1.1
+| | | |   `-- to-regex-range@5.0.1
+| | | |     `-- is-number@7.0.0
+| | | +-- UNMET OPTIONAL DEPENDENCY fsevents@~2.3.2
+| | | +-- glob-parent@5.1.2
+| | | | `-- is-glob@4.0.3 deduped
+| | | +-- is-binary-path@2.1.0
+| | | | `-- binary-extensions@2.3.0
+| | | +-- is-glob@4.0.3
+| | | | `-- is-extglob@2.1.1
+| | | +-- normalize-path@3.0.0
+| | | `-- readdirp@3.6.0
+| | |   `-- picomatch@2.3.2
+| | `-- zod@4.5.4 deduped
+| +-- @lark-apaas/nestjs-common@0.1.9
+| | `-- @nestjs/common@10.4.22 deduped
+| +-- @lark-apaas/nestjs-datapaas@1.0.22
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @lark-apaas/nestjs-observable@0.0.12 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- @types/pg@8.23.1 deduped
+| | +-- drizzle-orm@0.44.6 deduped
+| | +-- postgres@3.4.9 deduped
+| | `-- reflect-metadata@0.1.14 deduped
+| +-- @lark-apaas/nestjs-http-forwarder@0.1.3
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- reflect-metadata@0.1.14 deduped
+| | `-- undici@7.29.0
+| +-- @lark-apaas/nestjs-logger@1.0.18
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @lark-apaas/nestjs-observable@0.0.12 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- pino@10.3.1
+| | | +-- @pinojs/redact@0.4.0
+| | | +-- atomic-sleep@1.0.0
+| | | +-- on-exit-leak-free@2.1.2
+| | | +-- pino-abstract-transport@3.0.0
+| | | | `-- split2@4.2.0
+| | | +-- pino-std-serializers@7.1.0
+| | | +-- process-warning@5.1.0
+| | | +-- quick-format-unescaped@4.0.4
+| | | +-- real-require@0.2.0
+| | | +-- safe-stable-stringify@2.5.0
+| | | +-- sonic-boom@4.2.1
+| | | | `-- atomic-sleep@1.0.0 deduped
+| | | `-- thread-stream@4.2.0
+| | |   `-- real-require@1.0.0
+| | `-- rotating-file-stream@3.2.10
+| +-- @lark-apaas/nestjs-mcp@0.1.1
+| | +-- @modelcontextprotocol/ext-apps@1.7.5
+| | | +-- @modelcontextprotocol/sdk@1.30.0 deduped
+| | | +-- @standard-schema/spec@1.1.0
+| | | +-- react-dom@19.2.8 deduped
+| | | +-- react@19.2.8 deduped
+| | | `-- zod@4.5.4 deduped
+| | +-- @modelcontextprotocol/sdk@1.30.0
+| | | +-- UNMET OPTIONAL DEPENDENCY @cfworker/json-schema@^4.1.1
+| | | +-- @hono/node-server@2.1.1
+| | | | `-- hono@4.13.8 deduped
+| | | +-- ajv-formats@3.0.1
+| | | | `-- ajv@8.20.0 deduped
+| | | +-- ajv@8.20.0
+| | | | +-- fast-deep-equal@3.1.3
+| | | | +-- fast-uri@3.1.8
+| | | | +-- json-schema-traverse@1.0.0
+| | | | `-- require-from-string@2.0.2
+| | | +-- content-type@1.0.5 deduped
+| | | +-- cors@2.8.5 deduped
+| | | +-- cross-spawn@7.0.6
+| | | | +-- path-key@3.1.1
+| | | | +-- shebang-command@2.0.0
+| | | | | `-- shebang-regex@3.0.0
+| | | | `-- which@2.0.2
+| | | |   `-- isexe@2.0.0
+| | | +-- eventsource-parser@3.1.1
+| | | +-- eventsource@3.0.7
+| | | | `-- eventsource-parser@3.1.1 deduped
+| | | +-- express-rate-limit@8.7.0
+| | | | +-- debug@4.4.3 deduped
+| | | | +-- express@4.22.2
+| | | | | +-- accepts@1.3.8 deduped
+| | | | | +-- array-flatten@1.1.1 deduped
+| | | | | +-- body-parser@1.20.6
+| | | | | | +-- bytes@3.1.2 deduped
+| | | | | | +-- content-type@1.0.5 deduped
+| | | | | | +-- debug@2.6.9 deduped
+| | | | | | +-- depd@2.0.0 deduped
+| | | | | | +-- destroy@1.2.0 deduped
+| | | | | | +-- http-errors@2.0.1 deduped
+| | | | | | +-- iconv-lite@0.4.24 deduped
+| | | | | | +-- on-finished@2.4.1 deduped
+| | | | | | +-- qs@6.15.3 deduped
+| | | | | | +-- raw-body@2.5.3 deduped
+| | | | | | +-- type-is@1.6.18 deduped
+| | | | | | `-- unpipe@1.0.0 deduped
+| | | | | +-- content-disposition@0.5.4 deduped
+| | | | | +-- content-type@1.0.5 deduped
+| | | | | +-- cookie-signature@1.0.6 deduped
+| | | | | +-- cookie@0.7.2 deduped
+| | | | | +-- debug@2.6.9
+| | | | | | `-- ms@2.0.0
+| | | | | +-- depd@2.0.0 deduped
+| | | | | +-- encodeurl@2.0.0 deduped
+| | | | | +-- escape-html@1.0.3 deduped
+| | | | | +-- etag@1.8.1 deduped
+| | | | | +-- finalhandler@1.3.2 deduped
+| | | | | +-- fresh@0.5.2 deduped
+| | | | | +-- http-errors@2.0.1 deduped
+| | | | | +-- merge-descriptors@1.0.3 deduped
+| | | | | +-- methods@1.1.2 deduped
+| | | | | +-- on-finished@2.4.1 deduped
+| | | | | +-- parseurl@1.3.3 deduped
+| | | | | +-- path-to-regexp@0.1.13
+| | | | | +-- proxy-addr@2.0.7 deduped
+| | | | | +-- qs@6.15.3
+| | | | | | +-- es-define-property@1.0.1 deduped
+| | | | | | `-- side-channel@1.1.1 deduped
+| | | | | +-- range-parser@1.2.1 deduped
+| | | | | +-- safe-buffer@5.2.1 deduped
+| | | | | +-- send@0.19.2 deduped
+| | | | | +-- serve-static@1.16.3 deduped
+| | | | | +-- setprototypeof@1.2.0 deduped
+| | | | | +-- statuses@2.0.2 deduped
+| | | | | +-- type-is@1.6.18 deduped
+| | | | | +-- utils-merge@1.0.1 deduped
+| | | | | `-- vary@1.1.2 deduped
+| | | | `-- ip-address@10.7.2
+| | | +-- express@5.2.1
+| | | | +-- accepts@2.0.0
+| | | | | +-- mime-types@3.0.2 deduped
+| | | | | `-- negotiator@1.1.0
+| | | | |   `-- content-type@2.1.0
+| | | | +-- body-parser@2.3.0
+| | | | | +-- bytes@3.1.2 deduped
+| | | | | +-- content-type@2.1.0
+| | | | | +-- debug@4.4.3 deduped
+| | | | | +-- http-errors@2.0.1 deduped
+| | | | | +-- iconv-lite@0.7.3 deduped
+| | | | | +-- on-finished@2.4.1 deduped
+| | | | | +-- qs@6.16.0 deduped
+| | | | | +-- raw-body@3.0.2 deduped
+| | | | | `-- type-is@2.1.0 deduped
+| | | | +-- content-disposition@1.1.0
+| | | | +-- content-type@1.0.5 deduped
+| | | | +-- cookie-signature@1.2.2
+| | | | +-- cookie@0.7.2 deduped
+| | | | +-- debug@4.4.3 deduped
+| | | | +-- depd@2.0.0 deduped
+| | | | +-- encodeurl@2.0.0 deduped
+| | | | +-- escape-html@1.0.3 deduped
+| | | | +-- etag@1.8.1 deduped
+| | | | +-- finalhandler@2.1.1
+| | | | | +-- debug@4.4.3 deduped
+| | | | | +-- encodeurl@2.0.0 deduped
+| | | | | +-- escape-html@1.0.3 deduped
+| | | | | +-- on-finished@2.4.1 deduped
+| | | | | +-- parseurl@1.3.3 deduped
+| | | | | `-- statuses@2.0.2 deduped
+| | | | +-- fresh@2.0.0
+| | | | +-- http-errors@2.0.1 deduped
+| | | | +-- merge-descriptors@2.0.0
+| | | | +-- mime-types@3.0.2
+| | | | | `-- mime-db@1.54.0
+| | | | +-- on-finished@2.4.1 deduped
+| | | | +-- once@1.4.0
+| | | | | `-- wrappy@1.0.2
+| | | | +-- parseurl@1.3.3 deduped
+| | | | +-- proxy-addr@2.0.7 deduped
+| | | | +-- qs@6.16.0
+| | | | | +-- es-define-property@1.0.1 deduped
+| | | | | `-- side-channel@1.1.1 deduped
+| | | | +-- range-parser@1.2.1 deduped
+| | | | +-- router@2.2.0
+| | | | | +-- debug@4.4.3 deduped
+| | | | | +-- depd@2.0.0 deduped
+| | | | | +-- is-promise@4.0.0
+| | | | | +-- parseurl@1.3.3 deduped
+| | | | | `-- path-to-regexp@8.4.2
+| | | | +-- send@1.2.1
+| | | | | +-- debug@4.4.3 deduped
+| | | | | +-- encodeurl@2.0.0 deduped
+| | | | | +-- escape-html@1.0.3 deduped
+| | | | | +-- etag@1.8.1 deduped
+| | | | | +-- fresh@2.0.0 deduped
+| | | | | +-- http-errors@2.0.1 deduped
+| | | | | +-- mime-types@3.0.2 deduped
+| | | | | +-- ms@2.1.3 deduped
+| | | | | +-- on-finished@2.4.1 deduped
+| | | | | +-- range-parser@1.2.1 deduped
+| | | | | `-- statuses@2.0.2 deduped
+| | | | +-- serve-static@2.2.1
+| | | | | +-- encodeurl@2.0.0 deduped
+| | | | | +-- escape-html@1.0.3 deduped
+| | | | | +-- parseurl@1.3.3 deduped
+| | | | | `-- send@1.2.1 deduped
+| | | | +-- statuses@2.0.2 deduped
+| | | | +-- type-is@2.1.0
+| | | | | +-- content-type@2.1.0
+| | | | | +-- media-typer@1.1.1
+| | | | | `-- mime-types@3.0.2 deduped
+| | | | `-- vary@1.1.2 deduped
+| | | +-- hono@4.13.8
+| | | +-- jose@6.2.12
+| | | +-- json-schema-typed@8.0.2
+| | | +-- pkce-challenge@5.0.1
+| | | +-- raw-body@3.0.2
+| | | | +-- bytes@3.1.2 deduped
+| | | | +-- http-errors@2.0.1 deduped
+| | | | +-- iconv-lite@0.7.3
+| | | | | `-- safer-buffer@2.1.2 deduped
+| | | | `-- unpipe@1.0.0 deduped
+| | | +-- zod-to-json-schema@3.25.2
+| | | | `-- zod@4.5.4 deduped
+| | | `-- zod@4.5.4 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | +-- @nestjs/swagger@7.4.2 deduped
+| | +-- yaml@2.9.1
+| | `-- zod@4.5.4 deduped
+| +-- @lark-apaas/nestjs-observable@0.0.12
+| | +-- @lark-apaas/nestjs-common@0.1.9 deduped
+| | +-- @lark-apaas/observable@1.0.6
+| | | +-- @opentelemetry/api-logs@0.208.0
+| | | | `-- @opentelemetry/api@1.9.1 deduped
+| | | +-- @opentelemetry/api@1.9.1 deduped
+| | | +-- @opentelemetry/core@2.11.0
+| | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | `-- @opentelemetry/semantic-conventions@1.43.0
+| | | +-- @opentelemetry/resources@2.11.0
+| | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | +-- @opentelemetry/core@2.11.0 deduped
+| | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | +-- @opentelemetry/sdk-logs@0.208.0
+| | | | +-- @opentelemetry/api-logs@0.208.0 deduped
+| | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | +-- @opentelemetry/core@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | `-- @opentelemetry/resources@2.2.0
+| | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | |   `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | +-- @opentelemetry/sdk-node@0.208.0
+| | | | +-- @opentelemetry/api-logs@0.208.0 deduped
+| | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | +-- @opentelemetry/core@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/exporter-logs-otlp-grpc@0.208.0
+| | | | | +-- @grpc/grpc-js@1.14.4
+| | | | | | +-- @grpc/proto-loader@0.8.1
+| | | | | | | +-- lodash.camelcase@4.3.0
+| | | | | | | +-- long@5.3.2
+| | | | | | | +-- protobufjs@7.6.6 deduped
+| | | | | | | `-- yargs@17.7.3
+| | | | | | |   +-- cliui@8.0.1
+| | | | | | |   | +-- string-width@4.2.3 deduped
+| | | | | | |   | +-- strip-ansi@6.0.1
+| | | | | | |   | | `-- ansi-regex@5.0.1
+| | | | | | |   | `-- wrap-ansi@7.0.0
+| | | | | | |   |   +-- ansi-styles@4.3.0 deduped
+| | | | | | |   |   +-- string-width@4.2.3 deduped
+| | | | | | |   |   `-- strip-ansi@6.0.1 deduped
+| | | | | | |   +-- escalade@3.2.0
+| | | | | | |   +-- get-caller-file@2.0.5
+| | | | | | |   +-- require-directory@2.1.1
+| | | | | | |   +-- string-width@4.2.3
+| | | | | | |   | +-- emoji-regex@8.0.0
+| | | | | | |   | +-- is-fullwidth-code-point@3.0.0
+| | | | | | |   | `-- strip-ansi@6.0.1 deduped
+| | | | | | |   +-- y18n@5.0.8
+| | | | | | |   `-- yargs-parser@21.1.1
+| | | | | | `-- @js-sdsl/ordered-map@4.4.2
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | | `-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-grpc-exporter-base@0.208.0
+| | | | | | +-- @grpc/grpc-js@1.14.4 deduped
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | | `-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0
+| | | | | | +-- @opentelemetry/api-logs@0.208.0 deduped
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | | +-- @opentelemetry/sdk-logs@0.208.0 deduped
+| | | | | | +-- @opentelemetry/sdk-metrics@2.2.0
+| | | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | | `-- @opentelemetry/resources@2.2.0 deduped
+| | | | | | +-- @opentelemetry/sdk-trace-base@2.2.0
+| | | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | | +-- @opentelemetry/resources@2.2.0 deduped
+| | | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | | `-- protobufjs@7.6.6
+| | | | | |   +-- @protobufjs/aspromise@1.1.2
+| | | | | |   +-- @protobufjs/base64@1.1.2
+| | | | | |   +-- @protobufjs/codegen@2.0.5
+| | | | | |   +-- @protobufjs/eventemitter@1.1.1
+| | | | | |   +-- @protobufjs/fetch@1.1.1
+| | | | | |   | `-- @protobufjs/aspromise@1.1.2 deduped
+| | | | | |   +-- @protobufjs/float@1.0.2
+| | | | | |   +-- @protobufjs/path@1.1.2
+| | | | | |   +-- @protobufjs/pool@1.1.0
+| | | | | |   +-- @protobufjs/utf8@1.1.2
+| | | | | |   +-- @types/node@22.20.1 deduped
+| | | | | |   `-- long@5.3.2 deduped
+| | | | | `-- @opentelemetry/sdk-logs@0.208.0 deduped
+| | | | +-- @opentelemetry/exporter-logs-otlp-http@0.208.0
+| | | | | +-- @opentelemetry/api-logs@0.208.0 deduped
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | `-- @opentelemetry/sdk-logs@0.208.0 deduped
+| | | | +-- @opentelemetry/exporter-logs-otlp-proto@0.208.0
+| | | | | +-- @opentelemetry/api-logs@0.208.0 deduped
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/sdk-logs@0.208.0 deduped
+| | | | | `-- @opentelemetry/sdk-trace-base@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   +-- @opentelemetry/resources@2.2.0 deduped
+| | | | |   `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/exporter-metrics-otlp-grpc@0.208.0
+| | | | | +-- @grpc/grpc-js@1.14.4 deduped
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/exporter-metrics-otlp-http@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-grpc-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/sdk-metrics@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   `-- @opentelemetry/resources@2.2.0 deduped
+| | | | +-- @opentelemetry/exporter-metrics-otlp-http@0.208.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/sdk-metrics@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   `-- @opentelemetry/resources@2.2.0 deduped
+| | | | +-- @opentelemetry/exporter-metrics-otlp-proto@0.208.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/exporter-metrics-otlp-http@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/sdk-metrics@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   `-- @opentelemetry/resources@2.2.0 deduped
+| | | | +-- @opentelemetry/exporter-prometheus@0.208.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/sdk-metrics@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   `-- @opentelemetry/resources@2.2.0 deduped
+| | | | +-- @opentelemetry/exporter-trace-otlp-grpc@0.208.0
+| | | | | +-- @grpc/grpc-js@1.14.4 deduped
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-grpc-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/sdk-trace-base@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   +-- @opentelemetry/resources@2.2.0 deduped
+| | | | |   `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/exporter-trace-otlp-http@0.208.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/sdk-trace-base@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   +-- @opentelemetry/resources@2.2.0 deduped
+| | | | |   `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/exporter-trace-otlp-proto@0.208.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/otlp-exporter-base@0.208.0 deduped
+| | | | | +-- @opentelemetry/otlp-transformer@0.208.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/sdk-trace-base@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   +-- @opentelemetry/core@2.2.0 deduped
+| | | | |   +-- @opentelemetry/resources@2.2.0 deduped
+| | | | |   `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/exporter-zipkin@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | +-- @opentelemetry/sdk-trace-base@2.2.0
+| | | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | | +-- @opentelemetry/resources@2.2.0 deduped
+| | | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/instrumentation@0.208.0
+| | | | | +-- @opentelemetry/api-logs@0.208.0 deduped
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- import-in-the-middle@2.0.6
+| | | | | | +-- acorn-import-attributes@1.9.5
+| | | | | | | `-- acorn@8.18.0 deduped
+| | | | | | +-- acorn@8.18.0
+| | | | | | +-- cjs-module-lexer@2.2.1
+| | | | | | `-- module-details-from-path@1.0.4
+| | | | | `-- require-in-the-middle@8.0.1
+| | | | |   +-- debug@4.4.3 deduped
+| | | | |   `-- module-details-from-path@1.0.4 deduped
+| | | | +-- @opentelemetry/propagator-b3@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | `-- @opentelemetry/core@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/propagator-jaeger@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | `-- @opentelemetry/core@2.2.0
+| | | | |   +-- @opentelemetry/api@1.9.1 deduped
+| | | | |   `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/resources@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/sdk-logs@0.208.0 deduped
+| | | | +-- @opentelemetry/sdk-metrics@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | `-- @opentelemetry/resources@2.2.0 deduped
+| | | | +-- @opentelemetry/sdk-trace-base@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | +-- @opentelemetry/resources@2.2.0 deduped
+| | | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | | +-- @opentelemetry/sdk-trace-node@2.2.0
+| | | | | +-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/context-async-hooks@2.2.0
+| | | | | | `-- @opentelemetry/api@1.9.1 deduped
+| | | | | +-- @opentelemetry/core@2.2.0 deduped
+| | | | | `-- @opentelemetry/sdk-trace-base@2.2.0 deduped
+| | | | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | | `-- @opentelemetry/sdk-trace-node@2.11.0
+| | |   +-- @opentelemetry/api@1.9.1 deduped
+| | |   +-- @opentelemetry/context-async-hooks@2.11.0
+| | |   | `-- @opentelemetry/api@1.9.1 deduped
+| | |   +-- @opentelemetry/core@2.11.0 deduped
+| | |   `-- @opentelemetry/sdk-trace-base@2.11.0
+| | |     +-- @opentelemetry/api@1.9.1 deduped
+| | |     +-- @opentelemetry/core@2.11.0 deduped
+| | |     +-- @opentelemetry/resources@2.11.0 deduped
+| | |     +-- @opentelemetry/sdk-trace@2.11.0
+| | |     | +-- @opentelemetry/api@1.9.1 deduped
+| | |     | +-- @opentelemetry/core@2.11.0 deduped
+| | |     | +-- @opentelemetry/resources@2.11.0 deduped
+| | |     | `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | |     `-- @opentelemetry/semantic-conventions@1.43.0 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | `-- @nestjs/core@10.4.22 deduped
+| +-- @lark-apaas/nestjs-openapi-devtools@1.0.10
+| | +-- @hey-api/openapi-ts@0.87.5
+| | | +-- @hey-api/codegen-core@0.3.3
+| | | | `-- typescript@5.9.3 deduped
+| | | +-- @hey-api/json-schema-ref-parser@1.2.1
+| | | | +-- @jsdevtools/ono@7.1.3
+| | | | +-- @types/json-schema@7.0.15
+| | | | +-- js-yaml@4.3.2
+| | | | | `-- argparse@2.0.1 deduped
+| | | | `-- lodash@4.18.1
+| | | +-- ansi-colors@4.1.3
+| | | +-- c12@3.3.2
+| | | | +-- chokidar@4.0.3
+| | | | | `-- readdirp@4.1.2
+| | | | +-- confbox@0.2.4
+| | | | +-- defu@6.1.7
+| | | | +-- dotenv@17.4.2 deduped
+| | | | +-- exsolve@1.1.1
+| | | | +-- giget@2.0.0
+| | | | | +-- citty@0.1.6
+| | | | | | `-- consola@3.4.2
+| | | | | +-- consola@3.4.2
+| | | | | +-- defu@6.1.7 deduped
+| | | | | +-- node-fetch-native@1.6.7
+| | | | | +-- nypm@0.6.9
+| | | | | | +-- citty@0.2.2
+| | | | | | +-- pathe@2.0.3 deduped
+| | | | | | `-- tinyexec@1.3.0
+| | | | | `-- pathe@2.0.3 deduped
+| | | | +-- jiti@2.7.0
+| | | | +-- UNMET OPTIONAL DEPENDENCY magicast@*
+| | | | +-- ohash@2.0.12
+| | | | +-- pathe@2.0.3
+| | | | +-- perfect-debounce@2.1.0
+| | | | +-- pkg-types@2.3.1
+| | | | | +-- confbox@0.2.4 deduped
+| | | | | +-- exsolve@1.1.1 deduped
+| | | | | `-- pathe@2.0.3 deduped
+| | | | `-- rc9@2.1.2
+| | | |   +-- defu@6.1.7 deduped
+| | | |   `-- destr@2.0.5
+| | | +-- color-support@1.1.3
+| | | +-- commander@14.0.1
+| | | +-- open@10.2.0
+| | | | +-- default-browser@5.5.1
+| | | | | +-- bundle-name@4.1.0
+| | | | | | `-- run-applescript@7.1.0
+| | | | | `-- default-browser-id@5.0.1
+| | | | +-- define-lazy-prop@3.0.0
+| | | | +-- is-inside-container@1.0.0
+| | | | | `-- is-docker@3.0.0
+| | | | `-- wsl-utils@0.1.0
+| | | |   `-- is-wsl@3.1.1
+| | | |     `-- is-inside-container@1.0.0 deduped
+| | | +-- semver@7.7.2 deduped
+| | | `-- typescript@5.9.3
+| | +-- @lark-apaas/hey-api-custom-client-axios@1.0.5
+| | | +-- @hey-api/openapi-ts@0.87.5 deduped
+| | | `-- axios@1.20.0 deduped
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/swagger@7.4.2 deduped
+| | `-- openapi-typescript-codegen@0.29.0
+| |   +-- @apidevtools/json-schema-ref-parser@11.9.3
+| |   | +-- @jsdevtools/ono@7.1.3 deduped
+| |   | +-- @types/json-schema@7.0.15 deduped
+| |   | `-- js-yaml@4.3.2 deduped
+| |   +-- camelcase@6.3.0
+| |   +-- commander@12.1.0
+| |   +-- fs-extra@11.4.0
+| |   | +-- graceful-fs@4.2.11
+| |   | +-- jsonfile@6.2.1
+| |   | | +-- graceful-fs@4.2.11 deduped
+| |   | | `-- universalify@2.0.1 deduped
+| |   | `-- universalify@2.0.1
+| |   `-- handlebars@4.7.9 deduped
+| +-- @lark-apaas/nestjs-trigger@0.0.3
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- @nestjs/core@10.4.22 deduped
+| | `-- @nestjs/swagger@7.4.2 deduped
+| +-- @nestjs/axios@4.0.1 deduped
+| +-- @nestjs/common@10.4.22 deduped
+| +-- @nestjs/core@10.4.22 deduped
+| +-- @nestjs/platform-express@10.4.22 deduped
+| +-- @nestjs/swagger@7.4.2 deduped
+| +-- axios@1.20.0 deduped
+| +-- class-transformer@0.5.1 deduped
+| +-- class-validator@0.14.4 deduped
+| +-- cookie-parser@1.4.7
+| | +-- cookie-signature@1.0.6
+| | `-- cookie@0.7.2
+| +-- drizzle-orm@0.44.6 deduped
+| `-- zod@4.5.4 overridden
++-- @nestjs/axios@4.0.1
+| +-- @nestjs/common@10.4.22 deduped
+| +-- axios@1.20.0 deduped
+| `-- rxjs@7.8.2
+|   `-- tslib@2.8.1 deduped
++-- @nestjs/cache-manager@3.1.3
+| +-- @nestjs/common@10.4.22 deduped
+| +-- @nestjs/core@10.4.22 deduped
+| +-- cache-manager@6.4.3 deduped
+| +-- keyv@5.6.0
+| | `-- @keyv/serialize@1.1.1
+| `-- rxjs@7.8.2 deduped
++-- @nestjs/common@10.4.22
+| +-- class-transformer@0.5.1 deduped
+| +-- class-validator@0.14.4 deduped
+| +-- file-type@20.4.1
+| | +-- @tokenizer/inflate@0.2.7
+| | | +-- debug@4.4.3 deduped
+| | | +-- fflate@0.8.3
+| | | `-- token-types@6.1.2 deduped
+| | +-- strtok3@10.3.5
+| | | `-- @tokenizer/token@0.3.0
+| | +-- token-types@6.1.2
+| | | +-- @borewit/text-codec@0.2.2
+| | | +-- @tokenizer/token@0.3.0 deduped
+| | | `-- ieee754@1.2.1
+| | `-- uint8array-extras@1.5.0
+| +-- iterare@1.2.1
+| +-- reflect-metadata@0.1.14 deduped
+| +-- rxjs@7.8.2 deduped
+| +-- tslib@2.8.1 deduped
+| `-- uid@2.0.2
+|   `-- @lukeed/csprng@1.1.0
++-- @nestjs/config@3.3.0
+| +-- @nestjs/common@10.4.22 deduped
+| +-- dotenv-expand@10.0.0
+| +-- dotenv@16.4.5
+| +-- lodash@4.17.21
+| `-- rxjs@7.8.2 deduped
++-- @nestjs/core@10.4.22
+| +-- @nestjs/common@10.4.22 deduped
+| +-- UNMET OPTIONAL DEPENDENCY @nestjs/microservices@^10.0.0
+| +-- @nestjs/platform-express@10.4.22 deduped
+| +-- UNMET OPTIONAL DEPENDENCY @nestjs/websockets@^10.0.0
+| +-- @nuxtjs/opencollective@0.3.2
+| | +-- chalk@4.1.2
+| | | +-- ansi-styles@4.3.0
+| | | | `-- color-convert@2.0.1
+| | | |   `-- color-name@1.1.4
+| | | `-- supports-color@7.2.0
+| | |   `-- has-flag@4.0.0
+| | +-- consola@2.15.3
+| | `-- node-fetch@2.7.0
+| |   +-- UNMET OPTIONAL DEPENDENCY encoding@^0.1.0
+| |   `-- whatwg-url@5.0.0
+| |     +-- tr46@0.0.3
+| |     `-- webidl-conversions@3.0.1
+| +-- fast-safe-stringify@2.1.1
+| +-- iterare@1.2.1 deduped
+| +-- path-to-regexp@3.3.0
+| +-- reflect-metadata@0.1.14 deduped
+| +-- rxjs@7.8.2 deduped
+| +-- tslib@2.8.1 deduped
+| `-- uid@2.0.2 deduped
++-- @nestjs/platform-express@10.4.22
+| +-- @nestjs/common@10.4.22 deduped
+| +-- @nestjs/core@10.4.22 deduped
+| +-- body-parser@1.20.4
+| | +-- bytes@3.1.2
+| | +-- content-type@1.0.5
+| | +-- debug@2.6.9
+| | | `-- ms@2.0.0
+| | +-- depd@2.0.0
+| | +-- destroy@1.2.0
+| | +-- http-errors@2.0.1
+| | | +-- depd@2.0.0 deduped
+| | | +-- inherits@2.0.4
+| | | +-- setprototypeof@1.2.0 deduped
+| | | +-- statuses@2.0.2 deduped
+| | | `-- toidentifier@1.0.1
+| | +-- iconv-lite@0.4.24
+| | | `-- safer-buffer@2.1.2
+| | +-- on-finished@2.4.1
+| | | `-- ee-first@1.1.1
+| | +-- qs@6.14.2
+| | | `-- side-channel@1.1.1
+| | |   +-- es-errors@1.3.0 deduped
+| | |   +-- object-inspect@1.13.4
+| | |   +-- side-channel-list@1.0.1
+| | |   | +-- es-errors@1.3.0 deduped
+| | |   | `-- object-inspect@1.13.4 deduped
+| | |   +-- side-channel-map@1.0.1
+| | |   | +-- call-bound@1.0.4
+| | |   | | +-- call-bind-apply-helpers@1.0.2 deduped
+| | |   | | `-- get-intrinsic@1.3.0 deduped
+| | |   | +-- es-errors@1.3.0 deduped
+| | |   | +-- get-intrinsic@1.3.0 deduped
+| | |   | `-- object-inspect@1.13.4 deduped
+| | |   `-- side-channel-weakmap@1.0.2
+| | |     +-- call-bound@1.0.4 deduped
+| | |     +-- es-errors@1.3.0 deduped
+| | |     +-- get-intrinsic@1.3.0 deduped
+| | |     +-- object-inspect@1.13.4 deduped
+| | |     `-- side-channel-map@1.0.1 deduped
+| | +-- raw-body@2.5.3
+| | | +-- bytes@3.1.2 deduped
+| | | +-- http-errors@2.0.1 deduped
+| | | +-- iconv-lite@0.4.24 deduped
+| | | `-- unpipe@1.0.0 deduped
+| | +-- type-is@1.6.18
+| | | +-- media-typer@0.3.0
+| | | `-- mime-types@2.1.35 deduped
+| | `-- unpipe@1.0.0
+| +-- cors@2.8.5
+| | +-- object-assign@4.1.1
+| | `-- vary@1.1.2
+| +-- express@4.22.1
+| | +-- accepts@1.3.8
+| | | +-- mime-types@2.1.35 deduped
+| | | `-- negotiator@0.6.3
+| | +-- array-flatten@1.1.1
+| | +-- body-parser@1.20.4 deduped
+| | +-- content-disposition@0.5.4
+| | | `-- safe-buffer@5.2.1 deduped
+| | +-- content-type@1.0.5 deduped
+| | +-- cookie-signature@1.0.6 deduped
+| | +-- cookie@0.7.2 deduped
+| | +-- debug@2.6.9
+| | | `-- ms@2.0.0
+| | +-- depd@2.0.0 deduped
+| | +-- encodeurl@2.0.0
+| | +-- escape-html@1.0.3
+| | +-- etag@1.8.1
+| | +-- finalhandler@1.3.2
+| | | +-- debug@2.6.9
+| | | | `-- ms@2.0.0
+| | | +-- encodeurl@2.0.0 deduped
+| | | +-- escape-html@1.0.3 deduped
+| | | +-- on-finished@2.4.1 deduped
+| | | +-- parseurl@1.3.3 deduped
+| | | +-- statuses@2.0.2 deduped
+| | | `-- unpipe@1.0.0 deduped
+| | +-- fresh@0.5.2
+| | +-- http-errors@2.0.1 deduped
+| | +-- merge-descriptors@1.0.3
+| | +-- methods@1.1.2
+| | +-- on-finished@2.4.1 deduped
+| | +-- parseurl@1.3.3
+| | +-- path-to-regexp@0.1.13
+| | +-- proxy-addr@2.0.7
+| | | +-- forwarded@0.2.0
+| | | `-- ipaddr.js@1.9.1
+| | +-- qs@6.14.2 deduped
+| | +-- range-parser@1.2.1
+| | +-- safe-buffer@5.2.1
+| | +-- send@0.19.2
+| | | +-- debug@2.6.9
+| | | | `-- ms@2.0.0
+| | | +-- depd@2.0.0 deduped
+| | | +-- destroy@1.2.0 deduped
+| | | +-- encodeurl@2.0.0 deduped
+| | | +-- escape-html@1.0.3 deduped
+| | | +-- etag@1.8.1 deduped
+| | | +-- fresh@0.5.2 deduped
+| | | +-- http-errors@2.0.1 deduped
+| | | +-- mime@1.6.0
+| | | +-- ms@2.1.3 deduped
+| | | +-- on-finished@2.4.1 deduped
+| | | +-- range-parser@1.2.1 deduped
+| | | `-- statuses@2.0.2 deduped
+| | +-- serve-static@1.16.3
+| | | +-- encodeurl@2.0.0 deduped
+| | | +-- escape-html@1.0.3 deduped
+| | | +-- parseurl@1.3.3 deduped
+| | | `-- send@0.19.2 deduped
+| | +-- setprototypeof@1.2.0
+| | +-- statuses@2.0.2
+| | +-- type-is@1.6.18 deduped
+| | +-- utils-merge@1.0.1
+| | `-- vary@1.1.2 deduped
+| +-- multer@2.0.2
+| | +-- append-field@1.0.0
+| | +-- busboy@1.6.0
+| | | `-- streamsearch@1.1.0
+| | +-- concat-stream@2.0.0
+| | | +-- buffer-from@1.1.2
+| | | +-- inherits@2.0.4 deduped
+| | | +-- readable-stream@3.6.2
+| | | | +-- inherits@2.0.4 deduped
+| | | | +-- string_decoder@1.3.0
+| | | | | `-- safe-buffer@5.2.1 deduped
+| | | | `-- util-deprecate@1.0.2
+| | | `-- typedarray@0.0.6
+| | +-- mkdirp@0.5.6
+| | | `-- minimist@1.2.8 deduped
+| | +-- object-assign@4.1.1 deduped
+| | +-- type-is@1.6.18 deduped
+| | `-- xtend@4.0.2
+| `-- tslib@2.8.1 deduped
++-- @nestjs/swagger@7.4.2
+| +-- UNMET OPTIONAL DEPENDENCY @fastify/static@^6.0.0 || ^7.0.0
+| +-- @microsoft/tsdoc@0.15.1
+| +-- @nestjs/common@10.4.22 deduped
+| +-- @nestjs/core@10.4.22 deduped
+| +-- @nestjs/mapped-types@2.0.5
+| | +-- @nestjs/common@10.4.22 deduped
+| | +-- class-transformer@0.5.1 deduped
+| | +-- class-validator@0.14.4 deduped
+| | `-- reflect-metadata@0.1.14 deduped
+| +-- class-transformer@0.5.1 deduped
+| +-- class-validator@0.14.4 deduped
+| +-- js-yaml@4.1.0
+| | `-- argparse@2.0.1
+| +-- lodash@4.17.21
+| +-- path-to-regexp@3.3.0 deduped
+| +-- reflect-metadata@0.1.14 deduped
+| `-- swagger-ui-dist@5.17.14
++-- @tanstack/react-form@1.33.5
+| +-- @tanstack/form-core@1.33.5
+| | +-- @tanstack/devtools-event-client@0.4.4
+| | +-- @tanstack/pacer-lite@0.1.1
+| | `-- @tanstack/store@0.11.1
+| +-- @tanstack/react-store@0.11.1
+| | +-- @tanstack/store@0.11.1 deduped
+| | +-- react-dom@19.2.8
+| | | +-- react@19.2.8 deduped
+| | | `-- scheduler@0.27.0
+| | +-- react@19.2.8 deduped
+| | `-- use-sync-external-store@1.6.0
+| |   `-- react@19.2.8 deduped
+| `-- react@19.2.8
++-- @tanstack/react-query@5.102.8
+| +-- @tanstack/query-core@5.102.8
+| `-- react@19.2.8 deduped
++-- axios@1.20.0
+| +-- follow-redirects@1.16.0
+| +-- form-data@4.0.6
+| | +-- asynckit@0.4.0
+| | +-- combined-stream@1.0.8
+| | | `-- delayed-stream@1.0.0
+| | +-- es-set-tostringtag@2.1.0
+| | | +-- es-errors@1.3.0
+| | | +-- get-intrinsic@1.3.0
+| | | | +-- call-bind-apply-helpers@1.0.2
+| | | | | +-- es-errors@1.3.0 deduped
+| | | | | `-- function-bind@1.1.2 deduped
+| | | | +-- es-define-property@1.0.1
+| | | | +-- es-errors@1.3.0 deduped
+| | | | +-- es-object-atoms@1.1.2
+| | | | | `-- es-errors@1.3.0 deduped
+| | | | +-- function-bind@1.1.2 deduped
+| | | | +-- get-proto@1.0.1
+| | | | | +-- dunder-proto@1.0.1
+| | | | | | +-- call-bind-apply-helpers@1.0.2 deduped
+| | | | | | +-- es-errors@1.3.0 deduped
+| | | | | | `-- gopd@1.2.0 deduped
+| | | | | `-- es-object-atoms@1.1.2 deduped
+| | | | +-- gopd@1.2.0
+| | | | +-- has-symbols@1.1.0
+| | | | +-- hasown@2.0.4 deduped
+| | | | `-- math-intrinsics@1.1.0
+| | | +-- has-tostringtag@1.0.2
+| | | | `-- has-symbols@1.1.0 deduped
+| | | `-- hasown@2.0.4 deduped
+| | +-- hasown@2.0.4
+| | | `-- function-bind@1.1.2
+| | `-- mime-types@2.1.35
+| |   `-- mime-db@1.52.0
+| +-- https-proxy-agent@5.0.1
+| | +-- agent-base@6.0.2
+| | | `-- debug@4.4.3 deduped
+| | `-- debug@4.4.3
+| |   `-- ms@2.1.3 deduped
+| `-- proxy-from-env@2.1.0
++-- cache-manager@6.4.3
+| `-- keyv@5.6.0 deduped
++-- class-transformer@0.5.1
++-- class-validator@0.14.4
+| +-- @types/validator@13.15.10
+| +-- libphonenumber-js@1.13.12
+| `-- validator@13.15.35
++-- crypto-js@4.2.0
++-- dayjs@1.11.23 overridden
++-- dotenv@17.4.2
++-- drizzle-orm@0.44.6
+| +-- UNMET OPTIONAL DEPENDENCY @aws-sdk/client-rds-data@>=3
+| +-- UNMET OPTIONAL DEPENDENCY @cloudflare/workers-types@>=4
+| +-- UNMET OPTIONAL DEPENDENCY @electric-sql/pglite@>=0.2.0
+| +-- UNMET OPTIONAL DEPENDENCY @libsql/client-wasm@>=0.10.0
+| +-- UNMET OPTIONAL DEPENDENCY @libsql/client@>=0.10.0
+| +-- UNMET OPTIONAL DEPENDENCY @neondatabase/serverless@>=0.10.0
+| +-- UNMET OPTIONAL DEPENDENCY @op-engineering/op-sqlite@>=2
+| +-- @opentelemetry/api@1.9.1
+| +-- UNMET OPTIONAL DEPENDENCY @planetscale/database@>=1.13
+| +-- UNMET OPTIONAL DEPENDENCY @prisma/client@*
+| +-- UNMET OPTIONAL DEPENDENCY @tidbcloud/serverless@*
+| +-- UNMET OPTIONAL DEPENDENCY @types/better-sqlite3@*
+| +-- @types/pg@8.23.1
+| | +-- @types/node@22.20.1
+| | | `-- undici-types@6.21.0
+| | +-- pg-protocol@1.16.0
+| | `-- pg-types@2.2.0
+| |   +-- pg-int8@1.0.1
+| |   +-- postgres-array@2.0.0
+| |   +-- postgres-bytea@1.0.1
+| |   +-- postgres-date@1.0.7
+| |   `-- postgres-interval@1.2.0
+| |     `-- xtend@4.0.2 deduped
+| +-- UNMET OPTIONAL DEPENDENCY @types/sql.js@*
+| +-- UNMET OPTIONAL DEPENDENCY @upstash/redis@>=1.34.7
+| +-- UNMET OPTIONAL DEPENDENCY @vercel/postgres@>=0.8.0
+| +-- UNMET OPTIONAL DEPENDENCY @xata.io/client@*
+| +-- UNMET OPTIONAL DEPENDENCY better-sqlite3@>=7
+| +-- UNMET OPTIONAL DEPENDENCY bun-types@*
+| +-- UNMET OPTIONAL DEPENDENCY expo-sqlite@>=14.0.0
+| +-- UNMET OPTIONAL DEPENDENCY gel@>=2
+| +-- UNMET OPTIONAL DEPENDENCY knex@*
+| +-- UNMET OPTIONAL DEPENDENCY kysely@*
+| +-- UNMET OPTIONAL DEPENDENCY mysql2@>=2
+| +-- UNMET OPTIONAL DEPENDENCY pg@>=8
+| +-- postgres@3.4.9
+| +-- UNMET OPTIONAL DEPENDENCY sql.js@>=1
+| `-- UNMET OPTIONAL DEPENDENCY sqlite3@>=5
++-- hbs@4.3.0
+| +-- handlebars@4.7.9
+| | +-- minimist@1.2.8
+| | +-- neo-async@2.6.2
+| | +-- source-map@0.6.1
+| | +-- uglify-js@3.19.3
+| | `-- wordwrap@1.0.0
+| `-- walk@2.3.15
+|   `-- foreachasync@3.0.0
++-- reflect-metadata@0.1.14
+`-- tslib@2.8.1
+
