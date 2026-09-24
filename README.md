@@ -1,3 +1,22 @@
+> ## ⚠️ 本文档尚未更新，请勿据此部署
+>
+> 本文档描述的是 **v1.3.0 内部测试版**，早于本次生产加固，**部分内容已不准确**，
+> 例如环境变量、迁移流程、限流与存储行为。**请勿据此执行部署。**
+>
+> 权威文档：
+> - 生产部署：`DEPLOYMENT_PRODUCTION.md`
+> - 备份与恢复：`DISASTER_RECOVERY.md`
+> - 数据库迁移：`MIGRATION.md` / `MIGRATION_REPORT.md`
+> - 安全模型：`SECURITY.md` / `THREAT_MODEL.md`
+> - 运维手册：`RUNBOOK.md`
+> - 发布闸门与阻塞项：`PRODUCTION_RELEASE_REPORT.md`
+> - 完整审计：`PRODUCTION_READINESS.md`
+>
+> 已知与本文档冲突的要点：`npm run start` 的产物路径、必需环境变量（新增
+> `DOWNLOAD_TOKEN_SECRET`、`CSP_MODE`、`TRUST_PROXY` 等）、数据库构建方式
+> （`init.sql` 与迁移互为前提，须用 `scripts/db-bootstrap.mjs`）、以及上传/下载
+> 的鉴权模型。原文保留仅为对照，**待重写**。
+
 # 清澜山幼儿园教师课程资源平台
 
 清澜山幼儿园内部使用的教师课程资源管理平台，支持 Pre-K / K 双轨课程体系、RBAC 权限控制、资源上传审核流程、中英文双语。
