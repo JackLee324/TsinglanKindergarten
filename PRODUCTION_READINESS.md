@@ -614,3 +614,94 @@ error TS2345: Argument of type '"role.super_admin"' is not assignable
 ---
 
 *本文件持续更新；任何"已修复"结论都必须附实测证据（命令 + 输出），否则仍标 ⬜。*
+
+---
+
+## Q. 阶段 5 续（第 4 轮）实测记录
+
+### Q-1 【审计更正】D-9 是错的：全局 ValidationPipe **确实存在**
+
+我之前在本文件 §D-9 写"无全局 ValidationPipe，因此 DTO 的校验装饰器从未执行"。**这是错误的**，现更正：
+
+`PlatformModule` 注册了 `APP_PIPE`：
+
+```js
+// node_modules/@lark-apaas/fullstack-nestjs-core/dist/index.js:36493
+{ provide: APP_PIPE,
+  useValue: new ValidationPipe({ transform: true,
+    transformOptions: { enableImplicitConversion: true } }) }
+```
+
+实测证据：
+- `GET /api/resources/not-a-uuid` → `400 {"message":["id must be a UUID"]}`
+- `POST` 带 `roles:["super_admin"]` → `400 {"message":["each value in roles must be one of the following values: …"]}`
+
+**真正的缺口要窄一些，且仍未修复**：该 pipe 未配置 `whitelist` / `forbidNonWhitelisted`，
+因此**未知字段既不被剥离也不被拒绝**（mass-assignment 面）。已记为待办，不是已修复。
+
+### Q-2 D-10（客户端 IP 可伪造）已修复 —— 根因在平台而非应用
+
+原代码 3 处手工解析 `x-forwarded-for` 并取**第一个**元素（即客户端自己写的值）。
+
+**实测（修复前）**：请求带 `X-Forwarded-For: 203.0.113.99, 10.0.0.1`
+→ `audit_logs.ip_address` 记录为 **203.0.113.99**（攻击者指定值）
+→ 按 IP 的登录限流可通过轮换 header 绕过；审计无法归因。
+
+**根因**：平台 `configureApp()` 末尾执行 `app.set("trust proxy", true)`，
+**在调用它之前设置的值会被静默丢弃**。因此必须**在其之后**设置。
+（`node_modules/@lark-apaas/fullstack-nestjs-core/dist/index.js`，configureApp 函数体内第 17 行）
+
+**修复后实测**：同样的伪造 header → 记录为 **127.0.0.1**（真实 socket 地址）。
+`TRUST_PROXY` 由环境变量驱动，**默认 false（安全）**；生产环境设 `true` 会打印警告。
+
+### Q-3 G-11（5xx 泄露 stack/cause）已修复 —— 用真实 500 验证
+
+通过**停掉 PostgreSQL** 制造真实 500（同时验证了优雅降级，进程未崩溃）：
+
+```
+HTTP 500
+body: {"error":{"code":"INTERNAL_ERROR","message":"服务器内部错误",
+                "requestId":"…","timestamp":…}}
+LEAKS: NONE   （无 stack / cause / 文件路径 / SQL / 连接串 / 驱动错误）
+```
+
+### Q-4 健康检查已实现并验证
+
+| 端点 | 用途 | 实测 |
+|---|---|---|
+| `GET /api/health` | 存活（不碰任何依赖） | `200 {"status":"ok","version":"1.3.0-hardening","uptimeSeconds":12,…}` |
+| `GET /api/health/ready` | 就绪（数据库 + 关键表 + 迁移） | `200 {checks:{database:{ok:true,latencyMs:2},schema:{ok:true},migrations:{ok:true,applied:5}}}` |
+
+- 不返回任何配置（无 DSN / 主机 / 端口 / 用户 / 路径）—— 已用 grep 验证无泄露。
+- **必须注册在 `ViewModule` 之前**：`ViewModule` 的 `@Get(['/', '*'])` 兜底路由会吞掉它们并返回 SPA。
+
+### Q-5 requestId：**部分可用，仍未完全解决（如实记录）**
+
+- 响应头 `x-request-id` 已具备；接受上游合法 id、拒绝畸形 id（长度/字符集受限，防日志注入）——
+  三种情况均已实测。
+- **未解决**：500 响应的 **header 与 body 中的 requestId 可能不一致**
+  （实测 header `4b6191fb…` vs body `a12d0fb3…`）。平台自带 request-id 中间件/拦截器
+  也会写该头。我尝试了两种修法（`res.locals` 传递、读取响应头回填）**都未生效**，
+  已如实记录而非静默丢弃。
+  目前可保证的是：**本应用 filter 的日志行与 body 的 id 一致**；header 与 body 的一致性尚未达成。
+
+### Q-6 第 4 轮验证汇总
+
+```
+npm test                          24/24 pass
+scripts/verify-authz-http.mjs     24/24 真实 HTTP 断言
+scripts/verify-hardening.mjs       9/9  真实 HTTP 断言
+typecheck server + client         PASS
+npm run build                     PASS
+真实 500 泄露检查                  NONE
+```
+
+### Q-7 仍未完成（不阻塞本轮，但阻塞公网发布）
+
+- MFA/TOTP 完全未实现（super_admin 仍是密码单因素）
+- `ValidationPipe` 缺 `whitelist` / `forbidNonWhitelisted`
+- requestId header/body 一致性（见 Q-5）
+- 限流仍是进程内 Map（多实例失效）；上传/下载未实现；6 处 API 契约错位未修
+- 安全响应头（HSTS/CSP 等）、CORS 收敛未做
+- Docker 与真实反向代理本机无法验证
+- **用户真实数据库的备份与恢复演练未执行**（本机无其连接串）
