@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  Logger,
   UnauthorizedException,
   Inject,
   createParamDecorator,
@@ -14,8 +15,10 @@ import type { Request } from 'express';
 
 import { SessionService } from './session.service';
 import { AuthService } from './auth.service';
+import { AuthorizationService } from '../authz/authorization.service';
 import { teachersTable } from '@server/database/schema';
 import type { AuthUser } from '@shared/api.interface';
+import type { EffectivePermissions } from '@shared/rbac';
 
 export const IS_PUBLIC_KEY = 'isPublic';
 
@@ -38,15 +41,23 @@ export const CurrentTeacherRoles = createParamDecorator(
 
 export interface AuthRequest extends Request {
   teacher?: AuthUser;
+  /**
+   * Effective permissions for `teacher`, resolved once by AuthGuard and consumed
+   * by PermissionGuard and services. Never trust a client-supplied version of this.
+   */
+  authz?: EffectivePermissions;
   cookies: Record<string, string>;
 }
 
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly logger = new Logger(AuthGuard.name);
+
   constructor(
     private readonly reflector: Reflector,
     private readonly sessionService: SessionService,
     private readonly authService: AuthService,
+    private readonly authorization: AuthorizationService,
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
   ) {}
 
@@ -67,10 +78,11 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('未登录');
     }
 
-    const teacherId = await this.sessionService.getSession(sessionId);
-    if (!teacherId) {
+    const session = await this.sessionService.getSession(sessionId);
+    if (!session) {
       throw new UnauthorizedException('会话已过期，请重新登录');
     }
+    const teacherId = session.teacherId;
 
     const teacherRows = await this.db
       .select({
@@ -82,6 +94,7 @@ export class AuthGuard implements CanActivate {
         roles: teachersTable.roles,
         status: teachersTable.status,
         mustChangePassword: teachersTable.mustChangePassword,
+        permissionsVersion: teachersTable.permissionsVersion,
       })
       .from(teachersTable)
       .where(eq(teachersTable.id, teacherId))
@@ -93,8 +106,27 @@ export class AuthGuard implements CanActivate {
 
     const row = teacherRows[0];
 
+    // Deactivation takes effect on the very next request, not when the session
+    // happens to expire. Status is also re-read on every request rather than
+    // trusted from the cookie.
     if (row.status !== 'active') {
+      await this.sessionService.destroySession(sessionId);
       throw new UnauthorizedException('账号已停用');
+    }
+
+    // INSTANT PERMISSION REVOCATION (RBAC.md §8).
+    // migration 0003 bumps teachers.permissions_version on any role, status,
+    // permission-override or scope change. A session carries the version it was
+    // created under; a mismatch means the caller's authority changed since login,
+    // so the session is destroyed and the user must authenticate again.
+    const currentVersion = row.permissionsVersion ?? 1;
+    if (session.permissionsVersion !== currentVersion) {
+      this.logger.warn(
+        `Session invalidated by permission change: teacher=${teacherId} ` +
+          `sessionVersion=${session.permissionsVersion} currentVersion=${currentVersion}`,
+      );
+      await this.sessionService.destroySession(sessionId, 'permissions_changed');
+      throw new UnauthorizedException('权限已变更，请重新登录');
     }
 
     const teacher: AuthUser = {
@@ -109,6 +141,12 @@ export class AuthGuard implements CanActivate {
     };
 
     request.teacher = teacher;
+
+    // Resolve the EFFECTIVE permission set once per request and attach it. Every
+    // downstream authorization decision (PermissionGuard, services) reads this,
+    // so there is exactly one computation and no chance of two code paths
+    // disagreeing about what an account may do.
+    request.authz = await this.authorization.getEffectivePermissions(teacherId);
 
     // 续期会话最后访问时间
     void this.sessionService.touchSession(sessionId);

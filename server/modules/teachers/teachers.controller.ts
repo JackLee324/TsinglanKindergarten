@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -27,6 +26,7 @@ import type {
   TeacherDetail,
 } from '@shared/api.interface';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
+import { RequirePermission } from '@server/modules/authz/permission.decorator';
 
 interface TeacherListResponse {
   items: Teacher[];
@@ -35,19 +35,13 @@ interface TeacherListResponse {
   pageSize: number;
 }
 
-const WRITE_ROLES: RoleCode[] = ['principal'];
-const READ_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
-
-function requireAnyRole(
-  roles: RoleCode[],
-  allowed: RoleCode[],
-  message = '权限不足',
-): void {
-  const hasRole = roles.some((r: RoleCode) => allowed.includes(r));
-  if (!hasRole) {
-    throw new ForbiddenException(message);
-  }
-}
+// Role lists and `requireAnyRole()` were REMOVED here on purpose.
+//
+// They hard-coded `['principal']` / `['principal','curriculum_director']` inline,
+// which meant the only way to let another role manage accounts was to edit code,
+// and the requirement was invisible in the route table. Each route below now
+// declares the capability it needs via @RequirePermission, enforced centrally by
+// PermissionGuard and backed by the database guards from migration 0003.
 
 function getClientIp(req: Request): string | undefined {
   const fwd = req.headers['x-forwarded-for'];
@@ -60,12 +54,10 @@ export class TeachersController {
   constructor(private readonly teachersService: TeachersService) {}
 
   @Get()
+  @RequirePermission('account.view')
   async listTeachers(
-    @CurrentTeacher() teacher: { id: string; roles: RoleCode[] },
     @Query() query: ListTeachersQueryDto,
   ): Promise<TeacherListResponse> {
-    requireAnyRole(teacher.roles, READ_ROLES);
-
     return this.teachersService.listTeachers({
       page: query.page,
       pageSize: query.pageSize,
@@ -76,16 +68,15 @@ export class TeachersController {
   }
 
   @Get(':id')
+  @RequirePermission('account.view')
   async getTeacher(
-    @CurrentTeacher() teacher: { id: string; roles: RoleCode[] },
     @Param('id') id: string,
   ): Promise<TeacherDetail> {
-    requireAnyRole(teacher.roles, READ_ROLES);
-
     return this.teachersService.getTeacherDetail(id);
   }
 
   @Post()
+  @RequirePermission('account.create')
   async createTeacher(
     @CurrentTeacher() teacher: {
       id: string;
@@ -95,8 +86,6 @@ export class TeachersController {
     @Body() dto: CreateTeacherDto,
     @Req() req: Request,
   ): Promise<TeacherDetail> {
-    requireAnyRole(teacher.roles, WRITE_ROLES);
-
     const ip = getClientIp(req);
 
     return this.teachersService.createTeacher(
@@ -108,6 +97,7 @@ export class TeachersController {
   }
 
   @Patch(':id')
+  @RequirePermission('account.update')
   async updateTeacher(
     @CurrentTeacher() teacher: {
       id: string;
@@ -118,8 +108,6 @@ export class TeachersController {
     @Body() dto: UpdateTeacherDto,
     @Req() req: Request,
   ): Promise<Teacher> {
-    requireAnyRole(teacher.roles, WRITE_ROLES);
-
     const ip = getClientIp(req);
 
     return this.teachersService.updateTeacher(
@@ -132,6 +120,7 @@ export class TeachersController {
   }
 
   @Delete(':id')
+  @RequirePermission('account.disable')
   @HttpCode(HttpStatus.NO_CONTENT)
   async deleteTeacher(
     @CurrentTeacher() teacher: {
@@ -142,8 +131,6 @@ export class TeachersController {
     @Param('id') id: string,
     @Req() req: Request,
   ): Promise<void> {
-    requireAnyRole(teacher.roles, WRITE_ROLES);
-
     const ip = getClientIp(req);
 
     await this.teachersService.deleteTeacher(
@@ -155,6 +142,7 @@ export class TeachersController {
   }
 
   @Post(':id/permissions')
+  @RequirePermission('permission.grant')
   async updatePermissions(
     @CurrentTeacher() teacher: {
       id: string;
@@ -165,8 +153,6 @@ export class TeachersController {
     @Body() body: UpdatePermissionsDto,
     @Req() req: Request,
   ): Promise<{ permissions: SubjectPermission[] }> {
-    requireAnyRole(teacher.roles, WRITE_ROLES);
-
     const ip = getClientIp(req);
 
     const permissions = await this.teachersService.updatePermissions(

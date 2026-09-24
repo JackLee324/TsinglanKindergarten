@@ -12,6 +12,7 @@ import type { Request, Response } from 'express';
 
 import { AuthService } from './auth.service';
 import { Public, CurrentTeacher } from './auth.guard';
+import { AuthorizationService } from '../authz/authorization.service';
 import type {
   AuthUser,
   LoginRequest,
@@ -20,12 +21,35 @@ import type {
   ResetPasswordResponse,
   AuthConfigResponse,
 } from '@shared/api.interface';
+import type { EffectivePermissions } from '@shared/rbac';
 
 @Controller('api/auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly authorization: AuthorizationService,
+  ) {}
+
+  /**
+   * The caller's own effective permissions.
+   *
+   * PURPOSE: lets the UI render the right navigation and buttons without
+   * duplicating the permission rules on the client.
+   *
+   * SECURITY: this endpoint is PRESENTATION ONLY. It returns the caller's own
+   * (already resolved) permission set — it never accepts a teacher id, so it
+   * cannot be used to probe another account. Every actual decision is made
+   * server-side by PermissionGuard / AuthorizationService, so a client that
+   * ignores or forges this response still gets 403 from the API.
+   */
+  @Get('me/permissions')
+  async getMyPermissions(
+    @CurrentTeacher() teacher: AuthUser,
+  ): Promise<EffectivePermissions> {
+    return this.authorization.getEffectivePermissions(teacher.id);
+  }
 
   @Public()
   @Get('config')

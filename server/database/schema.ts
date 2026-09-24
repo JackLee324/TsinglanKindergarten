@@ -127,6 +127,11 @@ export const sessions = pgTable("sessions", {
   revoked: boolean("revoked").notNull().default(false),
   ipAddress: varchar("ip_address", { length: 50 }),
   userAgent: varchar("user_agent", { length: 500 }),
+  // Added by migration 0003 (RBAC + session hardening).
+  permissionsVersion: integer("permissions_version").notNull().default(1),
+  revokedAt: customTimestamptz("revoked_at", { precision: 3 }),
+  revokeReason: varchar("revoke_reason", { length: 100 }),
+  device: varchar("device", { length: 200 }),
   // System field: Creator (auto-filled, do not modify)
   createdBy: userProfile("_created_by").default(sql`CASE
     WHEN (current_setting('app.user_id'::text, true) = ''::text) THEN NULL`),
@@ -296,6 +301,10 @@ export const teachers = pgTable("teachers", {
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: customTimestamptz("locked_until", { precision: 6 }),
   passwordUpdatedAt: customTimestamptz("password_updated_at", { precision: 6 }),
+  // Added by migration 0003 (RBAC). NOTE: `npm run gen:db-schema` regenerates this
+  // file from the remote platform database and would DROP this line unless the
+  // column exists there too — see DEPLOYMENT_PRODUCTION.md "schema regeneration".
+  permissionsVersion: integer("permissions_version").notNull().default(1),
   // System field: Creation time (auto-filled, do not modify)
   createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
   // System field: Creator (auto-filled, do not modify)
@@ -311,6 +320,65 @@ export const teachers = pgTable("teachers", {
   // Complex index: CREATE UNIQUE INDEX idx_teachers_username ON teachers USING btree (lower((username)::text)) WHERE (username IS NOT NULL),
 ]);
 
+// =============================================================================
+// RBAC tables — added by migration 0003, NOT emitted by @lark-apaas/db-schema-sync.
+// If you regenerate this file, these definitions must be re-added (see
+// DEPLOYMENT_PRODUCTION.md → "schema regeneration").
+// =============================================================================
+
+/**
+ * Per-account deltas on top of ROLE_PERMISSIONS (shared/rbac.ts).
+ * Effective permissions = (role defaults UNION grants) MINUS denies; deny wins.
+ */
+export const accountPermissionOverrides = pgTable("account_permission_overrides", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teacherId: uuid("teacher_id").notNull(),
+  permission: varchar("permission", { length: 120 }).notNull(),
+  effect: varchar("effect", { length: 10 }).notNull(),
+  reason: text("reason"),
+  grantedBy: uuid("granted_by"),
+  createdAt: customTimestamptz("created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  expiresAt: customTimestamptz("expires_at", { precision: 3 }),
+}, (table) => [
+  uniqueIndex("account_permission_overrides_unique").on(table.teacherId, table.permission),
+  index("idx_apo_teacher").on(table.teacherId),
+  foreignKey({
+    columns: [table.teacherId],
+    foreignColumns: [teachers.id],
+    name: "account_permission_overrides_teacher_fkey",
+  }).onDelete("cascade"),
+  foreignKey({
+    columns: [table.grantedBy],
+    foreignColumns: [teachers.id],
+    name: "account_permission_overrides_granted_by_fkey",
+  }).onDelete("set null"),
+]);
+
+/**
+ * Data scope bindings (RBAC.md §7). A NULL `permission` applies the binding to
+ * every data-scoped permission. Absence of rows means "unrestricted by this
+ * table"; teaching roles remain constrained by `subject_permissions`, so
+ * existing accounts keep their current behaviour.
+ */
+export const accountScopes = pgTable("account_scopes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  teacherId: uuid("teacher_id").notNull(),
+  permission: varchar("permission", { length: 120 }),
+  kind: varchar("kind", { length: 10 }).notNull(),
+  program: varchar("program", { length: 20 }),
+  subject: varchar("subject", { length: 50 }),
+  subSubject: varchar("sub_subject", { length: 50 }),
+  createdBy: uuid("created_by"),
+  createdAt: customTimestamptz("created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_account_scopes_teacher").on(table.teacherId),
+  foreignKey({
+    columns: [table.teacherId],
+    foreignColumns: [teachers.id],
+    name: "account_scopes_teacher_fkey",
+  }).onDelete("cascade"),
+]);
+
 // table aliases
 export const auditLogsTable = auditLogs;
 export const resourcesTable = resources;
@@ -318,3 +386,5 @@ export const reviewRecordsTable = reviewRecords;
 export const sessionsTable = sessions;
 export const subjectPermissionsTable = subjectPermissions;
 export const teachersTable = teachers;
+export const accountPermissionOverridesTable = accountPermissionOverrides;
+export const accountScopesTable = accountScopes;

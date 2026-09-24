@@ -232,6 +232,7 @@ export class AuthService implements OnModuleInit {
         mustChangePassword: teachersTable.mustChangePassword,
         failedLoginAttempts: teachersTable.failedLoginAttempts,
         lockedUntil: teachersTable.lockedUntil,
+        permissionsVersion: teachersTable.permissionsVersion,
       })
       .from(teachersTable)
       .where(sql`lower(${teachersTable.username}) = ${normalized}`)
@@ -335,7 +336,14 @@ export class AuthService implements OnModuleInit {
       .where(eq(teachersTable.id, row.id));
 
     const teacher = this.rowToAuthUser(row);
-    const sessionId = await this.sessionService.createSession(teacher.id, ipAddress, userAgent);
+    // Pin the account's current authorization version onto the session, so any
+    // later role/permission/status change invalidates it (RBAC.md §8).
+    const sessionId = await this.sessionService.createSession(
+      teacher.id,
+      ipAddress,
+      userAgent,
+      row.permissionsVersion ?? 1,
+    );
 
     await this.writeAuditLog({
       action: 'login',

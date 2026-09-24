@@ -20,8 +20,22 @@ import {
   ResourceIdParamDto,
 } from './resources.dto';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
+import { RequirePermission } from '@server/modules/authz/permission.decorator';
 import type { AuthUser } from '@shared/api.interface';
 
+/**
+ * Resource endpoints.
+ *
+ * IMPORTANT HISTORY: before phase 5 this controller declared NO authorization at
+ * all — every route was reachable by ANY authenticated account (a 配班 teacher
+ * could create, edit and delete resources by calling the API directly, because
+ * only the UI hid the buttons). Each route now declares the capability it needs.
+ *
+ * The service layer keeps its own subject-level checks (which resource rows a
+ * caller may touch); the decorator answers "may this account attempt the
+ * operation at all", the service answers "may it do so to THIS row". Both are
+ * required — see RBAC.md and PRODUCTION_READINESS.md §D-11.
+ */
 @Controller('api/resources')
 export class ResourcesController {
   constructor(private readonly resourcesService: ResourcesService) {}
@@ -35,6 +49,7 @@ export class ResourcesController {
   }
 
   @Get()
+  @RequirePermission('resource.view')
   async listResources(
     @Query() query: ResourceListQueryDto,
     @CurrentTeacher() teacher: AuthUser,
@@ -45,6 +60,7 @@ export class ResourcesController {
   }
 
   @Get(':id')
+  @RequirePermission('resource.view')
   async getResource(
     @Param() params: ResourceIdParamDto,
     @CurrentTeacher() teacher: AuthUser,
@@ -55,6 +71,7 @@ export class ResourcesController {
   }
 
   @Post()
+  @RequirePermission('resource.create')
   async createResource(
     @CurrentTeacher() teacher: AuthUser,
     @Body() dto: CreateResourceDto,
@@ -65,6 +82,7 @@ export class ResourcesController {
   }
 
   @Patch(':id')
+  @RequirePermission('resource.update')
   async updateResource(
     @CurrentTeacher() teacher: AuthUser,
     @Param() params: ResourceIdParamDto,
@@ -81,6 +99,7 @@ export class ResourcesController {
   }
 
   @Delete(':id')
+  @RequirePermission('resource.delete')
   async deleteResource(
     @CurrentTeacher() teacher: AuthUser,
     @Param() params: ResourceIdParamDto,
@@ -92,6 +111,7 @@ export class ResourcesController {
   }
 
   @Post(':id/submit-review')
+  @RequirePermission('resource.submit_review')
   async submitReview(
     @CurrentTeacher() teacher: AuthUser,
     @Param() params: ResourceIdParamDto,
@@ -102,6 +122,7 @@ export class ResourcesController {
   }
 
   @Get(':id/download')
+  @RequirePermission('resource.download')
   async downloadResource(
     @Res() res: Response,
     @Param() params: ResourceIdParamDto,
@@ -120,6 +141,7 @@ export class ResourcesController {
   }
 
   @Get(':id/storybook-cover/:index')
+  @RequirePermission('resource.view')
   async getStorybookCover(
     @Res() res: Response,
     @Param() params: ResourceIdParamDto & { index: string },

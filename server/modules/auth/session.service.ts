@@ -59,6 +59,7 @@ export class SessionService {
     teacherId: string,
     ipAddress?: string,
     userAgent?: string,
+    permissionsVersion: number = 1,
   ): Promise<string> {
     const sessionId = randomBytes(32).toString('hex');
     const sessionHash = hashSessionId(sessionId);
@@ -70,12 +71,27 @@ export class SessionService {
       expiresAt,
       ipAddress: ipAddress ?? null,
       userAgent: userAgent ?? null,
+      // Pins the authorization state this session was granted under. AuthGuard
+      // rejects the session once the account's permissions_version moves on, so
+      // revoking a permission takes effect immediately instead of lasting until
+      // the session expires (RBAC.md §8).
+      permissionsVersion,
     });
 
     return sessionId;
   }
 
-  async getSession(sessionId: string): Promise<string | null> {
+  /**
+   * Resolve a session token.
+   *
+   * Returns the owning teacher id together with the authorization version the
+   * session was created under. Returns null for unknown, revoked or expired
+   * sessions. The caller (AuthGuard) compares `permissionsVersion` against the
+   * account's current value and forces re-authentication on a mismatch.
+   */
+  async getSession(
+    sessionId: string,
+  ): Promise<{ teacherId: string; permissionsVersion: number } | null> {
     const sessionHash = hashSessionId(sessionId);
     const now = new Date();
 
@@ -84,6 +100,7 @@ export class SessionService {
         teacherId: sessions.teacherId,
         expiresAt: sessions.expiresAt,
         revoked: sessions.revoked,
+        permissionsVersion: sessions.permissionsVersion,
       })
       .from(sessions)
       .where(eq(sessions.sessionHash, sessionHash))
@@ -95,7 +112,10 @@ export class SessionService {
     if (row.revoked) return null;
     if (row.expiresAt.getTime() < now.getTime()) return null;
 
-    return row.teacherId;
+    return {
+      teacherId: row.teacherId,
+      permissionsVersion: row.permissionsVersion ?? 1,
+    };
   }
 
   async touchSession(sessionId: string): Promise<void> {
@@ -107,12 +127,23 @@ export class SessionService {
       .where(eq(sessions.sessionHash, sessionHash));
   }
 
-  async destroySession(sessionId: string): Promise<number> {
+  /**
+   * Revoke a single session.
+   *
+   * `reason` is persisted so an operator can tell WHY a user was logged out
+   * (`logout`, `password_changed`, `permissions_changed`, `account_disabled`,
+   * `admin_force_logout`) instead of just seeing `revoked = true`.
+   */
+  async destroySession(sessionId: string, reason = 'logout'): Promise<number> {
     const sessionHash = hashSessionId(sessionId);
 
     const updated = await this.db
       .update(sessions)
-      .set({ revoked: true })
+      .set({
+        revoked: true,
+        revokedAt: new Date(),
+        revokeReason: reason,
+      })
       .where(eq(sessions.sessionHash, sessionHash))
       .returning({ id: sessions.id });
     return updated.length;
