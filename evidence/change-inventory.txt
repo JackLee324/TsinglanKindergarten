@@ -1,0 +1,101 @@
+QLS KINDERGARTEN RESOURCE PLATFORM — CHANGE INVENTORY
+generated: 2026-09-24T02:14:24Z
+baseline tag: baseline-v1.3.0 (pristine upstream zip)
+HEAD: fe00fc7
+
+=== COMMITS SINCE BASELINE ===
+fe00fc7 phase6/9: security headers, db bootstrap, backup/restore rehearsal
+671328a phase7: fix all frontend/backend API contract drift
+9e63a4b docs: round-6 evidence (restored gate, mandatory MFA)
+0ddb679 phase5: enforce mandatory MFA for super_admin (the other half of the requirement)
+8a9ac40 fix(tests): restore an order-independent regression gate; fix client typecheck regression
+bfa0f45 phase5: MFA/TOTP for privileged accounts (migration 0006)
+608a630 docs: round-4 evidence log + correction of audit finding D-9
+01e805e phase5: unforgeable client IP, error sanitization, request id, health checks
+eed0c60 phase5: close the anonymous-role privilege escalation path (migration 0005)
+a10f10c fix(test): 'node --test <dir>' did not recurse under Node 22
+c5a579a test: move the manual HTTP authz verifier out of the node --test glob
+a74c0eb phase5: authorization execution layer + RBAC database enforcement
+8fcab44 docs: RBAC.md design doc + PRODUCTION_READINESS phase 3-4 evidence log
+37b0b56 phase3-4: RBAC single source of truth + verified migration framework
+8e490db phase1-2: evidence-based audit + install/build unblocking
+
+=== TOTALS ===
+ 70 files changed, 9700 insertions(+), 223 deletions(-)
+deleted files: 0
+
+=== ADDED ===
+  BASELINE_INVENTORY.txt
+  PRODUCTION_READINESS.md
+  RBAC.md
+  scripts/backup-rehearse.mjs
+  scripts/db-bootstrap.mjs
+  scripts/db-snapshot.mjs
+  scripts/dev-postgres.sh
+  scripts/dev.sh
+  scripts/migrate.mjs
+  scripts/postinstall.mjs
+  scripts/verify-all.sh
+  scripts/verify-api-contracts.mjs
+  scripts/verify-authz-http.mjs
+  scripts/verify-hardening.mjs
+  scripts/verify-mfa.mjs
+  server/common/crypto/mfa-crypto.ts
+  server/common/http/client-ip.ts
+  server/common/http/security-headers.middleware.ts
+  server/common/middleware/request-id.middleware.ts
+  server/database/migrations/0001_schema_baseline_alignment.down.sql
+  server/database/migrations/0001_schema_baseline_alignment.sql
+  server/database/migrations/0002_backfill_legacy_usernames.down.sql
+  server/database/migrations/0002_backfill_legacy_usernames.sql
+  server/database/migrations/0003_rbac_database_layer.down.sql
+  server/database/migrations/0003_rbac_database_layer.sql
+  server/database/migrations/0004_rls_role_alignment.down.sql
+  server/database/migrations/0004_rls_role_alignment.sql
+  server/database/migrations/0005_tighten_rls_writes.down.sql
+  server/database/migrations/0005_tighten_rls_writes.sql
+  server/database/migrations/0006_mfa.down.sql
+  server/database/migrations/0006_mfa.sql
+  server/modules/auth/mfa.service.ts
+  server/modules/authz/authorization.service.ts
+  server/modules/authz/authz.module.ts
+  server/modules/authz/permission.decorator.ts
+  server/modules/authz/permission.guard.ts
+  server/modules/health/health.module.ts
+  shared/rbac.ts
+  tests/helpers/legacy-fixture.mjs
+  tests/helpers/reset-fixtures.mjs
+  tests/migration.test.mjs
+  tests/rbac-database.test.mjs
+
+=== MODIFIED ===
+  .env.example
+  .gitignore
+  client/src/api/resources.ts
+  client/src/api/review.ts
+  client/src/api/teachers.ts
+  client/src/components/resource-card.tsx
+  client/src/i18n/translations.ts
+  client/src/pages/AuditLog/AuditLogPage.tsx
+  client/src/pages/TeacherAdmin/TeacherAdminPage.tsx
+  client/src/pages/TeacherAdmin/TeacherFormDialog.tsx
+  package.json
+  scripts/build.sh
+  server/app.module.ts
+  server/common/filters/exception.filter.ts
+  server/common/interfaces/api_response.interface.ts
+  server/database/schema.ts
+  server/main.ts
+  server/modules/audit/audit.controller.ts
+  server/modules/auth/auth.controller.ts
+  server/modules/auth/auth.guard.ts
+  server/modules/auth/auth.module.ts
+  server/modules/auth/auth.service.ts
+  server/modules/auth/session.service.ts
+  server/modules/curriculum/curriculum.data.ts
+  server/modules/resources/resources.controller.ts
+  server/modules/review/review.controller.ts
+  server/modules/teachers/teachers.controller.ts
+  shared/api.interface.ts
+
+=== DELETED ===

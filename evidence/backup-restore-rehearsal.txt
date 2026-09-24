@@ -1,0 +1,77 @@
+=== PREFLIGHT ===
+  pg_dump    : NOT FOUND
+  pg_restore : NOT FOUND
+  psql       : NOT FOUND
+  WARN  conventional logical backup tooling is NOT available on this machine.
+  WARN  This is the documented, expected state of the development environment:
+  WARN  the embedded PostgreSQL ships only initdb/pg_ctl/postgres, and there is
+  WARN  no Homebrew postgresql and no libpq installed.
+  WARN  NO `pg_dump` BACKUP WAS TAKEN. The production backup MUST be supplied and
+  WARN  rehearsed by the deployment environment — see DISASTER_RECOVERY.md.
+
+  Production backup commands the deployment environment must provide:
+    pg_dump --format=custom --no-owner --no-privileges \
+      --file=qls_$(date +%Y%m%dT%H%M%S).dump "$PRODUCTION_DATABASE_URL"
+    # verify it is really restorable, into a SCRATCH database:
+    createdb qls_restore_verify
+    pg_restore --no-owner --no-privileges --dbname=qls_restore_verify qls_*.dump
+    psql -d qls_restore_verify -c "SELECT count(*) FROM resources;"
+
+
+=== STEP 1: EXPORT (logical dump) ===
+  tables discovered: 12
+  insert order resolved over 12 foreign key(s)
+  account_permission_overrides rows=     0
+  account_scopes               rows=     0
+  audit_logs                   rows=   386
+  mfa_challenges               rows=     0
+  mfa_recovery_codes           rows=     0
+  resources                    rows=   347
+  review_records               rows=    18
+  schema_migrations            rows=     6
+  sessions                     rows=   128
+  subject_permissions          rows=     0
+  teacher_mfa                  rows=     1
+  teachers                     rows=    22
+  dump written: /Users/jacklee/Desktop/幼儿园/HenryWeb/qls-kindergarten-resource-platform-v1.3.0/backups/backup-rehearsal.ndjson (793978 bytes)
+
+=== STEP 2: CREATE SCRATCH + MIGRATE ===
+  PASS  scratch database "qls_rehearsal" created (previous copy dropped)
+  PASS  scratch database built from zero (prelude -> init.sql -> migrations)
+
+=== STEP 3: IMPORT ===
+  PASS  imported 902 rows
+  dump header: qls_test_0005 @ 2026-09-24T02:14:25.108Z
+
+=== STEP 4: VERIFY ===
+  PASS  schema_migrations             versions match (6): 0001, 0002, 0003, 0004, 0005, 0006
+  PASS  account_permission_overrides rows=0 checksum=e3b0c44298fc
+  PASS  account_scopes               rows=0 checksum=e3b0c44298fc
+  PASS  audit_logs                   rows=386 checksum=6da84497841c
+  PASS  mfa_challenges               rows=0 checksum=e3b0c44298fc
+  PASS  mfa_recovery_codes           rows=0 checksum=e3b0c44298fc
+  PASS  resources                    rows=347 checksum=a0ffa41973f2
+  PASS  review_records               rows=18 checksum=91bd18f651e7
+  PASS  sessions                     rows=128 checksum=7d169908f539
+  PASS  subject_permissions          rows=0 checksum=e3b0c44298fc
+  PASS  teacher_mfa                  rows=1 checksum=0bb2db68423b
+  PASS  teachers                     rows=22 checksum=1ab02115012f
+
+=== SUMMARY ===
+  source database : qls_test_0005
+  scratch database: qls_rehearsal
+  tables compared : 12
+  dump file       : /Users/jacklee/Desktop/幼儿园/HenryWeb/qls-kindergarten-resource-platform-v1.3.0/backups/backup-rehearsal.ndjson
+
+RESULT: logical round trip verified — every table restored with an
+        identical row count and an identical content checksum.
+
+SCOPE LIMITS (read these before quoting this result):
+  * This proves the DATA restores. It does not exercise pg_dump/pg_restore,
+    roles, tablespaces, extensions, or WAL/PITR.
+  * pg_dump was NOT available, so NO conventional logical backup exists.
+    The production rehearsal is still outstanding — see DISASTER_RECOVERY.md.
+  * The production database was NOT touched by this run and is NOT covered.
+
+  scratch database dropped (pass --keep-scratch to retain it)
+  dump checksum written: /Users/jacklee/Desktop/幼儿园/HenryWeb/qls-kindergarten-resource-platform-v1.3.0/backups/backup-rehearsal.ndjson.sha256

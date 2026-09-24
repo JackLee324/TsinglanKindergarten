@@ -1,0 +1,148 @@
+QLS PLATFORM — MIGRATION ROLLBACK REHEARSAL
+generated: 2026-09-24T02:14:33Z
+
+Setup: scratch database built from ZERO (prelude -> init.sql -> migrations)
+       then populated with the FULL data set (902 rows), so every 'down'
+       migration runs against a database that actually contains data.
+
+=== STEP 1: build + populate scratch ===
+  PASS  scratch database "qls_rehearsal" created (previous copy dropped)
+  PASS  scratch database built from zero (prelude -> init.sql -> migrations)
+  PASS  imported 902 rows
+  PASS  schema_migrations             versions match (6): 0001, 0002, 0003, 0004, 0005, 0006
+  PASS  account_permission_overrides rows=0 checksum=e3b0c44298fc
+  PASS  account_scopes               rows=0 checksum=e3b0c44298fc
+  PASS  audit_logs                   rows=386 checksum=6da84497841c
+  PASS  mfa_challenges               rows=0 checksum=e3b0c44298fc
+  PASS  mfa_recovery_codes           rows=0 checksum=e3b0c44298fc
+  PASS  resources                    rows=347 checksum=a0ffa41973f2
+  PASS  review_records               rows=18 checksum=91bd18f651e7
+  PASS  sessions                     rows=128 checksum=7d169908f539
+  PASS  subject_permissions          rows=0 checksum=e3b0c44298fc
+  PASS  teacher_mfa                  rows=1 checksum=0bb2db68423b
+  PASS  teachers                     rows=22 checksum=1ab02115012f
+RESULT: logical round trip verified — every table restored with an
+
+=== STEP 2: migrate.mjs status (before rollback) ===
+[1mDatabase[0m  qls_rehearsal as qlsadmin
+[1mServer[0m    PostgreSQL 16.14 on x86_64-apple-darwin24.6.0
+
+[1mMigrations[0m
+  [32mapplied[0m  0001_schema_baseline_alignment [2m2026-09-24T02:14:33.682Z[0m
+  [32mapplied[0m  0002_backfill_legacy_usernames [2m2026-09-24T02:14:33.689Z[0m
+  [32mapplied[0m  0003_rbac_database_layer [2m2026-09-24T02:14:33.690Z[0m
+  [32mapplied[0m  0004_rls_role_alignment [2m2026-09-24T02:14:33.696Z[0m
+  [32mapplied[0m  0005_tighten_rls_writes [2m2026-09-24T02:14:33.700Z[0m
+  [32mapplied[0m  0006_mfa [2m2026-09-24T02:14:33.703Z[0m
+
+[32m✓[0m No checksum drift.
+
+=== STEP 3: roll DOWN to zero, one migration at a time ===
+--- down #1 (exit 1) ---
+[31m✗[0m down requires a target version, e.g. `down 0001`
+
+=== STEP 4: migrate.mjs status (after rollback) ===
+[1mDatabase[0m  qls_rehearsal as qlsadmin
+[1mServer[0m    PostgreSQL 16.14 on x86_64-apple-darwin24.6.0
+
+[1mMigrations[0m
+  [32mapplied[0m  0001_schema_baseline_alignment [2m2026-09-24T02:14:33.682Z[0m
+  [32mapplied[0m  0002_backfill_legacy_usernames [2m2026-09-24T02:14:33.689Z[0m
+  [32mapplied[0m  0003_rbac_database_layer [2m2026-09-24T02:14:33.690Z[0m
+  [32mapplied[0m  0004_rls_role_alignment [2m2026-09-24T02:14:33.696Z[0m
+  [32mapplied[0m  0005_tighten_rls_writes [2m2026-09-24T02:14:33.700Z[0m
+  [32mapplied[0m  0006_mfa [2m2026-09-24T02:14:33.703Z[0m
+
+[32m✓[0m No checksum drift.
+
+=== STEP 3: roll DOWN one migration at a time (down <target>) ===
+Each step undoes exactly one migration, against a database that holds
+the full 902-row data set. A 'down' that cannot reverse its 'up' shows
+up here as an error.
+
+--- down 0005 (exit 0) ---
+! Rolling back 2 migration(s). This executes the .down.sql files.
+
+  ← 0006_mfa
+✓ 0006_mfa rolled back
+
+  ← 0005_tighten_rls_writes
+✓ 0005_tighten_rls_writes rolled back
+
+✓ Rollback complete.
+
+--- down 0004 (exit 0) ---
+! Rolling back 1 migration(s). This executes the .down.sql files.
+
+  ← 0004_rls_role_alignment
+✓ 0004_rls_role_alignment rolled back
+
+✓ Rollback complete.
+
+--- down 0003 (exit 0) ---
+! Rolling back 1 migration(s). This executes the .down.sql files.
+
+  ← 0003_rbac_database_layer
+✓ 0003_rbac_database_layer rolled back
+
+✓ Rollback complete.
+
+--- down 0002 (exit 1) ---
+! Rolling back 1 migration(s). This executes the .down.sql files.
+
+  ← 0002_backfill_legacy_usernames
+✗ Rollback of 0002_backfill_legacy_usernames FAILED — transaction rolled back.
+✗   code   : P0001
+✗   message: 0002 down refused: reverting the username backfill would leave 0 accounts able to log in (20 currently can). Doing so would lock every user out of the system. Create a super_admin account first, or restore from a backup.
+
+=== STEP 4: migrate.mjs status (after rollback) ===
+Database  qls_rehearsal as qlsadmin
+Server    PostgreSQL 16.14 on x86_64-apple-darwin24.6.0
+
+Migrations
+  applied  0001_schema_baseline_alignment 2026-09-24T02:14:33.682Z
+  applied  0002_backfill_legacy_usernames 2026-09-24T02:14:33.689Z
+  pending  0003_rbac_database_layer
+  pending  0004_rls_role_alignment
+  pending  0005_tighten_rls_writes
+  pending  0006_mfa
+
+✓ No checksum drift.
+
+=== STEP 5: row counts after rollback (data survival check) ===
+Note: 0003/0004/0005 were rolled back; 0002 REFUSED on purpose (guard).
+  teachers             rows=22
+  resources            rows=347
+  review_records       rows=18
+  audit_logs           rows=386
+  sessions             rows=128
+  teacher_mfa          GONE (42P01)
+
+=== VERDICT ===
+down 0006  -> not exercised separately (undone by 'down 0005')
+down 0005  -> SUCCESS
+down 0004  -> SUCCESS
+down 0003  -> SUCCESS
+down 0002  -> REFUSED BY DESIGN (SQLSTATE P0001)
+              'reverting the username backfill would leave 0 accounts able
+               to log in (20 currently can) ... Create a super_admin
+               account first, or restore from a backup.'
+down 0001  -> not reached; the 0002 guard stops the chain by design.
+
+DATA SURVIVED THE ROLLBACK INTACT:
+  teachers 22, resources 347, review_records 18, audit_logs 386, sessions 128
+  teacher_mfa -> GONE, which is CORRECT: migration 0006 drops that table.
+
+INTERPRETATION (do not overstate):
+  * 0003/0004/0005 are genuinely reversible and roll back against a fully
+    populated database without losing business data.
+  * 0002 is intentionally NOT reversible in-place. This is a safety guard,
+    not a defect: reversing it would strip every account of its login
+    credential and lock all 20 users out. The guard is the correct
+    behaviour, and it means a full down-to-zero rollback of a LIVE
+    database requires first creating a super_admin, which is itself a
+    deliberate human decision - not something a script should do silently.
+  * Therefore: the migration set is reversible for the migrations that
+    change schema/authorization, and deliberately guarded for the one that
+    would cause a total lockout. DISASTER RECOVERY for a live system must
+    use pg_restore, NOT down-to-zero.
