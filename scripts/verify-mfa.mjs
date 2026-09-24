@@ -144,6 +144,29 @@ const st1 = await req('GET', '/api/auth/mfa/status');
 check('status reports required=true for super_admin', st1.d?.required, true);
 check('still enabled', st1.d?.enabled, true);
 
+console.log('\n=== F. MANDATORY MFA: un-enrolled super_admin is RESTRICTED ===');
+// Super_admin is currently enrolled from section A. Remove the enrolment while it
+// holds the role, then confirm the account can complete enrolment but cannot use
+// the rest of the system — the point being that "cannot DISABLE MFA" alone would
+// not stop a never-enrolled account from being password-only.
+await sql`delete from teacher_mfa where teacher_id=${sid}`;
+await sql`delete from mfa_recovery_codes where teacher_id=${sid}`;
+jar = {}; await req('GET', '/');
+const l5 = await req('POST', '/api/auth/login', { username: 'qlsadmin', password: PW });
+// No MFA is enrolled now, so login completes with a session...
+check('login succeeds when MFA not enrolled', l5.s, 201);
+const stRestricted = await req('GET', '/api/auth/mfa/status');
+check('status shows required=true, enabled=false', stRestricted.d?.required === true && stRestricted.d?.enabled === false, true);
+const blocked = await req('GET', '/api/teachers');
+check('un-enrolled super_admin is BLOCKED from other APIs', blocked.s, 403);
+check('  -> message points at MFA enrolment', /MFA/.test(blocked.d?.error?.message || ''), true);
+const canEnroll = await req('POST', '/api/auth/mfa/enroll');
+check('but CAN still start enrolment', canEnroll.s, 201);
+const canSeeSelf = await req('GET', '/api/auth/me');
+check('and CAN still read its own identity', canSeeSelf.s, 200);
+const blockedAudit = await req('GET', '/api/audit/logs');
+check('audit log also blocked while un-enrolled', blockedAudit.s, 403);
+
 // ---------------------------------------------------------------------------
 // CLEANUP — required, and the reason it exists is instructive.
 // Section E promotes the account to super_admin. The migration-0003 trigger then

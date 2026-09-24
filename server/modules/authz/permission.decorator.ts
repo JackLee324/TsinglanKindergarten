@@ -55,3 +55,23 @@ export const CurrentAuthz = createParamDecorator(
     return request.authz as EffectivePermissions;
   },
 );
+
+/**
+ * Marks a route as reachable by an account that is required to use MFA but has
+ * not enrolled yet.
+ *
+ * WHY THIS IS NEEDED
+ *   "super_admin must use MFA" is only half-enforced by refusing to disable it.
+ *   The other half is that an un-enrolled super_admin must NOT be able to use the
+ *   rest of the system while password-only — otherwise the requirement is
+ *   satisfied in name only, and a stolen password still yields full access.
+ *
+ *   The routes that must stay reachable in that state are the ones needed to
+ *   COMPLETE enrolment and to leave: /auth/me, /auth/mfa/*, /auth/logout and the
+ *   health endpoints. Everything else returns 403 with an actionable message.
+ *
+ *   This is a decorator rather than a path allowlist so the exemption is visible
+ *   at the route it applies to, and so a new endpoint is denied by default.
+ */
+export const MFA_EXEMPT_KEY = 'authz:mfaExempt';
+export const MfaExempt = () => SetMetadata(MFA_EXEMPT_KEY, true);

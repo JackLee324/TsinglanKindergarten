@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
+  ForbiddenException,
   Inject,
   createParamDecorator,
   SetMetadata,
@@ -16,6 +17,8 @@ import type { Request } from 'express';
 import { SessionService } from './session.service';
 import { AuthService } from './auth.service';
 import { AuthorizationService } from '../authz/authorization.service';
+import { MfaService } from './mfa.service';
+import { MFA_EXEMPT_KEY } from '../authz/permission.decorator';
 import { teachersTable } from '@server/database/schema';
 import type { AuthUser } from '@shared/api.interface';
 import type { EffectivePermissions } from '@shared/rbac';
@@ -58,6 +61,7 @@ export class AuthGuard implements CanActivate {
     private readonly sessionService: SessionService,
     private readonly authService: AuthService,
     private readonly authorization: AuthorizationService,
+    private readonly mfaService: MfaService,
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
   ) {}
 
@@ -147,6 +151,35 @@ export class AuthGuard implements CanActivate {
     // so there is exactly one computation and no chance of two code paths
     // disagreeing about what an account may do.
     request.authz = await this.authorization.getEffectivePermissions(teacherId);
+
+    // ---------------------------------------------------------------------
+    // MANDATORY MFA ENFORCEMENT (the second half of the requirement)
+    // ---------------------------------------------------------------------
+    // Refusing to let a super_admin DISABLE MFA is not enough on its own: an
+    // account that was never enrolled would still be password-only. While a role
+    // requires MFA and none is enrolled, every route except the enrolment flow
+    // itself is refused, so the account cannot be used for anything else in the
+    // meantime.
+    //
+    // Deny-by-default is deliberate: a NEW endpoint is restricted automatically,
+    // whereas an allowlist of protected paths would silently leave it open.
+    const mfaExempt = this.reflector.getAllAndOverride<boolean>(MFA_EXEMPT_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (!mfaExempt && this.mfaService.requiresMfa(teacher.roles as never)) {
+      const mfaEnabled = await this.mfaService.isEnabled(teacherId);
+      if (!mfaEnabled) {
+        this.logger.warn(
+          `Blocked request from an MFA-required account that has not enrolled: ` +
+            `teacher=${teacherId} path=${request.method} ${request.url}`,
+        );
+        throw new ForbiddenException(
+          '该账号角色强制要求 MFA，请先完成绑定后再使用系统',
+        );
+      }
+    }
 
     // 续期会话最后访问时间
     void this.sessionService.touchSession(sessionId);

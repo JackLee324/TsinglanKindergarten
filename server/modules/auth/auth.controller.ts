@@ -16,6 +16,7 @@ import { getClientIp } from '@server/common/http/client-ip';
 import { Public, CurrentTeacher } from './auth.guard';
 import { AuthorizationService } from '../authz/authorization.service';
 import { MfaService } from './mfa.service';
+import { MfaExempt } from '../authz/permission.decorator';
 import type {
   AuthUser,
   LoginRequest,
@@ -48,6 +49,7 @@ export class AuthController {
    * server-side by PermissionGuard / AuthorizationService, so a client that
    * ignores or forges this response still gets 403 from the API.
    */
+  @MfaExempt()
   @Get('me/permissions')
   async getMyPermissions(
     @CurrentTeacher() teacher: AuthUser,
@@ -164,6 +166,7 @@ export class AuthController {
   }
 
   /** Current MFA state for the signed-in account. */
+  @MfaExempt()
   @Get('mfa/status')
   async mfaStatus(@CurrentTeacher() teacher: AuthUser) {
     return this.mfaService.getStatus(teacher.id);
@@ -175,6 +178,7 @@ export class AuthController {
    * AuthGuard), which is what makes the mandatory-MFA requirement self-serviceable
    * instead of requiring manual database work.
    */
+  @MfaExempt()
   @Post('mfa/enroll')
   async mfaEnroll(@CurrentTeacher() teacher: AuthUser, @Req() req: Request) {
     const result = await this.mfaService.beginEnrollment(teacher.id, teacher.username || teacher.name);
@@ -187,6 +191,7 @@ export class AuthController {
   }
 
   /** Finish enrolment; returns the recovery codes ONCE. */
+  @MfaExempt()
   @Post('mfa/confirm')
   async mfaConfirm(
     @CurrentTeacher() teacher: AuthUser,
@@ -203,6 +208,7 @@ export class AuthController {
   }
 
   /** Replace recovery codes. Invalidates all existing ones. */
+  @MfaExempt()
   @Post('mfa/recovery-codes')
   async mfaRecoveryCodes(
     @CurrentTeacher() teacher: AuthUser,
@@ -227,6 +233,7 @@ export class AuthController {
    * Disable MFA. Requires a current valid code (proof of possession) and is
    * refused outright for roles that must keep MFA enabled.
    */
+  @MfaExempt()
   @Post('mfa/disable')
   async mfaDisable(
     @CurrentTeacher() teacher: AuthUser,
@@ -286,11 +293,13 @@ export class AuthController {
     );
   }
 
+  @MfaExempt()
   @Get('me')
   getCurrentUser(@CurrentTeacher() teacher: AuthUser): AuthUser {
     return teacher;
   }
 
+  @MfaExempt()
   @Post('logout')
   async logout(
     @CurrentTeacher() teacher: AuthUser,
