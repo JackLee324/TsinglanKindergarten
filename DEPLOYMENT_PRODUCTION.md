@@ -936,11 +936,15 @@ authz-http 24/24 · hardening 10/10 · mfa 36/36 · security-headers 20/20 · fi
 ### 12.3 已知缺口（不阻塞"内部可用"，但阻塞"公网安全发布"）
 
 完整清单见 [`SECURITY.md`](SECURITY.md) §12 与 [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) §R-4。
-其中与部署直接相关的三条：
+其中与部署直接相关的四条：
 
-1. 限流进程内 → 多副本必须在代理层补限流；
-2. 文件上传/下载未生产化（下载是**未签名、无过期**的 URL）；
-3. 安全响应头尚未生效（需重新构建）。
+1. **限流是进程内的** → 多副本部署必须在反向代理层再补一层按 IP 的登录限流；
+2. **上传端未生产化**：客户端仍可自选存储坐标（`fileBucketId`/`filePath`），
+   且数据库中**没有任何一条资源带真实文件**（347 行 / 0 行）；
+   下载端已改为 HMAC 签名令牌（绑定资源 + 账号、默认 300s），但**上传侧的服务端生成 key 未确认**；
+3. **CSP 仍为 report-only**（只上报不拦截）—— 属刻意取舍，启用前需先观察 violation 上报；
+4. **备份/恢复未在生产库演练**（本机无 `pg_dump`），且**活库恢复必须走 `pg_restore`**，
+   不能靠 `down` 到零（`0002` 会按设计拒绝）。见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §8。
 
 ---
 

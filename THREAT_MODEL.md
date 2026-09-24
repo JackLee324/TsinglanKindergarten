@@ -141,7 +141,7 @@
 | **I-9** | 签名下载链接经 `Referer` 泄露给第三方 | 新中间件设 `Referrer-Policy: strict-origin-when-cross-origin`（`security-headers.middleware.ts:140`）；下载令牌本身**短时效 + 绑定账号**，因此即使泄露给第三方，别人也用不了 | ⚠️ **响应头当前无效**：运行中的实例**尚未输出该头**（§9 / [`SECURITY.md`](SECURITY.md) §10.2）。但**令牌层面的控制已经生效**（300s + teacherId 绑定 + HMAC），所以该风险已显著降低 [已证实：文件头与导出] |
 | **I-10** | 20 个初始账号口钥哈希公开在仓库 → 离线爆破 | ❌ 无控制 | ⚠️ **高**：`seed-teachers.ts:11-172`（§D-2）。**必须在部署前确认这些口令已轮换** |
 | **I-11** | 平台内其他租户猜测 bucket/路径直读文件 | **[无法验证]**（依赖平台 bucket 策略）。且当前客户端可自选 `filePath`（T-5）→ 若 bucket 是共享/可猜测命名，风险上升 | ⚠️ **无法验证** |
-| **I-12** | CSP 缺失导致注入脚本后外传数据 | 新中间件带 CSP，但**默认 report-only**，且**尚未生效** | ⚠️ **中**（§9 G-12） |
+| **I-12** | CSP 缺失导致注入脚本后外传数据 | 中间件带 CSP，**默认 report-only**（只上报不拦截）；**已在线生效**（本次 `curl -sI` 实测）；`connect-src 'self'` 是真正限制外传的那一条 | ⚠️ **低-中**：默认不 enforce 意味着**当前不阻断**，只产生上报。这是刻意取舍（强制 CSP 配错会导致整站白屏）。启用路径：观察 violation 上报 → 设 `CSP_MODE=enforce`（[`SECURITY.md`](SECURITY.md) §10.2） |
 
 ### 3.5 Denial of Service（拒绝服务）
 
@@ -159,8 +159,8 @@
 
 | ID | 攻击路径 | 现有控制 | 残余风险 |
 |---|---|---|---|
-| **E-1** | 普通账号直接调用管理员 API（IDOR / 越权） | 全局 `AuthGuard`（认证）+ `PermissionGuard`（授权）；`teachers`/`resources`/`review`/`audit` 全部路由都有 `@RequirePermission`（[`SECURITY.md`](SECURITY.md) §5.5） | ✅ 主体到位。⚠️ `curriculum`/`dashboard` 未声明；⚠️ 审核路由声明的是 `review.view` 而非 `review.approve`/`reject`（与同文件注释不一致） |
-| **E-2** | 忘记给新端点加校验 → 静默开放 | `PermissionGuard` **默认 fail closed**：`request.teacher` 缺失时抛 401 并打 error（`permission.guard.ts:76-93`）；MFA 强制采用**默认拒绝 + `@MfaExempt` 白名单**（`auth.guard.ts:155-182`） | ✅ 设计正确。但**"没有 `@RequirePermission` 就只要求登录"**这一默认是开放的（`permission.guard.ts:74`）—— 评审必须逐路由确认 |
+| **E-1** | 普通账号直接调用管理员 API（IDOR / 越权） | 全局 `AuthGuard`（认证）+ `PermissionGuard`（授权）。**独立复核：9 个 controller / 42 个路由处理器 / 23 条声明显式权限 / 19 条仅认证**（[`SECURITY.md`](SECURITY.md) §5.5，`evidence/authorization-coverage.txt`） | ✅ 主体到位。⚠️ 那 19 条**仅认证**是**设计如此**（13 条认证自助、3 条静态目录、2 条按调用者作用域的 dashboard、1 条 SPA 兜底），审计结论为 `A-1 [LOW, defence in depth]`：**不存在可利用漏洞**，但建议显式声明权限以防未来重构走偏；⚠️ 审核路由声明的是 `review.view` 而非 `review.approve`/`reject`（与同文件注释不一致，`SECURITY.md` §12 G-8） |
+| **E-2** | 忘记给新端点加校验 → 静默开放 | `PermissionGuard` **默认 fail closed**：`request.teacher` 缺失时抛 401 并打 error（`permission.guard.ts:76-93`）；MFA 强制采用**默认拒绝 + `@MfaExempt` 白名单**（`auth.guard.ts:155-182`）；`AuthGuard` 与 `PermissionGuard` 均为全局 `APP_GUARD`（`auth.module.ts`），因此**除 `@Public()` 外每条路由都要求会话** | ✅ 设计正确。**"没有 `@RequirePermission` 就只要求登录"这一默认仍是开放的**（`permission.guard.ts:74`）—— 对于必须按能力区分的端点，评审仍需逐路由确认；应把这理解为"默认要求认证、显式声明能力"，而不是"未加校验 |
 | **E-3** | 通过 mass assignment 写入不该写的字段（如自己 `roles`） | ⚠️ `ValidationPipe` **未配置 `whitelist`/`forbidNonWhitelisted`** → 未知字段不剥离（`PRODUCTION_READINESS.md` §Q-1，已实测 DTO 的 `@IsIn` 生效但未知字段不拦） | ⚠️ **中-高（未缓解）**。DTO 显式列出的字段仍受类型/枚举校验 |
 | **E-4** | **`anon` 角色直接改 `teachers.password_hash` / `roles`**（若匿名连接可达 DB） | `0005` 列级 GRANT：`UPDATE` 仅 `last_login_at, failed_login_attempts, locked_until`；末尾用 `has_column_privilege` 断言 | ✅ **已修复并实测**：`anon_.teachers.password_hash UPDATE = false`、`roles = false`，`last_login_at = true` |
 | **E-5** | 假设有 RLS 就以为有行级隔离 → 设计出实际上无人保护的路径 | — | ⚠️ **认知风险（必须记录）**：**RLS 不提供行级保护**（全 `USING(true)`，无 `FORCE RLS`，实测 `FORCE RLS` 表数 = **0**）；**且独立部署下每个请求都跑在匿名角色上**（§4）→ **数据库角色无法区分应用用户**。**应用层授权是唯一闸门**（`0005:179-184`）[已证实] |
@@ -326,7 +326,7 @@
 | **R-3** | RLS 全 `USING(true)`、无 `FORCE RLS` | 未缓解（架构级） | 见 §4：即使收紧 policy 也无意义，因为**所有请求同一角色**。正确方向是先让应用显式携带用户身份（`SET LOCAL app.user_id` + 角色切换），再收紧 RLS。**这是改造项，不是配置项** |
 | **R-4** | 进程内限流 | 未缓解（有代理层缓解） | §5.2 |
 | **R-5** | 客户端可指定存储坐标 | 未缓解 | §5.1；未上传实现前不可利用，**一旦实现立即成为高危** |
-| **R-6** | 安全响应头尚未生效 | 未缓解（短期） | 代码已在工作区，`dist/` 陈旧导致运行实例无该头（[`DEPLOYMENT_PRODUCTION.md`](DEPLOYMENT_PRODUCTION.md) §9.4）。**属于"重新构建即可解决"，但必须复验** |
+| **R-6** | ~~安全响应头尚未生效~~ → **已闭环** | 已解决 | 重新构建后本次实测全部头在线生效（含 CSP report-only、HSTS 条件发送、`X-Powered-By` 已移除），套件 **20/20**。⚠️ 剩余待决项是 **CSP 仍为 report-only**（不阻断），以及 `X-Frame-Options: DENY` 与 iframe 场景的冲突（见 R-7）。[`SECURITY.md`](SECURITY.md) §10.2 |
 | **R-7** | `X-Frame-Options: DENY` 与平台 `Partitioned` CSRF cookie（iframe 场景）可能互斥 | 待决 | 见 [`DEPLOYMENT_PRODUCTION.md`](DEPLOYMENT_PRODUCTION.md) §9.2。**上线前必须确认是否 iframe 嵌入** |
 | **R-8** | 20 个生产口令哈希在源码中 | 未缓解（需运维动作） | 无法在文档层修复；**部署前必须确认这些账号的口令已轮换或账号已停用** |
 | **R-9** | `mustChangePassword` 无实现 | 未缓解 | 初始口令可能长期有效。**与 R-8 叠加后风险上升** |
@@ -397,7 +397,7 @@
 | 边界 | 控制 | 状态 | 证据 |
 |---|---|---|---|
 | ①浏览器→TB-1 | TLS + `Secure` Cookie 强制 | ✅ / **[无法验证]** 实际代理 | `session.service.ts:47-51` |
-| ① | 安全响应头（nosniff / frame / referrer / CSP / HSTS） | ⚠️ 代码已写，**运行实例未生效** | `security-headers.middleware.ts`；实测无这些头 |
+| ① | 安全响应头（nosniff / frame / referrer / CSP / HSTS） | ✅ **已在线生效**（本次 `curl -sI` 实测；套件 20/20）。CSP 默认 report-only，HSTS 仅在检测到 TLS 时发送 | `security-headers.middleware.ts`；`evidence/security-headers.txt`（整改前 `pass=5 fail=15` 的对照）|
 | ① | CSRF 双提交 | ✅ 实测四态 | `csrf-check.middleware.ts:4-28` |
 | TB-1→TB-2 | `trust proxy` 显式配置 + 默认安全 + 代理须覆写 XFF | ✅ 代码 / ⚠️ 配置责任在部署方 | `main.ts:34-61`、`client-ip.ts:68-80` |
 | TB-2 | 全局认证（`AuthGuard`）+ 授权（`PermissionGuard`） | ✅ | `auth.module.ts:25-33` |

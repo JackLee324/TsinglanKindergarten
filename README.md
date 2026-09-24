@@ -197,6 +197,22 @@ evidence/          发布闸门原始日志
    业务版本是 **v1.3.0**（`RELEASE_NOTES.md`），健康检查返回的版本来自 `APP_VERSION` 环境变量。
 8. `src/` 中未使用的 `LOG_DIR` / `LOG_REQUEST_BODY` / `LOG_RESPONSE_BODY` 仍留在
    `.env.example`，但**代码从不读取**；日志全部写 stdout/stderr。
+9. **CSP 默认是 report-only**（只上报不拦截）：这是刻意的 —— 未经真实构建产物验证的
+   强制 CSP 会导致整站白屏。要启用请先观察 violation 上报再设 `CSP_MODE=enforce`。
+10. `X-Frame-Options: DENY` / CSP `frame-ancestors 'none'` 与"平台 CSRF cookie 带
+    `Partitioned`（iframe 场景）"存在**设计冲突**，上线前必须确认本平台是否需被 iframe 嵌入。
+11. `down` **不能**当作灾难恢复手段：满数据库上 `0002` 会**按设计拒绝**回滚
+    （反演会让 20 个账号全部无法登录）→ 活库恢复走 `pg_restore`。
+    见 `MIGRATION.md` §6.4。
+
+### 鉴权覆盖（独立复核）
+
+`9` 个 controller / **42** 个路由处理器；**23** 条声明显式权限
+（`@RequirePermission` / `@RequireSuperAdmin`）；其余 **19** 条**仅要求认证**——
+这是**设计如此**（13 条认证自助、3 条静态目录、2 条按调用者作用域的 dashboard、1 条 SPA 兜底），
+因为 `AuthGuard` 与 `PermissionGuard` **都是全局 `APP_GUARD`**，
+除 `@Public()` 外每条路由都要求有效会话。审计结论为 `A-1 [LOW, defence in depth]`
+（建议显式声明以利审计，非阻塞项）。见 `SECURITY.md` §5.5 与 `evidence/authorization-coverage.txt`。
 
 ## 与旧文档的差异（**已更正的说法**）
 
@@ -214,6 +230,10 @@ evidence/          发布闸门原始日志
 | `npm run db:codegen` | ❌ 无此脚本名，真名是 `gen:db-schema` |
 | 企业微信 OAuth 2.0 登录 | ❌ v1.3.0 已改为**账号密码**登录 |
 | 角色共 7 个 | ❌ 实际 **9 个**（`shared/rbac.ts`） |
+| （隐含）seed 失败也照样"启动成功" | ✅ **已修复**：总失败时**抛错中止启动**，部分失败打 ERROR 但不中止；回归测试 `scripts/verify-seed-failure.sh` **5/5 PASS** |
+| 应用**没有**任何安全响应头、并暴露 `X-Powered-By: Express` | ✅ **已修复**：`nosniff` / `X-Frame-Options: DENY` / `Referrer-Policy` / COOP / CORP / `Permissions-Policy` / CSP(report-only) 均已在线生效，`X-Powered-By` 已移除（套件 20/20） |
+| 下载链接是**未签名、无过期**的拼接 URL | ✅ **已修复**：改为 HMAC 签名、绑定「资源 + 账号」、默认 300s 过期的下载令牌 |
 
-完整的差异清单见 `PRODUCTION_READINESS.md` §C 与 `SECURITY.md` §12。
+完整的差异清单见 `PRODUCTION_READINESS.md` §C 与 `SECURITY.md` §12；
+发布口径以 `PRODUCTION_RELEASE_REPORT.md` 与 `evidence/` 为准。
 

@@ -374,8 +374,10 @@ scratch 库上，故意把 1 条资源放进回收站，然后：
 
 ### 6.4 `down` 在**已灌满数据**的库上的实测表现（决定 DR 策略）
 
-> 原始日志：`evidence/migration-rollback.txt`（我先建 scratch 库：前导 → `init.sql` → 迁移，
-> 再灌入完整 **902 行**数据集，然后逐个 `down`）。 [已证实：阅读该日志]
+> 原始日志：`evidence/migration-rollback.txt`。演练的建库与灌数是由
+> `scripts/backup-rehearse.mjs` 完成的（逻辑导出 → **用 `db-bootstrap` 从零建 scratch 库** →
+> 按 FK 拓扑序在单事务内导入 902 行），因此这次演练同时验证了**建库路径**与**回滚路径**。
+> 见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §7.4。 [已证实：阅读该日志]
 
 | 迁移 | 结果 | 说明 |
 |---|---|---|
@@ -444,7 +446,7 @@ and never clears data"，但也不备份）。备份是**部署流程**的责任
 
 ## 8. 如何写一个新迁移（标准流程）
 
-以新增 `0007` 为例。
+以新增 `0008` 为例（`0007` 已存在并已应用，见 [`MIGRATION_REPORT.md`](MIGRATION_REPORT.md) §4-0007）。
 
 ```bash
 # 0) 确认当前状态干净
@@ -456,22 +458,22 @@ pg_dump -Fc -f /var/backups/qls/pre_0007.dump     # 见 DISASTER_RECOVERY.md §3
 DATABASE_URL="…" node scripts/db-snapshot.mjs --out snapshots/pre_0007.json
 
 # 2) 写 UP（命名全小写！）
-$EDITOR server/database/migrations/0007_add_xxx.sql
+$EDITOR server/database/migrations/0008_add_xxx.sql
 
 # 3) 写 DOWN（必须同时写）
-$EDITOR server/database/migrations/0007_add_xxx.down.sql
+$EDITOR server/database/migrations/0008_add_xxx.down.sql
 
 # 4) 先在**本地/预发**库上验证（绝不在生产直接试）
-DATABASE_URL="postgresql://…本地…" node scripts/migrate.mjs status   # ← 必须看到 0007 pending
+DATABASE_URL="postgresql://…本地…" node scripts/migrate.mjs status   # ← 必须看到 0008 pending
 DATABASE_URL="postgresql://…本地…" node scripts/migrate.mjs up
 DATABASE_URL="postgresql://…本地…" node scripts/migrate.mjs verify
 
 # 5) 数据一致性比对
-DATABASE_URL="…" node scripts/db-snapshot.mjs --out snapshots/post_0007.json
-node scripts/db-snapshot.mjs --compare snapshots/pre_0007.json --against snapshots/post_0007.json
+DATABASE_URL="…" node scripts/db-snapshot.mjs --out snapshots/post_0008.json
+node scripts/db-snapshot.mjs --compare snapshots/pre_0008.json --against snapshots/post_0008.json
 
 # 6) 回滚验证（必须做！）
-DATABASE_URL="…" node scripts/migrate.mjs down 0007
+DATABASE_URL="…" node scripts/migrate.mjs down 0008
 DATABASE_URL="…" node scripts/migrate.mjs status
 DATABASE_URL="…" node scripts/migrate.mjs up       # 再装回去
 

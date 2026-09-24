@@ -6,27 +6,43 @@
 > 相关的历史说明，且早于本次生产加固，其中的环境变量、`dist/` 启动路径、
 > 数据库构建流程与上传/下载鉴权模型**均已过时**。
 
-## 请改用
+## 文档
 
 | 需求 | 文档 |
 |---|---|
 | 生产部署完整步骤、必需环境变量 | `DEPLOYMENT_PRODUCTION.md` |
-| 数据库迁移与回滚 | `MIGRATION.md` |
-| 备份与恢复（含尚未执行的演练） | `DISASTER_RECOVERY.md` |
+| 数据库迁移与回滚（含 force-down 逃生门） | `MIGRATION.md` |
+| 备份与恢复（含尚未执行的 pg_dump 演练） | `DISASTER_RECOVERY.md` |
 | 日常运维、排障、密钥轮换 | `RUNBOOK.md` |
 | 安全模型与已知缺口 | `SECURITY.md` |
-| 发布闸门与阻塞项 | `PRODUCTION_RELEASE_REPORT.md` |
+| 发布闸门与阻塞项 | `PRODUCTION_RELEASE_REPORT.md`（原始日志在 `evidence/`） |
 
 ## 三个最容易踩的坑
 
-1. **从零建库**：`init.sql` 与迁移 `0001` **互为前提**，单独执行任一都会失败。
-   必须用 `bash scripts/db-bootstrap.mjs --url "$DATABASE_URL"`。
+1. **从零建库**：`init.sql` 与迁移 `0001` **互为前提**，单独执行任一都会失败
+   （两种顺序都以 `42P01 relation "teachers" does not exist` 结束）。
+   必须用 `node scripts/db-bootstrap.mjs --url "$DATABASE_URL"`；
+   它**拒绝**在已有 `teachers`/`resources` 的库上运行，且**从不 DROP**。
 2. **`trust proxy`**：平台 `configureApp()` 会硬编码 `app.set('trust proxy', true)`，
    因此应用必须在**其后**再设置一次，否则 `X-Forwarded-For` 可被伪造，
    客户端 IP 与 `audit_logs.ip_address` 全部失真，按 IP 的登录限流也可被绕过。
 3. **必需密钥**：`MFA_ENCRYPTION_KEY` 与 `DOWNLOAD_TOKEN_SECRET` 缺失时对应功能
    **明确失败**（不会退化成无签名链接或明文存储）。各用 `openssl rand -base64 32`
    生成，两者不可复用。
+
+## 另外三个会在运维时踩到的点
+
+4. **`down` 不是灾难恢复**：满数据库上 `0002` 会**按设计拒绝**回滚
+   （反演会让 20 个账号全部无法登录）→ 活库恢复走 `pg_restore`。
+   `0007 down` 在回收站非空时也会拒绝，逃生门是 `QLS_SOFT_DELETE_FORCE_DOWN=on`
+   （通用形式 `QLS_MIGRATION_GUC_<NAME>=<value>` → GUC `qls.<name>`，值走绑定参数）。
+5. **部署顺序**：依赖新列/新表的**代码改动必须与迁移同时发布，且迁移先行**。
+   实测事故：文件存储代码先上线、`0007` 未应用 → 所有 `/api/resources/*` 返回 500
+   （`evidence/migration-0007-applied.txt`）。
+6. **发布前跑两个回归**：
+   `ADMIN_DB=… bash scripts/verify-seed-failure.sh`（断言"seed 全失败时拒绝启动"，
+   且断言的是**日志里的拒绝信息**而不是退出码）与 `bash scripts/verify-all.sh`
+   （一键门禁，最近基线：103 单测 + 151 条 HTTP 断言全绿，见 `evidence/gate-run-final.txt`）。
 
 原文不再保留：其中包含与新文档冲突的可执行指令，保留会造成误用。
 

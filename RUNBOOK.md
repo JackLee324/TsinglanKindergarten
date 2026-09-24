@@ -774,11 +774,30 @@ curl -s -o /dev/null -w '%{http_code}\n' "$BASE/api/health/ready"
 **会被拒绝的情况（正常）**：[`DEPLOYMENT_PRODUCTION.md`](DEPLOYMENT_PRODUCTION.md) §5.4
 - `0001 down`：`teachers` 里有认证数据 → 拒绝；
 - `0002 down`：会让可登录账号归零 → 拒绝；
-- `0003 down`：RBAC 表有数据 → 拒绝，除非设 `QLS_RBAC_FORCE_DOWN`；
-- `0006 down`：有已确认的 MFA 绑定 → 拒绝，除非设 `QLS_MFA_FORCE_DOWN=on`；
+- `0003 down`：RBAC 表有数据 → 拒绝，除非 `QLS_MIGRATION_GUC_RBAC_FORCE_DOWN=on`；
+- `0006 down`：有已确认的 MFA 绑定 → 拒绝，除非 `QLS_MIGRATION_GUC_MFA_FORCE_DOWN=on`；
+- `0007 down`：回收站非空 → 拒绝，除非 **`QLS_SOFT_DELETE_FORCE_DOWN=on`**；
 - **`0005 down` 不拒绝，但会重新打开提权路径**（匿名角色恢复可改
   `password_hash`/`roles`、可删审计）→ **执行后必须尽快 `up` 回来**，
   或认定为一次安全事件并按 [`SECURITY.md`](SECURITY.md) §13 处理。
+
+**满数据库上的实测结果**（`evidence/migration-rollback.txt`；900+ 行数据、逐级 `down`）：
+
+| 目标 | 结果 |
+|---|---|
+| `down 0005` | ✅ 成功（连带 `0006` 一起，共 2 个） |
+| `down 0004` | ✅ 成功 |
+| `down 0003` | ✅ 成功 |
+| `down 0002` | ❌ **按设计拒绝**（`P0001`）——原文：`reverting the username backfill would leave 0 accounts able to log in (20 currently can)` |
+| `down 0001` | — 未到达（`0002` 的守卫终止链条） |
+
+回滚后数据完好：`teachers 22` / `resources 347` / `review_records 18` / `audit_logs 386` / `sessions 128`；
+`teacher_mfa` 表消失是**正确的**（`0006` 的 down 就是删它）。
+
+> ⛔ **由此得到一条必须遵守的运维结论**：
+> **"`down` 到零"在活库上走不通**（`0002` 会挡），而且 `down` 是"改回结构"、**不是**
+> "恢复数据"。**活库的灾难恢复用 `pg_restore`**，见
+> [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §5.4。
 
 ### 6.4 回滚后必做
 

@@ -24,12 +24,22 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const BUILT = resolve(ROOT, 'dist/server/common/files/file-validation.js');
+// This probe tests the BUILT artifact on purpose. `npm run build` has produced
+// more than one layout in this tree (the server bundle can land under
+// dist/server/ or a nested dist/dist/server/), so try the candidates instead of
+// declaring the artifact missing — a bare "exit 2" after a successful build is a
+// false alarm and wastes an operator's time.
+const BUILT_CANDIDATES = [
+  resolve(ROOT, 'dist/server/common/files/file-validation.js'),
+  resolve(ROOT, 'dist/dist/server/common/files/file-validation.js'),
+];
+const BUILT = BUILT_CANDIDATES.find((candidate) => existsSync(candidate));
 
-if (!existsSync(BUILT)) {
+if (!BUILT) {
   console.error(
-    `Cannot find ${BUILT}.
-Run 'npm run build:server' first - this probe tests the built artifact on purpose.`,
+    `Cannot find the built validator. Looked in:\n  ${BUILT_CANDIDATES.join('\n  ')}\n` +
+      "Run 'npm run build:server' (or 'npm run build') first - this probe tests the " +
+      'built artifact on purpose.',
   );
   process.exit(2);
 }

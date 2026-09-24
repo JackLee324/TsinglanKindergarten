@@ -1,0 +1,27 @@
+QLS — B3: SINGLE-INSTANCE PRODUCTION ARCHITECTURE (owner decision)
+generated: 2026-09-24T03:00:19Z
+
+Owner decision: deploy as a SINGLE public-facing instance for now. Do NOT
+introduce Redis or another shared store at this stage. Revisit when scaling
+to multiple instances.
+
+CONSEQUENCE THAT MUST BE STATED IN THE DEPLOYMENT DOCS, NOT GLOSSED OVER:
+  * Login rate limiting is an in-process Map (server/modules/auth/auth.service.ts,
+    ipRateMap). It is effective ONLY within one process.
+  * The moment a second instance (or a second replica behind a load balancer)
+    serves traffic, the effective limit multiplies by the number of instances,
+    because each keeps its own counters. Brute-force protection degrades silently.
+  * There is also no shared session invalidation signal between instances, so
+    revocation via permissionsVersion remains correct (it is DB-backed) but any
+    future in-memory state would not be.
+  * Therefore: scaling out REQUIRES first moving the limiter to a shared store.
+    Until then the deployment must be single-instance, and that must be written
+    down as a hard operational constraint rather than an assumption.
+
+Operator checklist derived from this:
+  1. Run exactly one application process.
+  2. Do not enable horizontal autoscaling / multiple replicas.
+  3. If a rolling restart is needed, accept the brief window with two processes
+     and understand the limiter is split during it.
+  4. Treat 'add a second instance' as a change that requires a rate-limiter
+     migration first, not a capacity tweak.

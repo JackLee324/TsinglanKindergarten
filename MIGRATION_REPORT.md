@@ -331,7 +331,24 @@ $ echo $?
 | `pg_policies` 总数 | 增加（新增 `rls0007_*`） | **58**（`0005` 时为 **52**，+6 = 3 角色 × SELECT/UPDATE） |
 | 现有数据未被改义 | 无可删除行 | `resources` 347 行中 `deleted_at IS NOT NULL` = **0** ✅ |
 
-[已证实，2026-09-24 10:23 之后]
+[已证实，2026-09-24 10:23 之后；本次会话直接查询本地库]
+
+**应用过程的原始日志**：`evidence/migration-0007-applied.txt`（另一个 agent 执行并留存）。要点：
+
+| 项 | 值 |
+|---|---|
+| 应用前 | `migrations applied: 6 (0001..0006)`；软删除列**不存在** |
+| 命令 | `node scripts/migrate.mjs up` → `✓ 0007_resource_soft_delete applied in 13ms` |
+| 应用后 | `migrations applied: 7 (0001..0007)` |
+| 数据比对（`db-snapshot --compare`） | `teachers` 22、`resources` 347、`subject_permissions` 0、`review_records` 18、`audit_logs` 407、`sessions` 136 —— **全部 unchanged**；`✓ No data loss, no dropped columns, no weakened RLS.` |
+
+> ⚠️ 该日志同时记录了一个**真实的顺序性事故**：文件存储的代码改动
+> （`resources.service.ts` 开始过滤 `deleted_at IS NULL`）**先于**它的迁移上线，
+> 于是 `0007` 应用前所有 `/api/resources/*` 都返回 **500**
+> （门禁里表现为 `resources reachable before change -> 500 expected 200`）。
+> **教训：依赖新列/新表的代码改动必须与迁移同时发布，且迁移先行。**
+> 这条与本文件 §1 的"迁移必须先于依赖它的代码"是同一件事的实例化。
+> [已证实：阅读该日志]
 
 **down**：见 `0007_resource_soft_delete.down.sql`（77 行）。
 它会读取 GUC `qls.soft_delete_force_down`（第 27 行）并在回收站非空时拒绝执行
@@ -363,16 +380,42 @@ SQL 实际读取的 GUC → 按提示重跑仍然被拒。已在 commit `18fd396
 （含 checksum 漂移退出码 2、回滚拒绝守卫、无数据丢失），但**那是上一轮的记录，本次未复跑**。
 [已证实：该文档内容] [未复验]
 
-### 5.1 新增的迁移相关脚本（写作期间加入，已阅读文件头）
+### 5.1 运维/验证脚本（与迁移直接相关，均已阅读源码）
 
 | 脚本 | 作用 | 与迁移的关系 |
 |---|---|---|
-| `scripts/db-bootstrap.mjs` | **从零建库**：先执行幂等前导（`user_profile` 类型 + 三个 DB 角色，**源码取自 `0001` 本身以免漂移**）→ 再 `init.sql` → 再 `migrations up` | 解决"`init.sql` 需要类型/角色，而 `0001` 需要表"的**互相依赖**问题；平台库不需要它。详见 [`MIGRATION.md`](MIGRATION.md) §2.3 |
-| `scripts/backup-rehearse.mjs` | **备份/恢复演练**（逻辑 round-trip：导出全部表行 → 建 scratch 库并从头迁移 → 导入 → 逐表行数与内容校验和比对） | 见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §7.4。它**不能**替代 `pg_dump`/PITR，脚本自己会打印这一点 |
-| `scripts/probe-file-validation.mjs`、`scripts/verify-security-headers.mjs`、`scripts/verify-seed-failure.sh` | 文件校验/安全响应头/seed 失败的验证套件 | 与迁移无直接关系；`verify-security-headers` 已接入 `scripts/verify-all.sh` |
+| `scripts/db-bootstrap.mjs` | **从零建库**：执行幂等前导（`user_profile` 类型 + 三个 DB 角色，**源码从 `0001` 的前两个 `DO $$` 块提取以免漂移**）→ `init.sql` → `migrations up`。**已有 `teachers`/`resources` 时拒绝运行**（除非 `--force`），**从不 DROP** | 解决实测过的**互相依赖**问题：两种顺序都以 `42P01 relation "teachers" does not exist` 失败。详见 [`MIGRATION.md`](MIGRATION.md) §2.3 |
+| `scripts/backup-rehearse.mjs` | **逻辑往返演练**：导出全部表行 → **用 `db-bootstrap` 从零建 scratch 库** → 按 FK 拓扑序在**单事务**内导入 → 逐表比**行数 + SHA-256 内容校验和**（`schema_migrations` 比**版本集合**） | 实测 12 表 / 902 行 / 行数与校验和全部一致（`evidence/backup-restore-rehearsal.txt`）。它**不能**替代 `pg_dump`/PITR，脚本自己会打印这句话。详见 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §7.4 |
+| `scripts/verify-seed-failure.sh` | **"禁止假启动"回归**：用 `CHECK (false) NOT VALID` 强制每次 `teachers` INSERT 失败，断言应用**不启动**且**日志含刻意的拒绝信息**（不是仅看退出码）。实测 **5/5 PASS** | 与迁移的关系最直接：`0001` 补的就是 `teachers` 的 6 个认证列，缺列正是历史事故的根因。它内部**调用 `db-bootstrap`**，因此也顺带验证建库路径。详见 [`RUNBOOK.md`](RUNBOOK.md) §5.3.3 |
+| `scripts/verify-security-headers.mjs` | 安全响应头 on-the-wire 断言（整改前对旧构建 `pass=5 fail=15`，整改后 **20/20**） | 与迁移无关；已接入 `scripts/verify-all.sh`。见 [`SECURITY.md`](SECURITY.md) §10.2 |
+| `scripts/probe-file-validation.mjs`、`scripts/verify-files-http.mjs` | 文件校验探针 / 文件下载令牌 HTTP 套件（`files-http 61/61`） | 与迁移无关 |
 
-> ⚠️ 这些脚本是**写作期间由另一个 agent 新增**的，我只读了文件头与关键函数，
-> **未执行**。它们的存在不改变 §1 的"我实际执行了什么"。 [已证实：文件存在与内容]
+> ⚠️ 这些脚本**由另一个 agent 新增**；我阅读了它们的源码与**原始日志**
+> （`evidence/`），但**没有自己执行**。引用时标注为"已证实：阅读日志/源码"。
+> 它们的存在不改变 §1 的"我实际执行了什么"。
+
+### 5.2 回滚演练的实测结果（原日志：`evidence/migration-rollback.txt`）
+
+在"从零建库 + 灌入 902 行"的 scratch 库上逐级 `down`：
+
+| 目标 | 结果 | 说明 |
+|---|---|---|
+| `down 0005` | ✅ 成功（连带 `0006`，共 2 个） | 结构可逆 |
+| `down 0004` | ✅ 成功 | 只删自己建的 `rls0004_%` policy |
+| `down 0003` | ✅ 成功 | RBAC 表当时为空，守卫放行 |
+| `down 0002` | ❌ **按设计拒绝**（`P0001`） | "reverting the username backfill would leave 0 accounts able to log in (20 currently can)" |
+| `down 0001` | — 未到达 | `0002` 的守卫终止链条 |
+
+数据存活：`teachers 22` / `resources 347` / `review_records 18` / `audit_logs 386` / `sessions 128` 完好；
+`teacher_mfa` 表消失**是正确的**（`0006` down 即删该表）。
+
+> 结论：结构类迁移（`0003`/`0004`/`0005`）**确实可逆**；
+> `0002` **有意不可原地回滚**。
+> 因此**活库的灾难恢复必须用 `pg_restore`，不是 `down` 到零**。
+
+另见 `evidence/migration-guard.txt`：`0007 down` 在回收站非空时**拒绝**（`42501`），
+带 `QLS_SOFT_DELETE_FORCE_DOWN=on` 后**成功**，且三个软删除列确认已删除
+（通用开关 `QLS_MIGRATION_GUC_<NAME>` → GUC `qls.<name>`，值走绑定参数）。
 
 ---
 

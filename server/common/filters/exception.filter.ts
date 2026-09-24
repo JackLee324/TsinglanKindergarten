@@ -106,7 +106,18 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       httpStatus = HttpStatus.INTERNAL_SERVER_ERROR;
 
       const err = exception as Error;
-      const requestId = (request as { requestId?: string })?.requestId;
+      // NOTE: deliberately NO `const requestId = ...` here.
+      //
+      // This branch used to re-declare `requestId` from `request.requestId`,
+      // SHADOWING the authoritative value computed above (`res.locals.requestId`
+      // first). The header was set from the outer value while this branch put the
+      // INNER one in the response body, so a 500 could answer with a header id
+      // that did not match the body id - the exact mismatch the comment at the top
+      // of this method exists to prevent. The HttpException branch always used the
+      // outer value, which is why the defect was invisible on 4xx responses and
+      // only reproducible on an unhandled exception.
+      //
+      // Reusing the outer value keeps header, log line and body identical.
       this.logger.error(
         `Unhandled exception [requestId=${requestId ?? 'n/a'}] ` +
           `${err?.name ?? 'Error'}: ${err?.message ?? String(exception)}`,

@@ -13,6 +13,11 @@
 #
 # 三个 HTTP 套件各自在启动时重置 fixture（tests/helpers/reset-fixtures.mjs），
 # 因此**运行顺序无关**，可反复执行。
+#
+# ⚠ 但**不可并行**：reset-fixtures 会吊销全部会话并提升 permissions_version，
+#   两个查错套件（或两个 gate）同时跑会互相打断，产生成片的 401/404 假失败。
+#   verify-files-http.mjs 已加入会话自愈与按 run 隔离的探针数据，会明确报告
+#   "another live suite is active"；其余套件没有该保护，因此同一时间只跑一个 gate。
 # ============================================================
 set -uo pipefail
 
