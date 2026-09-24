@@ -19,9 +19,29 @@ print_time() {
 }
 
 # ==================== 步骤 0 ====================
+# FIX (production hardening): this step used to run `npx fullstack-cli action-plugin init`.
+# `fullstack-cli` is not declared as a dependency and nothing in the tree provides that
+# bin, so `npx` fetched an UNRELATED public package of the same name, which printed an
+# interactive prompt ("What do you want to create? front / back / catalog") and aborted
+# the build with exit 130 in any non-TTY environment (CI, Docker).
+#
+# The step is only meaningful when capabilities/ exists. It now runs solely against a
+# locally resolvable binary (--no-install: never downloads a same-named stranger) and
+# is skipped with a clear notice otherwise.
 echo "🗑️  [0/6] 安装插件"
 STEP_START=$(node -e "console.log(Date.now())")
-npx fullstack-cli action-plugin init
+if [[ ! -d "$ROOT_DIR/capabilities" ]]; then
+  echo "   ⏭️  跳过：本项目没有 capabilities/ 目录，action-plugin 无需初始化"
+elif npx --no-install fullstack-cli --version >/dev/null 2>&1; then
+  npx --no-install fullstack-cli action-plugin init
+else
+  echo "   ⚠️  跳过：capabilities/ 存在但本地无法解析 fullstack-cli（不会联网下载同名第三方包）"
+  echo "      如需该步骤，请先安装 lark-apaas 平台工具链；或设置 QLS_STRICT_PLATFORM_CLI=1 使其变为硬失败"
+  if [[ "${QLS_STRICT_PLATFORM_CLI:-0}" == "1" ]]; then
+    echo "   ❌ QLS_STRICT_PLATFORM_CLI=1：该步骤缺失视为致命错误" >&2
+    exit 1
+  fi
+fi
 print_time $STEP_START
 echo ""
 
@@ -151,7 +171,37 @@ if [ -d "$DIST_DIR/client" ]; then
     cp -R "$ROOT_DIR/client/public/." "$DIST_DIR/dist/client/"
   fi
   # 构建产物 HTML 随后 move，覆盖 public 里的同名文件（保证入口页是构建版，不被 public 静默覆盖）
-  find "$DIST_DIR/client" -maxdepth 1 -name "*.html" -exec mv {} "$DIST_DIR/dist/client/" \;
+  #
+  # FIX (production hardening): this used to be a `-maxdepth 1` search:
+  #     find "$DIST_DIR/client" -maxdepth 1 -name "*.html" -exec mv {} ... \;
+  # The current Vite preset emits the entry document at
+  #     dist/client/client/index.html          (depth 2, NOT depth 1)
+  # so the glob matched nothing and the HTML was never moved. The production server sets
+  # its view directory to <cwd>/dist/client and is started with cwd=dist (see run.sh),
+  # i.e. dist/dist/client — which therefore had no index.html, and `GET /` could not
+  # render the app. Verified: before this fix dist/dist/client contained only favicon.svg.
+  #
+  # Now every emitted HTML is moved at any depth (preserving relative paths), and a nested
+  # entry document is promoted to dist/dist/client/index.html so the view engine finds it.
+  (
+    cd "$DIST_DIR/client" || exit 0
+    find . -name "*.html" -print0 | while IFS= read -r -d '' html_file; do
+      target_dir="$DIST_DIR/dist/client/$(dirname "$html_file")"
+      mkdir -p "$target_dir"
+      mv "$html_file" "$target_dir/"
+    done
+  )
+  if [ ! -f "$DIST_DIR/dist/client/index.html" ]; then
+    nested_index=$(find "$DIST_DIR/dist/client" -mindepth 2 -name "index.html" -print -quit 2>/dev/null || true)
+    if [ -n "$nested_index" ]; then
+      mv "$nested_index" "$DIST_DIR/dist/client/index.html"
+    fi
+  fi
+  if [ ! -f "$DIST_DIR/dist/client/index.html" ]; then
+    echo "   ❌ 构建失败：未找到入口 HTML，无法生成 dist/dist/client/index.html" >&2
+    echo "      生产环境下 GET / 将无法渲染。请检查 Vite 预设的输出目录配置。" >&2
+    exit 1
+  fi
 fi
 
 # server 相关产物准备（only_frontend_change=true 时跳过）
@@ -185,7 +235,17 @@ else
   echo "✂️  [6/6] 智能依赖裁剪"
 
   # 分析实际依赖、复制并裁剪 node_modules、生成精简的 package.json
-  node "$ROOT_DIR/scripts/prune-smart.js"
+  # FIX (production hardening): scripts/prune-smart.js was referenced here but has never
+  # existed in the repository. With `set -euo pipefail` at the top of this file, this line
+  # made `npm run build` fail unconditionally at step [6/6]. Dependency pruning is an
+  # ARTIFACT-SIZE OPTIMISATION, not a correctness requirement, so it is now skipped with a
+  # loud notice when the tool is absent instead of failing the whole build.
+  if [[ -f "$ROOT_DIR/scripts/prune-smart.js" ]]; then
+    node "$ROOT_DIR/scripts/prune-smart.js"
+  else
+    echo "   ⚠️  跳过智能依赖裁剪：scripts/prune-smart.js 不存在"
+    echo "      构建产物会包含完整 node_modules（体积更大，但功能不受影响）"
+  fi
 fi
 
 print_time $STEP_START
@@ -203,7 +263,15 @@ if [[ "${only_frontend_change:-false}" == "true" ]]; then
   echo "   产物大小:        $DIST_SIZE"
   echo ""
 else
-  NODE_MODULES_SIZE=$(du -sh "$DIST_DIR/node_modules" | cut -f1)
+  # FIX (production hardening): when scripts/prune-smart.js is absent, step [6/6] now
+  # skips pruning, so $DIST_DIR/node_modules does not exist. The unguarded `du` below then
+  # failed, and because this script runs under `set -euo pipefail` that aborted the build
+  # with exit 1 EVEN THOUGH every build step had already succeeded.
+  if [[ -d "$DIST_DIR/node_modules" ]]; then
+    NODE_MODULES_SIZE=$(du -sh "$DIST_DIR/node_modules" | cut -f1)
+  else
+    NODE_MODULES_SIZE="(未裁剪，未复制到产物目录)"
+  fi
   echo ""
   echo "📊 构建产物统计:"
   echo "   产物大小:        $DIST_SIZE"

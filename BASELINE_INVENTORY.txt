@@ -1,0 +1,15 @@
+recorded_at_utc=2026-09-24T00:51:44Z
+git_commit=88b7fc52535d6534336d815e9baeb856a47f7953
+files_tracked=325
+ts_files=91
+tsx_files=170
+sql_files=3
+jpg_assets=34
+seed_insert_statements=347
+seed_resource_rows=347
+seed_prek_rows=303
+seed_k_rows=44
+seed_teacher_accounts=20
+seed_subject_permissions_rows=0
+seed_review_records_rows=0
+declared_tables=6

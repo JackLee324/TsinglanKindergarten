@@ -9,7 +9,45 @@ build/
 */build/
 
 # Environment files
-.env.local
+# SECURITY: .env must NEVER be committed. `.env.example` is the only env file
+# that belongs in the repository. (The previous version of this file ignored
+# only `.env.local`, which contradicted the claim in .env.example:5 and left
+# real credentials one `git add .` away from being published.)
+.env
+.env.*
+!.env.example
+
+# Secrets / credentials / keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/
+secret/
+credentials/
+credential/
+*.credentials
+service-account*.json
+id_rsa*
+id_ed25519*
+
+# Database dumps and backups (may contain PII + password hashes)
+*.dump
+*.sql.gz
+*.backup
+backup*.sql
+backups/
+db-backups/
+dumps/
+
+# Private uploads / local storage emulation
+uploads/
+private-storage/
+
+# Local verification tooling (scripts/dev-postgres.sh) — never ship
+.devtools/
 
 # Logs
 npm-debug.log*
