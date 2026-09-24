@@ -1,0 +1,60 @@
+QLS PLATFORM — "NO FAKE STARTUP" REGRESSION TEST
+generated: 2026-09-24T02:18:37Z
+
+RULE UNDER TEST (project owner, explicit):
+  "禁止把错误 catch 后吞掉导致系统继续假启动"
+  never catch an error and keep starting as if everything succeeded.
+
+THE VIOLATION THAT WAS PRESENT (before this fix)
+  server/modules/auth/auth.service.ts, AuthService.onModuleInit():
+      try { await this.seedTeachers(); }
+      catch (err) { this.logger.error(`Seed teachers failed: ...`) }
+  and inside seedTeachers(), a per-account catch that logged and
+  continued, then printed 'created=N, skipped=M'.
+
+  Consequence, measured on a database built from the shipped init.sql:
+  teachers.wecom_user_id was NOT NULL while the seed never set it, so all
+  inserts failed, every failure was swallowed, and the process logged
+  'created=0, skipped=0' and reported itself healthy with ZERO usable
+  accounts. Operators saw a running platform and no way to log in.
+
+THE FIX
+  seedTeachers() now counts failures and returns
+    { created, skipped, failed, failedUsernames }
+  and onModuleInit() distinguishes three outcomes:
+    all skipped (accounts already exist)  -> proceed quietly
+    partial failure                       -> loud ERROR naming accounts,
+                                             do not abort (still usable)
+    TOTAL failure                         -> THROW, so Nest aborts startup
+                                             (abortOnError is true outside
+                                             development)
+
+HOW THE FAILURE IS FORCED, AND WHY THAT MATTERS
+  A 'CHECK (false) NOT VALID' constraint is added to teachers. NOT VALID
+  skips validation of existing rows but still enforces the constraint on
+  every NEW insert, so the schema stays intact and the application boots
+  normally right up to the seeding step. This isolates the seeding
+  behaviour rather than tripping over an unrelated boot error, which would
+  make the test pass for the wrong reason.
+
+  The assertion is deliberately NOT simply 'it exited non-zero': a crash
+  for any other reason would satisfy that. The test requires the log to
+  contain the specific, deliberate refusal message.
+
+=== OBSERVED OUTPUT: bash scripts/verify-seed-failure.sh ===
+=== 0. preconditions ===
+  PASS  built server present
+=== 1. scratch database with a failing seed ===
+  teachers rows before start: 0
+  PASS  forced every teachers INSERT to fail (CHECK (false) NOT VALID)
+=== 2. start the application and observe ===
+  PASS  application did NOT stay up
+=== 3. the refusal must be the deliberate one ===
+  PASS  log contains the deliberate refusal message
+  PASS  seed reported the failure counts instead of hiding them
+
+=== RESULT ===
+  pass=5 fail=0
+  PASSED — a total seeding failure now aborts startup instead of faking health.
+
+exit=0

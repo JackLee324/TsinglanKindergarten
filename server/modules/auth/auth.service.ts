@@ -83,11 +83,62 @@ export class AuthService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    // -------------------------------------------------------------------------
+    // Seed failures MUST NOT be swallowed (project rule: never catch an error
+    // and keep starting as if everything succeeded).
+    // -------------------------------------------------------------------------
+    // This used to be:
+    //     try { await this.seedTeachers(); }
+    //     catch (err) { this.logger.error(...) }
+    // i.e. ANY seeding failure - including "every single insert failed" - was
+    // logged and startup continued. Verified consequence on a database built
+    // from the shipped `init.sql`: `teachers.wecom_user_id` was NOT NULL while
+    // the seed never set it, so all 20 inserts raised 42703/23502, every one was
+    // swallowed by the per-account catch below, and the process logged
+    // "created=0, skipped=0" and reported itself healthy with ZERO usable
+    // accounts. Operators saw a running platform and no way to log in.
+    //
+    // The policy now distinguishes three outcomes:
+    //   * everything skipped  -> accounts already exist, nothing to do
+    //   * partial failure     -> loud ERROR naming the accounts, but the system
+    //                            is genuinely usable, so do not abort
+    //   * TOTAL failure       -> nothing exists and nothing could be created;
+    //                            throw so Nest aborts startup
+    //                            (`abortOnError` is true outside development)
+    // Rather than a silently healthy process with no accounts.
+    let seedResult: {
+      created: number;
+      skipped: number;
+      failed: number;
+      failedUsernames: string[];
+    };
     try {
-      await this.seedTeachers();
+      seedResult = await this.seedTeachers();
     } catch (err) {
-      this.logger.error(`Seed teachers failed: ${JSON.stringify(err)}`);
+      // Not even attemptable (e.g. the table is missing). Hard failure.
+      this.logger.error(
+        `Seed teachers failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
     }
+
+    if (seedResult.failed > 0) {
+      const detail = `${seedResult.failed} account(s) could not be seeded: ${seedResult.failedUsernames.join(', ')}`;
+      if (seedResult.created === 0 && seedResult.skipped === 0) {
+        // Total failure: no account exists and none could be created. Starting
+        // anyway would present a login screen that cannot possibly succeed.
+        throw new Error(
+          `Teacher seeding failed completely (${detail}). Refusing to start with zero usable accounts. ` +
+            'Check the database schema against the migrations (node scripts/migrate.mjs status) ' +
+            'and re-run with the failures fixed.',
+        );
+      }
+      this.logger.error(
+        `Partial teacher seeding failure: ${detail}. The platform is usable, ` +
+          'but those accounts will be missing until seeding succeeds.',
+      );
+    }
+
     setInterval(() => {
       void this.sessionService.cleanup();
     }, 60 * 60 * 1000);
@@ -184,9 +235,16 @@ export class AuthService implements OnModuleInit {
     };
   }
 
-  private async seedTeachers(): Promise<void> {
+  private async seedTeachers(): Promise<{
+    created: number;
+    skipped: number;
+    failed: number;
+    failedUsernames: string[];
+  }> {
     let created = 0;
     let skipped = 0;
+    let failed = 0;
+    const failedUsernames: string[] = [];
     for (const seed of SEED_TEACHERS) {
       try {
         const existing = await this.db
@@ -221,6 +279,10 @@ export class AuthService implements OnModuleInit {
         });
         created += 1;
       } catch (error: unknown) {
+        // Counted, not discarded. The caller decides whether this is tolerable;
+        // this function never decides that a failure did not happen.
+        failed += 1;
+        failedUsernames.push(seed.username);
         this.logger.error(
           `Failed to seed teacher ${seed.username}: ${
             error instanceof Error ? error.message : String(error)
@@ -228,7 +290,10 @@ export class AuthService implements OnModuleInit {
         );
       }
     }
-    this.logger.log(`Seed teachers: created=${created}, skipped=${skipped}`);
+    this.logger.log(
+      `Seed teachers: created=${created}, skipped=${skipped}, failed=${failed}`,
+    );
+    return { created, skipped, failed, failedUsernames };
   }
 
   async login(
