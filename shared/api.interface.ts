@@ -11,26 +11,39 @@ import type { RoleCode, ProgramCode, PermissionCode, ScopeKind } from './rbac';
 export type { RoleCode, ProgramCode, PermissionCode, ScopeKind };
 export { ROLE_CODES } from './rbac';
 
+// === 课程词汇（program / subject / sub-subject / theme / folder type）===
+// SINGLE SOURCE OF TRUTH: the curriculum vocabulary is declared in
+// ./curriculum.ts and re-exported here for backwards compatibility, so existing
+// `import { FOLDER_TYPES } from '@shared/api.interface'` call sites keep working.
+// `FolderType` and `FOLDER_TYPES` used to be re-declared here (a THIRD copy of
+// the six folder tokens, after curriculum.data.ts and resources.dto.ts), and the
+// subject/sub-subject/theme vocabulary was declared nowhere at all — each layer
+// spelled it itself. Do NOT re-declare any of these tokens in this file.
+export type { FolderType, CurriculumNode, ThemeDefinition } from './curriculum';
+export {
+  CURRICULUM,
+  FOLDER_DEFINITIONS,
+  FOLDER_TYPES,
+  PROGRAM_CODES,
+  THEME_SETS,
+  findNode,
+  findTheme,
+  foldToken,
+  isCanonicalSubject,
+  isCanonicalSubSubject,
+  normalizeFolderType,
+  normalizeProgram,
+  normalizeSubject,
+  normalizeSubSubject,
+  normalizeTheme,
+  subSubjectNodes,
+  subjectTokens,
+  themeDbValue,
+  themeDefinitions,
+} from './curriculum';
+
 // === 资源状态 ===
 export type ResourceStatus = 'draft' | 'pending_review' | 'published' | 'rejected';
-
-// === 资料夹类型 ===
-export type FolderType =
-  | 'curriculum_outline'
-  | 'weekly_plans'
-  | 'courseware'
-  | 'materials'
-  | 'observation'
-  | 'research_archive';
-
-export const FOLDER_TYPES: FolderType[] = [
-  'curriculum_outline',
-  'weekly_plans',
-  'courseware',
-  'materials',
-  'observation',
-  'research_archive',
-];
 
 // === 审计动作 ===
 export type AuditAction =
@@ -148,6 +161,22 @@ export interface Resource {
   fileName?: string;
   fileSize?: number;
   fileType?: string;
+  /**
+   * Whether this resource has a REAL stored file — computed by the database from
+   * the file columns (`file_path` AND `file_bucket_id` non-empty after trimming),
+   * never guessed and never hand-maintained. See migration 0008 and
+   * `resources.has_stored_file`.
+   *
+   * WHY THIS EXISTS: all 347 seeded rows have NULL file columns, so the "下载"
+   * button used to render enabled on every one of them and then fail. `false`
+   * means the resource is NOT downloadable and the UI must say so instead of
+   * offering a download; `undefined` means the field was not provided.
+   *
+   * It is a statement about the ROW, not about object storage: the bucket cannot
+   * be reached from this environment, so `true` means "the row points at a file",
+   * which is the strongest claim that can be made from the database alone.
+   */
+  hasFile?: boolean;
   version: number;
   status: ResourceStatus;
   uploaderId: string;

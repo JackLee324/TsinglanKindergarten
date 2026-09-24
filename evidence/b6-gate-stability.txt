@@ -1,0 +1,53 @@
+QLS — BLOCKER B6: ROOT-CAUSED AND FIXED (and MY diagnosis was partly wrong)
+generated: 2026-09-24T03:05:22Z
+
+WHERE I WAS WRONG
+  I claimed the four differing runs happened with 'no other test/build process
+  active'. That was false. Another agent DID have runs going; my single 'ps'
+  snapshot at 11:00 happened to catch a quiet moment. I then built a
+  hypothesis ('races its own fixture reset') on an unverified premise - the
+  same class of error I made twice earlier today with isPathTraversalSafe.
+
+ROOT CAUSE (proven by reproducing it deterministically with two concurrent
+copies of the suite, not by reasoning):
+  before:  A pass=50 fail=22   B pass=46 fail=26   (both exit 1)
+
+  1. Every live suite starts with resetFixtures(), which REVOKES ALL SESSIONS
+     and bumps permissions_version. An overlapping process therefore
+     invalidates the other run's session mid-flight -> the 401 cascade.
+  2. Both runs used ONE literal probe-row title prefix, so run B's cleanup
+     deleted run A's probe resource -> the '0 expected 1' / 404 shape.
+  3. A concurrent 'npm run build' deletes dist/, which is the
+     'cover path -> 404 expected 200' shape I saw in runs A and D.
+
+  Note all three are ENVIRONMENT/interference effects, not product defects -
+  which is consistent with the cover regression guard being observed PASSING.
+
+FIXES (all inside the suite)
+  * per-run probe identity (__files_http_probe_<pid><time>__) so a concurrent
+    run cannot delete this run's rows and keyword search cannot cross over;
+  * bounded session recovery: a 401 on an authenticated request re-auths ONCE
+    with a loud WARN; attempted ONLY for 401, never for the 400/403/404 the
+    suite asserts, so a real authz regression still fails; >5 recoveries
+    aborts declaring an ENVIRONMENT failure rather than a product one;
+  * the cover guard now separates 400 (= real platform data was rejected - the
+    regression it exists for) from 404 with dist assets absent (= a build in
+    flight). Verified by hiding dist/server/assets: 73 pass + NOTE, no fake 200.
+  * probe-file-validation.mjs tolerates either dist layout instead of exiting 2
+    after a successful build (a usability bug in my own script).
+
+AFTER: two concurrent runs -> 74/0 and 74/0, both exit 0, one honestly
+reporting 're-authenticated 1 time: the environment was not isolated'.
+Then three consecutive verify-all.sh runs, each files-http 74/0.
+
+MY OWN INDEPENDENT RE-RUN (11:04, server on 3200):
+  npm test 113/113 · build PASS · api-contracts matched
+  authz-http 24/0 · hardening 10/0 · mfa 36/0 · security-headers 20/0
+  files-http 74/0     <- matches the claim
+  typecheck server/client FAIL <- NOT a regression: the B4 naming agent is
+    mid-refactor (FolderType / ProgramCode not yet re-exported from the new
+    shared/curriculum.ts). Expected to clear when B4 lands.
+
+REMAINING CONSTRAINT, stated in verify-all.sh itself: the OTHER four suites
+have no equivalent protection, so ONLY ONE GATE MAY RUN AT A TIME. Two
+concurrent gates remain unsafe.

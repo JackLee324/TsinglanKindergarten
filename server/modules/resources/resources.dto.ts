@@ -18,16 +18,13 @@ import type {
   UpdateResourceRequest,
   ResourceListParams,
 } from '@shared/api.interface';
+// The program / folder vocabularies come from the canonical module, NEVER from a
+// local array. This file used to declare its own `PROGRAM_CODES` and
+// `FOLDER_TYPES` literals — two more copies of tokens that also lived in
+// shared/api.interface.ts and curriculum.data.ts. A local copy cannot be checked
+// against the others, which is how the naming drift started.
+import { FOLDER_TYPES, PROGRAM_CODES } from '@shared/curriculum';
 
-const PROGRAM_CODES: ProgramCode[] = ['prek', 'k'];
-const FOLDER_TYPES: FolderType[] = [
-  'curriculum_outline',
-  'weekly_plans',
-  'courseware',
-  'materials',
-  'observation',
-  'research_archive',
-];
 const RESOURCE_STATUSES: ResourceStatus[] = [
   'draft',
   'pending_review',

@@ -528,7 +528,12 @@ export function roleDefaults(roles: readonly RoleCode[]): Set<PermissionCode> {
 
 export type ScopeKind = 'ALL' | 'PROGRAM' | 'SUBJECT' | 'OWN';
 
-export type ProgramCode = 'prek' | 'k';
+// ProgramCode is declared in ./curriculum.ts, next to the subject / sub-subject /
+// folder vocabulary it belongs with, and re-exported here so every existing
+// `import type { ProgramCode } from '@shared/rbac'` call site keeps working.
+// It used to be an independent `'prek' | 'k'` union in this file — a second copy
+// of the same two tokens, i.e. exactly the drift shape ./curriculum.ts removes.
+export type { ProgramCode } from './curriculum';
 
 /**
  * A scope restriction attached to an account.
