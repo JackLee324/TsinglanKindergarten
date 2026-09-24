@@ -82,3 +82,19 @@ exit=1
     rejected; oversize rejected
   stored path: '../../etc/passwd' and 'a/b/../c.pdf' flagged;
     'uploads/2026/plan.pdf' allowed
+
+################################################################
+# AFTER FIX — re-run of the same probe
+################################################################
+  PASS  "../../etc/passwd" flagged    -> false
+  PASS  "/etc/passwd" flagged         -> false     <-- was FAIL (true)
+  PASS  "a/b/../c.pdf" flagged        -> false
+  PASS  "uploads/2026/plan.pdf"       -> true
+
+  pass=31 fail=0     <-- was 30/1
+
+Fix applied in server/common/files/file-validation.ts: reject when the first
+split segment is empty, i.e. a leading '/' or '\\' makes the path absolute and
+its first segment empty. A stored file_path must be bucket-relative. Confirmed
+with `npm run build:server` + this probe, and `npm run type:check:server`
+reports 0 errors.
