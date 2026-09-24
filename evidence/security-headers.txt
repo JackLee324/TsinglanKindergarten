@@ -1,0 +1,69 @@
+QLS PLATFORM — SECURITY HEADERS: BEFORE / AFTER EVIDENCE
+generated: 2026-09-24T02:16:25Z
+
+################################################################
+# BEFORE — the build running before the security-header change
+################################################################
+$ curl -sS -D - -o /dev/null http://127.0.0.1:3200/api/health
+HTTP/1.1 200 OK
+X-Powered-By: Express
+x-request-id: 0b360c72-b380-4179-a8b3-82a7aa7327aa
+x-log-trace-id: 1e0345f8-a2c3-4ce4-ad47-045747065c77
+Content-Type: application/json; charset=utf-8
+Content-Length: 102
+ETag: W/"66-aMt+/0LKitevBfHZLt45mPoLXV8"
+Date: Thu, 24 Sep 2026 02:16:25 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+
+Observation: NO security headers whatsoever, and 'X-Powered-By: Express'
+advertises the framework. This is the actual production-facing state of
+v1.3.0 before the change.
+
+Note the platform also emits x-log-trace-id alongside x-request-id; the
+two independent correlation ids are the likely cause of audit finding
+Q-5 (header requestId != body requestId).
+
+$ node scripts/verify-security-headers.mjs   (against the OLD build)
+=== A. API response headers ===
+  PASS  /api/health responds                                      -> true
+  FAIL  x-content-type-options: nosniff                           -> null   expected nosniff
+  FAIL  x-frame-options: DENY                                     -> null   expected DENY
+  FAIL  referrer-policy                                           -> null   expected strict-origin-when-cross-origin
+  FAIL  cross-origin-opener-policy                                -> null   expected same-origin
+  FAIL  cross-origin-resource-policy                              -> null   expected same-origin
+  FAIL  permissions-policy present                                -> false   expected true
+  FAIL  x-powered-by is REMOVED                                   -> Express   expected null
+
+=== B. Content-Security-Policy mode ===
+  FAIL  CSP report-only header set (default)                      -> false   expected true
+  FAIL  report-only policy denies framing                         -> false   expected true
+  FAIL  report-only policy pins connect-src                       -> false   expected true
+  PASS  CSP is NOT enforcing by default                           -> null
+
+=== C. HSTS tracks TLS configuration ===
+  NOTE: this assertion reads TRUST_PROXY/HTTPS_ENABLED from THIS process, so
+        the suite and the server under test must be started from the same
+        environment. Run both from one shell, or export the vars for both.
+  PASS  HSTS correctly ABSENT when no proxy/TLS is configured     -> null
+
+=== D. headers also cover the HTML/SPA response ===
+  PASS  GET / returns a response                                  -> true
+  FAIL  html: x-content-type-options nosniff                      -> null   expected nosniff
+  FAIL  html: x-frame-options DENY                                -> null   expected DENY
+  FAIL  html: x-powered-by is REMOVED                             -> Express   expected null
+
+=== E. error responses carry the headers too ===
+  PASS  error path returns a 4xx/5xx                              -> true
+  FAIL  error: nosniff still set                                  -> null   expected nosniff
+  FAIL  error: x-frame-options still set                          -> null   expected DENY
+
+=== RESULT ===
+  pass=5 fail=15
+  security header verification FAILED
+
+exit=0
+
+The suite failing here is deliberate evidence that it is not vacuous:
+it detects the missing headers on a build that lacks them.
