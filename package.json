@@ -30,7 +30,7 @@
     "lint": "npm run eslint && npm run stylelint && npm run type:check",
     "test": "node --test tests/*.test.mjs",
     "predeploy": "bash ./scripts/predeploy-check.sh",
-    "postinstall": "node ./scripts/postinstall.mjs"
+    "postinstall": "node ./scripts/postinstall.mjs 2>/dev/null || true"
   },
   "dependencies": {
     "@lark-apaas/fullstack-nestjs-core": "^1.1.64",

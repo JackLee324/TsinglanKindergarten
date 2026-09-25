@@ -60,6 +60,7 @@ WORKDIR /build
 # Dependency layer first: it is by far the slowest step and only invalidates when
 # the manifests change.
 COPY package.json package-lock.json .npmrc ./
+COPY scripts ./scripts
 
 RUN npm ci --no-audit --no-fund
 
@@ -74,7 +75,7 @@ COPY scripts ./scripts
 RUN npm run build
 
 # Drop build-only dependencies from the tree that will be copied into the image.
-RUN npm ci --omit=dev --no-audit --no-fund
+RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts
 
 # -----------------------------------------------------------------------------
 # Stage 2 — runtime
