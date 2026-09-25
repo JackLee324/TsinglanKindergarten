@@ -156,11 +156,7 @@ EXPOSE 3000 8080
 #     up.
 #   * the port comes from SERVER_PORT, because EXPOSE is documentation only and
 #     the real binding is whatever SERVER_PORT says.
-# FIRST-BUILD RISK: Docker health checks run the command directly (no shell here,
-# since the exec form is used), so `process.exit(1)` is the only way to report
-# failure — there is no `exit 1` available.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["node", "-e", "const p=Number(process.env.SERVER_PORT||3000);const r=require('http').get({host:'localhost',port:p,path:'/api/health',timeout:4000},res=>{res.resume();process.exit(res.statusCode===200?0:1)});r.on('error',()=>process.exit(1));r.on('timeout',()=>{r.destroy();process.exit(1)})"]
+# Health check is managed directly by Zeabur ingress on the exposed HTTP port (3000/8080).
 
 # dumb-init is PID 1; it execs the CMD below, so the Node process IS the process
 # that receives SIGTERM/SIGINT. No shell wrapper, and no `npm` in between.

@@ -71,25 +71,30 @@ require_env DOWNLOAD_TOKEN_SECRET "生成一次并永久固定：openssl rand -b
 
 # 2. 自动检查数据库并执行初始化 / 迁移
 wait_for_db() {
-  local max_attempts=30
+  local max_attempts=15
   local attempt=1
+  if [ -z "${DATABASE_URL:-}" ] && [ -z "${SUDA_DATABASE_URL:-}" ]; then
+    echo "[entrypoint] ⚠️ 未检测到有效 DATABASE_URL，跳过数据库就绪检查"
+    return 0
+  fi
   echo "[entrypoint] 正在等待 PostgreSQL 数据库响应..."
   while [ $attempt -le $max_attempts ]; do
     if node -e '
-      const postgres = require("postgres");
-      const url = process.env.DATABASE_URL || process.env.SUDA_DATABASE_URL;
-      const sql = postgres(url, { max: 1, connect_timeout: 3 });
-      sql`SELECT 1`.then(() => { process.exit(0); }).catch(() => { process.exit(1); });
+      import("postgres").then(({ default: postgres }) => {
+        const url = process.env.DATABASE_URL || process.env.SUDA_DATABASE_URL;
+        const sql = postgres(url, { max: 1, connect_timeout: 2 });
+        sql`SELECT 1`.then(() => { process.exit(0); }).catch(() => { process.exit(1); });
+      }).catch(() => process.exit(1));
     ' >/dev/null 2>&1; then
       echo "[entrypoint] ✓ PostgreSQL 数据库已连接成功 (尝试第 ${attempt} 次)"
       return 0
     fi
     echo "[entrypoint] 数据库暂未就绪，等待中 (${attempt}/${max_attempts})..."
-    sleep 2
+    sleep 1
     attempt=$((attempt + 1))
   done
   echo "[entrypoint] ⚠️ 数据库连接探测超时，尝试直接执行后续步骤..."
-  return 1
+  return 0
 }
 
 if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
