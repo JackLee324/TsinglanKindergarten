@@ -151,6 +151,8 @@ const DB_URL =
   process.env.QLS_ADMIN_DB ||
   process.env.MIGRATION_DATABASE_URL ||
   process.env.DATABASE_URL ||
+  process.env.POSTGRES_CONNECTION_STRING ||
+  process.env.POSTGRES_URI ||
   '';
 if (!DB_URL) {
   die(

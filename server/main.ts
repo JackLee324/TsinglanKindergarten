@@ -493,9 +493,15 @@ function installShutdownHandlers(target: ShutdownTarget): void {
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
-  // Cloud PaaS / standalone compatibility fallback
-  if (!process.env.SUDA_DATABASE_URL && process.env.DATABASE_URL) {
-    process.env.SUDA_DATABASE_URL = process.env.DATABASE_URL;
+  // Cloud PaaS / standalone compatibility fallback (Zeabur / Render / Railway)
+  const dbUrl =
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_CONNECTION_STRING ||
+    process.env.POSTGRES_URI ||
+    process.env.SUDA_DATABASE_URL;
+  if (dbUrl) {
+    process.env.DATABASE_URL = process.env.DATABASE_URL || dbUrl;
+    process.env.SUDA_DATABASE_URL = process.env.SUDA_DATABASE_URL || dbUrl;
   }
   if (!process.env.FORCE_AUTHN_INNERAPI_DOMAIN) {
     process.env.FORCE_AUTHN_INNERAPI_DOMAIN = 'https://127.0.0.1:1';

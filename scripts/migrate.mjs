@@ -80,6 +80,8 @@ function resolveConnectionString() {
   const url =
     process.env.MIGRATION_DATABASE_URL ||
     process.env.DATABASE_URL ||
+    process.env.POSTGRES_CONNECTION_STRING ||
+    process.env.POSTGRES_URI ||
     process.env.SUDA_DATABASE_URL;
   if (!url) {
     die(
