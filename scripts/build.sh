@@ -202,6 +202,65 @@ if [ -d "$DIST_DIR/client" ]; then
     echo "      生产环境下 GET / 将无法渲染。请检查 Vite 预设的输出目录配置。" >&2
     exit 1
   fi
+
+  # ---------------------------------------------------------------------------
+  # 把静态资源也放进 dist/dist/client —— 独立部署必需
+  # ---------------------------------------------------------------------------
+  # 平台的 publicAssetsMiddleware()（@lark-apaas/fullstack-nestjs-core:36674）
+  # 从 `path.resolve(process.cwd(), "dist/client")` 直出文件，而服务是以 cwd=dist
+  # 启动的，所以它的实际目录是 **dist/dist/client**。
+  #
+  # 但 Vite 把资源输出到 dist/client，上面这段只把 HTML 搬进了 dist/dist/client。
+  # 在妙搭平台上，整个 dist/client 会被上传到 CDN，`/assets/*` 由 CDN 提供，所以
+  # 一直正常；**独立部署时没有任何人上传它**，于是：
+  #   请求 /assets|/bundle/xxx.js -> 中间件在 dist/dist/client 里找不到 -> next()
+  #   -> SPA 回退 -> 返回 text/html 的首页 -> 浏览器把 HTML 当脚本 -> 页面白屏。
+  # 而健康检查、API、日志全部正常，所以这个故障极难自查。
+  #
+  # 这里把非 HTML 的静态资源也复制过去，使中间件能在自己的目录里找到它们。
+  # 复制而不是移动：保留 dist/client 的完整内容，妙搭的 CDN 上传流程不受影响。
+  #
+  # 注意 `assets/` 同时出现在平台中间件的 PLATFORM_PREFIXES 跳过列表里
+  # （其注释写明 hashed 产物走 CDN），所以 vite 的 assetsDir 已改为 `bundle`
+  # （见 vite.config.ts）。这里仍把 assets/ 一并复制，以兼容其它静态文件。
+  for asset_dir in bundle assets static; do
+    if [ -d "$DIST_DIR/client/$asset_dir" ]; then
+      mkdir -p "$DIST_DIR/dist/client"
+      cp -R "$DIST_DIR/client/$asset_dir" "$DIST_DIR/dist/client/"
+    fi
+  done
+
+  # 验证：入口 HTML 引用的每一个本地资源都必须真实存在，否则直接构建失败。
+  # 这道校验是必需的 —— 上面那个白屏缺陷整套测试都测不出来（所有套件只看
+  # HTTP 状态码，而 SPA 回退让资源请求也返回 200）。
+  if [ -f "$DIST_DIR/dist/client/index.html" ]; then
+    missing=""
+    for ref in $(grep -oE '(src|href)="/[^"]+"' "$DIST_DIR/dist/client/index.html" \
+                 | sed -E 's/.*="\/([^"]+)"/\1/' | sort -u); do
+      case "$ref" in
+        *.js|*.css|*.svg|*.png|*.ico|*.webp|*.woff|*.woff2)
+          if [ ! -f "$DIST_DIR/dist/client/$ref" ]; then
+            missing="$missing $ref"
+          fi
+          ;;
+      esac
+    done
+    if [ -n "$missing" ]; then
+      echo "   ❌ 构建失败：入口 HTML 引用了不存在的静态资源，独立部署会白屏：" >&2
+      for m in $missing; do echo "        /$m" >&2; done
+      exit 1
+    fi
+    # polyfills.js 由预设输出到 assets/，而 assets/ 在平台中间件的跳过列表里
+    # （走 CDN），独立部署时同样拿不到。挪到根目录并改写引用。
+    if [ -f "$DIST_DIR/dist/client/assets/polyfills.js" ] && \
+       [ ! -f "$DIST_DIR/dist/client/polyfills.js" ]; then
+      cp "$DIST_DIR/dist/client/assets/polyfills.js" "$DIST_DIR/dist/client/polyfills.js"
+      sed -i.bak 's#/assets/polyfills\.js#/polyfills.js#g' "$DIST_DIR/dist/client/index.html" \
+        && rm -f "$DIST_DIR/dist/client/index.html.bak"
+      echo "   ✓ polyfills.js 已从被平台跳过的 assets/ 移到根目录"
+    fi
+    echo "   ✓ 入口 HTML 引用的静态资源均已就位于 dist/dist/client"
+  fi
 fi
 
 # server 相关产物准备（only_frontend_change=true 时跳过）
