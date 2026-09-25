@@ -92,16 +92,14 @@ if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
     PW_FILE="$(mktemp)"
     chmod 600 "$PW_FILE"
     printf '%s' "$INITIAL_ADMIN_PASSWORD" > "$PW_FILE"
-    node /app/scripts/provision-super-admin.mjs \
+    if ! node /app/scripts/provision-super-admin.mjs \
       --username "${ADMIN_USER}" \
       --password-file "$PW_FILE" \
       --name '系统超级管理员' \
-      --yes-create-account
-    PROVISION_RC=$?
+      --yes-create-account; then
+      echo "[entrypoint] ⚠️ 管理员创建/更新未成功，继续校验是否已存在可用管理员..."
+    fi
     rm -f "$PW_FILE"
-      if [ "$PROVISION_RC" -ne 0 ]; then
-        echo "[entrypoint] ⚠️ 管理员创建/更新未成功（退出码 $PROVISION_RC），继续校验是否已存在可用管理员..."
-      fi
     # 校验：至少存在一个"能凭密码认证"的 super_admin，否则明确警告。
     #
     # 这里刻意【不】使用 bootstrap-super-admin.mjs --verify 的结论来阻断启动，
