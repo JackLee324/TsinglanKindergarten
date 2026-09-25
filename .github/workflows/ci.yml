@@ -163,10 +163,9 @@ jobs:
       # -----------------------------------------------------------------------
       - name: Migrate verification database
         run: |
+          node scripts/db-bootstrap.mjs
           npm run migrate:status
           npm run migrate:verify
-          npm run migrate
-          npm run migrate:status
 
       # -----------------------------------------------------------------------
       # 3. UNIT + INTEGRATION TESTS
