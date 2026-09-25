@@ -54,18 +54,17 @@ if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
   if [ -n "${INITIAL_ADMIN_PASSWORD:-}" ]; then
     ADMIN_USER="${INITIAL_ADMIN_USER:-TsinglanAdmin}"
     echo "[entrypoint] 正在初始化超级管理员账号: ${ADMIN_USER}..."
+    # 密码经临时文件传入，不出现在进程列表（ps）或 shell 历史里。
+    PW_FILE="$(mktemp)"
+    chmod 600 "$PW_FILE"
+    printf '%s' "$INITIAL_ADMIN_PASSWORD" > "$PW_FILE"
     node /app/scripts/provision-super-admin.mjs \
-      # 密码经临时文件传入，不出现在进程列表（ps）或 shell 历史里。
-      PW_FILE="$(mktemp)"
-      chmod 600 "$PW_FILE"
-      printf '%s' "$INITIAL_ADMIN_PASSWORD" > "$PW_FILE"
-      node /app/scripts/provision-super-admin.mjs \
-        --username "${ADMIN_USER}" \
-        --password-file "$PW_FILE" \
-        --name '系统超级管理员' \
-        --yes-create-account
-      PROVISION_RC=$?
-      rm -f "$PW_FILE"
+      --username "${ADMIN_USER}" \
+      --password-file "$PW_FILE" \
+      --name '系统超级管理员' \
+      --yes-create-account
+    PROVISION_RC=$?
+    rm -f "$PW_FILE"
       if [ "$PROVISION_RC" -ne 0 ]; then
         echo "[entrypoint] ⚠️ 管理员创建/更新未成功（退出码 $PROVISION_RC），继续校验是否已存在可用管理员..."
       fi

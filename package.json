@@ -21,6 +21,7 @@
     "start:prod": "npm run start",
     "migrate": "node ./scripts/migrate.mjs",
     "migrate:status": "node ./scripts/migrate.mjs status",
+    "migrate:verify": "node ./scripts/migrate.mjs verify",
     "db:snapshot": "node ./scripts/db-snapshot.mjs",
     "eslint": "eslint . --quiet",
     "stylelint": "stylelint client/src/**/*.css --quiet",
