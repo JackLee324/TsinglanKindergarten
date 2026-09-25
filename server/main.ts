@@ -572,7 +572,8 @@ async function bootstrap() {
   app.use(securityHeaders);
 
   const host = process.env.SERVER_HOST || '0.0.0.0';
-  const port = Number(process.env.PORT || process.env.SERVER_PORT || '3000');
+  const parsedPort = Number(process.env.PORT || process.env.SERVER_PORT || '3000');
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 3000;
 
   // 注册视图引擎, 渲染 client 目录下的 html 文件
   app.setBaseViewsDir(join(process.cwd(), 'dist/client'));

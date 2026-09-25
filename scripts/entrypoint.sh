@@ -5,14 +5,48 @@
 set -e
 
 # 1. 规范化环境变量 / Normalize Environment Variables
-# 兼容 Zeabur (POSTGRES_CONNECTION_STRING / POSTGRES_URI) 与通用 DATABASE_URL
-DB_CONN="${DATABASE_URL:-${POSTGRES_CONNECTION_STRING:-${POSTGRES_URI:-${SUDA_DATABASE_URL:-}}}}"
+# 过滤未展开的模板占位符 (如 ${POSTGRES_CONNECTION_STRING}, ${WEB_PORT})
+sanitize_var() {
+  local val="$1"
+  if [[ "$val" =~ ^\$\{.*\}$ ]]; then
+    echo ""
+  else
+    echo "$val"
+  fi
+}
+
+DATABASE_URL="$(sanitize_var "${DATABASE_URL:-}")"
+POSTGRES_CONNECTION_STRING="$(sanitize_var "${POSTGRES_CONNECTION_STRING:-}")"
+POSTGRESQL_CONNECTION_STRING="$(sanitize_var "${POSTGRESQL_CONNECTION_STRING:-}")"
+POSTGRES_URI="$(sanitize_var "${POSTGRES_URI:-}")"
+SUDA_DATABASE_URL="$(sanitize_var "${SUDA_DATABASE_URL:-}")"
+
+# 若 DATABASE_URL 为空，尝试各可能来源或由组件环境变量拼接
+DB_CONN="${DATABASE_URL:-${POSTGRES_CONNECTION_STRING:-${POSTGRESQL_CONNECTION_STRING:-${POSTGRES_URI:-${SUDA_DATABASE_URL:-}}}}}"
+if [ -z "$DB_CONN" ] && [ -n "${POSTGRES_HOST:-}" ]; then
+  PG_USER="${POSTGRES_USERNAME:-${POSTGRES_USER:-postgres}}"
+  PG_PASS="${POSTGRES_PASSWORD:-}"
+  PG_HOST="${POSTGRES_HOST:-localhost}"
+  PG_PORT="${POSTGRES_PORT:-5432}"
+  PG_DB="${POSTGRES_DATABASE:-${POSTGRES_DB:-postgres}}"
+  DB_CONN="postgresql://${PG_USER}:${PG_PASS}@${PG_HOST}:${PG_PORT}/${PG_DB}"
+fi
+
 export DATABASE_URL="$DB_CONN"
 export SUDA_DATABASE_URL="$DB_CONN"
 export FORCE_AUTHN_INNERAPI_DOMAIN="${FORCE_AUTHN_INNERAPI_DOMAIN:-https://127.0.0.1:1}"
 export SERVER_HOST="${SERVER_HOST:-0.0.0.0}"
-export SERVER_PORT="${PORT:-${SERVER_PORT:-3000}}"
-export PORT="${SERVER_PORT}"
+
+# 端口规范化：必须为合法数字，否则回退到 3000
+RAW_PORT="$(sanitize_var "${PORT:-}")"
+if [ -z "$RAW_PORT" ] || ! [[ "$RAW_PORT" =~ ^[0-9]+$ ]]; then
+  RAW_PORT="$(sanitize_var "${SERVER_PORT:-}")"
+fi
+if [ -z "$RAW_PORT" ] || ! [[ "$RAW_PORT" =~ ^[0-9]+$ ]]; then
+  RAW_PORT=3000
+fi
+export SERVER_PORT="$RAW_PORT"
+export PORT="$RAW_PORT"
 export NODE_ENV="${NODE_ENV:-production}"
 
 # 1. 必需密钥 —— 缺失即拒绝启动，绝不随机生成
