@@ -103,7 +103,7 @@ export const translations = {
     'role.visitor': '普通访客',
 
     // 登录
-    'login.title': '清澜山幼儿园课程资源平台',
+    'login.title': 'TsinglanKindergarten 课程资源平台',
     'login.subtitle': '教师内部教学资源管理系统',
     'login.username': '用户名',
     'login.password': '密码',
@@ -141,7 +141,7 @@ export const translations = {
 
     // 页面标题
     'page.home': '首页',
-    'page.homeDesc': '欢迎使用清澜山幼儿园课程资源平台',
+    'page.homeDesc': '欢迎使用 TsinglanKindergarten 课程资源平台',
     'page.prek': 'Pre-K 课程',
     'page.prekDesc': 'Pre-K 阶段课程资源目录',
     'page.k': 'K 阶段课程',
@@ -316,7 +316,7 @@ export const translations = {
     'audit.action.file_validation_rejected': '文件校验拒绝',
 
     // Dashboard
-    'dashboard.welcome': '欢迎来到清澜山幼儿园课程资源平台',
+    'dashboard.welcome': '欢迎来到 TsinglanKindergarten 课程资源平台',
     'dashboard.goodMorning': '早上好',
     'dashboard.goodAfternoon': '下午好',
     'dashboard.todayIs': '今天是',
@@ -452,7 +452,7 @@ export const translations = {
     'role.visitor': 'Visitor',
 
     // Login
-    'login.title': 'Qinglan Kindergarten Curriculum Platform',
+    'login.title': 'TsinglanKindergarten Curriculum Platform',
     'login.subtitle': 'Teacher Internal Resource Management System',
     'login.username': 'Username',
     'login.password': 'Password',
@@ -490,7 +490,7 @@ export const translations = {
 
     // Page titles
     'page.home': 'Home',
-    'page.homeDesc': 'Welcome to Qinglan Kindergarten Curriculum Platform',
+    'page.homeDesc': 'Welcome to TsinglanKindergarten Curriculum Platform',
     'page.prek': 'Pre-K Curriculum',
     'page.prekDesc': 'Pre-K curriculum resource directory',
     'page.k': 'K Curriculum',
@@ -665,7 +665,7 @@ export const translations = {
     'audit.action.file_validation_rejected': 'File Validation Rejected',
 
     // Dashboard
-    'dashboard.welcome': 'Welcome to Qinglan Kindergarten Curriculum Platform',
+    'dashboard.welcome': 'Welcome to TsinglanKindergarten Curriculum Platform',
     'dashboard.goodMorning': 'Good morning',
     'dashboard.goodAfternoon': 'Good afternoon',
     'dashboard.todayIs': 'Today is',

@@ -272,7 +272,7 @@ const Layout: React.FC = () => {
             <div className="flex size-8 items-center justify-center rounded-lg bg-white/20 text-white">
               <BookOpen className="size-5" />
             </div>
-            <span className="text-base font-semibold">清澜山幼儿园</span>
+            <span className="text-base font-semibold">TsinglanKindergarten</span>
           </div>
           {isMobile && (
             <Button
@@ -291,7 +291,7 @@ const Layout: React.FC = () => {
         </nav>
 
         <div className="p-3 text-xs text-white/60">
-          <p>&copy; 2024 清澜山幼儿园</p>
+          <p>&copy; 2024 TsinglanKindergarten</p>
         </div>
       </aside>
 

@@ -60,7 +60,7 @@ cmd_start() {
   if "$PGBIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1; then
     log "已经在运行（端口 $PGPORT）"
   else
-    log "启动 PostgreSQL（127.0.0.1:$PGPORT，仅本地回环）"
+    log "启动 PostgreSQL（127.0.0.1:${PGPORT}，仅本地回环）"
     "$PGBIN/pg_ctl" -D "$PGDATA" -l "$LOGDIR/postgres.log" \
       -o "-p $PGPORT -c listen_addresses=127.0.0.1" start >/dev/null
     sleep 2

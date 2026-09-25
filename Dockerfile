@@ -163,7 +163,8 @@ COPY --chown=qls:qls --from=build /build/node_modules ./node_modules
 # migration state — and "cannot verify migration state" is exactly the class of
 # gap this project is trying to close.
 COPY --chown=qls:qls --from=build /build/server/database ./server/database
-COPY --chown=qls:qls --from=build /build/scripts/migrate.mjs ./scripts/migrate.mjs
+COPY --chown=qls:qls --from=build /build/scripts ./scripts
+RUN chmod +x ./scripts/*.sh ./scripts/*.mjs
 
 USER qls
 
@@ -211,5 +212,5 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # therefore the views directory, `join(process.cwd(), 'dist/client')` — is
 # identical to the documented start, so nothing about the app's behaviour changes.
 WORKDIR /app/dist
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/app/scripts/entrypoint.sh"]
 CMD ["node", "server/main.js"]

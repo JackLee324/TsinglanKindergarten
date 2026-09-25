@@ -1,0 +1,24 @@
+provision-super-admin —— 变更范围证明
+======================================================================
+
+变更前 -> 变更后，逐表（行数 + md5 指纹）：
+
+  teachers                  22 ->    23   已变（预期：账号创建）
+  teacher_mfa                0 ->     0   未变
+  mfa_recovery_codes         0 ->     0   未变
+  mfa_challenges             0 ->     0   未变
+  sessions                 610 ->   611   已变（有归属：登录验证）
+  resources                347 ->   347   未变
+  review_records            18 ->    18   未变
+  audit_logs              1468 ->  1469   已变（有归属：登录验证）
+  subject_permissions        0 ->     0   未变
+  schema_migrations          8 ->     8   未变
+
+三处变化的归属（可由数据自身证明）：
+  · teachers      账号于 2026-09-24T23:42:15.143Z 创建（Tsinglan001, roles=[super_admin], active）
+  · sessions      新增 1 行于 2026-09-24T23:42:58.555Z，username=Tsinglan001  ← 第 4 步的登录验证
+  · audit_logs    新增 1 行于 2026-09-24T23:42:58.556Z，action=login, success=true, 系统超级管理员
+  登录发生在账号创建之后 43 秒，且动作类型为 login —— 不是 provisioning 脚本写的。
+
+供应脚本自身的写操作仅限：一个事务内 INSERT 一行 teachers（含 scrypt 哈希）。
+它不写 teacher_mfa / mfa_recovery_codes / mfa_challenges —— 三张表均逐字节未变。

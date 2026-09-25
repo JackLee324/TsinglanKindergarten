@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: tsinglan-kindergarten
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tsinglan-postgres
+          property: connectionString
+      - key: SUDA_DATABASE_URL
+        fromDatabase:
+          name: tsinglan-postgres
+          property: connectionString
+      - key: NODE_ENV
+        value: production
+      - key: HTTPS_ENABLED
+        value: "true"
+      - key: TRUST_PROXY
+        value: "loopback"
+      - key: SERVER_HOST
+        value: 0.0.0.0
+      - key: SERVER_PORT
+        value: "3000"
+      - key: FORCE_AUTHN_INNERAPI_DOMAIN
+        value: https://127.0.0.1:1
+      - key: MFA_ENCRYPTION_KEY
+        generateValue: true
+      - key: DOWNLOAD_TOKEN_SECRET
+        generateValue: true
+      - key: INITIAL_ADMIN_USER
+        value: TsinglanAdmin
+      - key: INITIAL_ADMIN_PASSWORD
+        generateValue: true
+
+databases:
+  - name: tsinglan-postgres
+    plan: free
+    region: singapore
+    databaseName: tsinglan_kindergarten
+    user: tsinglan

@@ -1,0 +1,28 @@
+== 4. super_admin account that can actually log in
+------------------------------------------------------------------------
+     2 account(s) hold the super_admin role:
+       - Tsinglan001: CANNOT LOG IN: MFA not enrolled (AuthGuard refuses every route)
+       - __rbac_keeper: CANNOT LOG IN: no password_hash (login refuses with 401); MFA not enrolled (AuthGuard refuses every route)
+     NOT READY: no super_admin can currently authenticate.
+     Note: the test fixture account `__rbac_keeper` is created WITHOUT a password on purpose
+     (tests/helpers/reset-fixtures.mjs:116-131) — it exists to keep the last-super_admin
+     trigger satisfiable during verification runs. It is not a production login.
+     Remediation (operator action, deliberately NOT performed by this check): create or
+     repair a real super_admin, set its password, then enrol TOTP.
+FAIL [07] no ACTIVE super_admin can authenticate
+     this is a PRODUCTION property, verified against the database this shell
+     points at. If you are running contract verification against a fixture
+     database, set PREDEPLOY_SUPER_ADMIN_MODE=report — the result is then a
+     named waiver rather than a pass.
+     
+     NEXT STEP — 该怎么做，逐条（含可直接执行的 SQL 与 curl）：
+       node scripts/bootstrap-super-admin.mjs
+       它只读，不写任何数据；它会打印现状、精确原因、手工步骤与验收命令。
+       可执行 SQL 模板：evidence/bootstrap/OPERATOR-SQL.sql.txt
+       自证只读：node scripts/bootstrap-super-admin.mjs --self-test
+     
+       ⚠️ 先固定 MFA_ENCRYPTION_KEY 再绑定 MFA：绑定之后再换键会让该账号
+          永久无法解密 TOTP 密钥、登录 FAIL CLOSED（脚本第 6 节详述）。
+
+------------------------------------------------------------------------
+== 5. Privileged-account MFA enforcement

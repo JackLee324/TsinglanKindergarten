@@ -28,7 +28,7 @@
 # advisory lock 串行化。请不要直接 `--scale app=2`。
 # =============================================================================
 
-name: qls-platform
+name: tsinglan-kindergarten
 
 services:
   postgres:
@@ -61,7 +61,7 @@ services:
       # 在 arm64 机器上不加这行，构建出的原生绑定与 lockfile 记录不一致。
       platforms:
         - linux/amd64
-    image: qls-platform:${APP_VERSION:-local}
+    image: tsinglan-kindergarten:${APP_VERSION:-local}
     restart: unless-stopped
     depends_on:
       postgres:

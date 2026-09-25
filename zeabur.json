@@ -1,0 +1,5 @@
+{
+  "$schema": "https://schema.zeabur.app/config.json",
+  "name": "TsinglanKindergarten",
+  "dockerfile": "Dockerfile"
+}

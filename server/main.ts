@@ -492,6 +492,15 @@ function installShutdownHandlers(target: ShutdownTarget): void {
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+
+  // Cloud PaaS / standalone compatibility fallback
+  if (!process.env.SUDA_DATABASE_URL && process.env.DATABASE_URL) {
+    process.env.SUDA_DATABASE_URL = process.env.DATABASE_URL;
+  }
+  if (!process.env.FORCE_AUTHN_INNERAPI_DOMAIN) {
+    process.env.FORCE_AUTHN_INNERAPI_DOMAIN = 'https://127.0.0.1:1';
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     abortOnError: process.env.NODE_ENV !== 'development',
   });
