@@ -11,7 +11,8 @@ export DATABASE_URL="$DB_CONN"
 export SUDA_DATABASE_URL="$DB_CONN"
 export FORCE_AUTHN_INNERAPI_DOMAIN="${FORCE_AUTHN_INNERAPI_DOMAIN:-https://127.0.0.1:1}"
 export SERVER_HOST="${SERVER_HOST:-0.0.0.0}"
-export SERVER_PORT="${SERVER_PORT:-3000}"
+export SERVER_PORT="${PORT:-${SERVER_PORT:-3000}}"
+export PORT="${SERVER_PORT}"
 export NODE_ENV="${NODE_ENV:-production}"
 
 # 如果部署在 PaaS 未配置特定密钥，自动生成默认临时密钥保障启动可用
@@ -29,7 +30,7 @@ fi
 if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
   echo "[entrypoint] 正在检查数据库状态与迁移..."
   # 优先尝试从零初始化；若已有表，则执行增量迁移
-  node /app/scripts/db-bootstrap.mjs >/dev/null 2>&1 || node /app/scripts/migrate.mjs up || true
+  node /app/scripts/db-bootstrap.mjs || node /app/scripts/migrate.mjs up || true
   
   # 若配置了初始管理员密码，自动创建超级管理员账号
   if [ -n "${INITIAL_ADMIN_PASSWORD:-}" ]; then

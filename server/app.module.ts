@@ -16,6 +16,19 @@ import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { HealthModule } from './modules/health/health.module';
 
+if (!process.env.FORCE_AUTHN_INNERAPI_DOMAIN) {
+  process.env.FORCE_AUTHN_INNERAPI_DOMAIN = 'https://127.0.0.1:1';
+}
+const dbUrl =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_CONNECTION_STRING ||
+  process.env.POSTGRES_URI ||
+  process.env.SUDA_DATABASE_URL;
+if (dbUrl) {
+  process.env.DATABASE_URL = process.env.DATABASE_URL || dbUrl;
+  process.env.SUDA_DATABASE_URL = process.env.SUDA_DATABASE_URL || dbUrl;
+}
+
 @Module({
   imports: [
     // 平台 Module，提供平台能力
