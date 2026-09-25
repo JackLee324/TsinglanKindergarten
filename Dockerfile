@@ -52,6 +52,19 @@
 # -----------------------------------------------------------------------------
 ARG NODE_IMAGE=node:22-bookworm-slim
 
+# -----------------------------------------------------------------------------
+# 依赖源 —— 必须是可在目标网络访问的 registry
+# -----------------------------------------------------------------------------
+# 仓库根的 `.npmrc` 把 registry 钉在 `https://registry.npmmirror.com/`（国内镜像），
+# 它是会被 COPY 进构建阶段的。本地开发用它没问题，但 Zeabur / Render 这类海外
+# PaaS 的网络访问该镜像可能很慢甚至超时，表现为 `npm ci` 卡死或失败 —— 而且失败
+# 信息往往只是一句 network timeout，很难定位到是 registry 的问题。
+#
+# 这里改为构建参数，**默认使用公共 registry**，需要时可以用
+#   docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com/ .
+# 换回国内镜像。这样镜像构建不再依赖某个特定网络环境。
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+
 FROM --platform=linux/amd64 ${NODE_IMAGE} AS build
 
 # Build-time only. Never inherited by the runtime stage, so nothing here leaks.
@@ -62,7 +75,8 @@ WORKDIR /build
 COPY package.json package-lock.json .npmrc ./
 COPY scripts ./scripts
 
-RUN npm ci --no-audit --no-fund
+RUN npm config set registry "$NPM_REGISTRY" \
+ && npm ci --no-audit --no-fund --registry="$NPM_REGISTRY"
 
 # Sources. Ordered so the most frequently edited trees come last.
 COPY tsconfig.json tsconfig.node.json tsconfig.app.json nest-cli.json ./
@@ -75,7 +89,7 @@ COPY scripts ./scripts
 RUN npm run build
 
 # Drop build-only dependencies from the tree that will be copied into the image.
-RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts
+RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts --registry="$NPM_REGISTRY"
 
 # -----------------------------------------------------------------------------
 # Stage 2 — runtime
@@ -110,9 +124,12 @@ RUN groupadd --gid 10001 qls \
 #     scripts/build.sh moves the built index.html. Both paths are required; the
 #     HTML is deliberately NOT under /app/dist/client (it must not be published to
 #     the public CDN, which is why the build moves rather than copies it).
-#   * `dist/client/assets/*` stays out of the same-origin static middleware on
-#     purpose (the platform serves hashed bundles from its CDN), so it is served
-#     for CDN parity, not by the Node process.
+#   * `dist/client/{bundle,assets}/*` is copied by scripts/build.sh into
+#     `dist/dist/client/` as well, because the platform's
+#     publicAssetsMiddleware() only serves from
+#     `path.resolve(process.cwd(), 'dist/client')` = `dist/dist/client`. Without
+#     that copy, an independent deployment served the SPA fallback HTML for every
+#     asset request and the page rendered blank while all monitors stayed green.
 # ---------------------------------------------------------------------------
 COPY --chown=qls:qls package.json ./package.json
 COPY --chown=qls:qls --from=build /build/dist ./dist
