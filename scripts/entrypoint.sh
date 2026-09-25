@@ -75,7 +75,7 @@ if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
   # 优先尝试从零初始化；若已有表，则执行增量迁移
   # 优先尝试从零初始化；若库已存在（bootstrap 会主动拒绝），则走增量迁移。
   # 两者都失败 => 明确拒绝启动，绝不带一个未迁移的库对外服务。
-  if node /app/scripts/db-bootstrap.mjs >/dev/null 2>&1; then
+  if node /app/scripts/db-bootstrap.mjs; then
     echo "[entrypoint] ✓ 数据库已从零初始化并完成迁移"
   elif node /app/scripts/migrate.mjs up; then
     echo "[entrypoint] ✓ 数据库增量迁移完成"

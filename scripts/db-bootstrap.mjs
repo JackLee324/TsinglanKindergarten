@@ -53,7 +53,8 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import postgres from 'postgres';
 
@@ -86,7 +87,7 @@ if (!url) {
   process.exit(2);
 }
 
-const ROOT = process.cwd();
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const MIGRATION_0001 = resolve(
   ROOT,
   'server/database/migrations/0001_schema_baseline_alignment.sql',
