@@ -135,7 +135,7 @@ USER qls
 # The documented application port. Not a security control — it documents intent
 # and lets `-P` publish it; the actual binding comes from SERVER_PORT, which the
 # application reads (server/main.ts:85).
-EXPOSE 3000
+EXPOSE 3000 8080
 
 # Liveness, matching what the application actually provides:
 #   GET /api/health        liveness  — no dependencies touched, so a slow database

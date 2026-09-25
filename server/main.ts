@@ -7,7 +7,7 @@ import {
 } from '@lark-apaas/fullstack-nestjs-core';
 import { join } from 'path';
 import { __express as hbsExpressEngine } from 'hbs';
-import type { Server } from 'http';
+import http, { type Server } from 'http';
 
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
@@ -587,6 +587,41 @@ async function bootstrap() {
   installShutdownHandlers({ app, logger, timeoutMs: shutdownTimeout.ms });
 
   await app.listen(port, host);
+
+  // 兼容云平台多端口或默认端口转发（例如 Zeabur 转发 3000 或 8080），杜绝 502 Port Mismatch
+  const fallbackPorts = [3000, 8080].filter((p) => p !== port);
+  for (const altPort of fallbackPorts) {
+    try {
+      const altServer = http.createServer((req, res) => {
+        const clientReq = http.request(
+          {
+            host: '127.0.0.1',
+            port: port,
+            path: req.url,
+            method: req.method,
+            headers: req.headers,
+          },
+          (clientRes) => {
+            res.writeHead(clientRes.statusCode || 200, clientRes.headers);
+            clientRes.pipe(res);
+          },
+        );
+        clientReq.on('error', () => {
+          if (!res.headersSent) res.writeHead(502);
+          res.end('Gateway Forwarding Error');
+        });
+        req.pipe(clientReq);
+      });
+      altServer.listen(altPort, host, () => {
+        logger.log(`Secondary listener forwarding ${altPort} -> ${port}`);
+      });
+      altServer.on('error', () => {
+        // ignore if port is occupied
+      });
+    } catch {
+      // ignore
+    }
+  }
 
   logger.log(`Server running on ${host}:${port}`);
   logger.log(`API endpoints ready at http://${host}:${port}/api`);

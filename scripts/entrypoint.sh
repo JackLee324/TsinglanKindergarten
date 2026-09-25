@@ -70,7 +70,30 @@ require_env MFA_ENCRYPTION_KEY "生成一次并永久固定：openssl rand -base
 require_env DOWNLOAD_TOKEN_SECRET "生成一次并永久固定：openssl rand -base64 32"
 
 # 2. 自动检查数据库并执行初始化 / 迁移
+wait_for_db() {
+  local max_attempts=30
+  local attempt=1
+  echo "[entrypoint] 正在等待 PostgreSQL 数据库响应..."
+  while [ $attempt -le $max_attempts ]; do
+    if node -e '
+      const postgres = require("postgres");
+      const url = process.env.DATABASE_URL || process.env.SUDA_DATABASE_URL;
+      const sql = postgres(url, { max: 1, connect_timeout: 3 });
+      sql`SELECT 1`.then(() => { process.exit(0); }).catch(() => { process.exit(1); });
+    ' >/dev/null 2>&1; then
+      echo "[entrypoint] ✓ PostgreSQL 数据库已连接成功 (尝试第 ${attempt} 次)"
+      return 0
+    fi
+    echo "[entrypoint] 数据库暂未就绪，等待中 (${attempt}/${max_attempts})..."
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+  echo "[entrypoint] ⚠️ 数据库连接探测超时，尝试直接执行后续步骤..."
+  return 1
+}
+
 if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
+  wait_for_db || true
   echo "[entrypoint] 正在检查数据库状态与迁移..."
   # 优先尝试从零初始化；若已有表，则执行增量迁移
   # 优先尝试从零初始化；若库已存在（bootstrap 会主动拒绝），则走增量迁移。
