@@ -51,9 +51,8 @@
 # Stage 1 — build
 # -----------------------------------------------------------------------------
 ARG NODE_IMAGE=node:22-bookworm-slim
-ARG DUMB_INIT_IMAGE=devdemetrious/docker-dumb-init:latest
 
-FROM ${NODE_IMAGE} AS build
+FROM --platform=linux/amd64 ${NODE_IMAGE} AS build
 
 # Build-time only. Never inherited by the runtime stage, so nothing here leaks.
 WORKDIR /build
@@ -62,16 +61,7 @@ WORKDIR /build
 # the manifests change.
 COPY package.json package-lock.json .npmrc ./
 
-# `npm ci` (not `npm install`): it installs strictly from the lockfile, so the
-# image cannot silently resolve a different dependency tree than the one that was
-# verified. `--no-audit --no-fund` keeps the layer fast and quiet; the security
-# audit is a separate gate (`npm run predeploy`), not something to run inside a
-# build layer where its result is invisible.
-# `--ignore-scripts` is deliberately NOT used: postinstall.mjs is a guarded no-op
-# when capabilities/ is absent (it exits 0 with a notice), and skipping it would
-# diverge from the verified install path.
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 # Sources. Ordered so the most frequently edited trees come last.
 COPY tsconfig.json tsconfig.node.json tsconfig.app.json nest-cli.json ./
@@ -81,44 +71,17 @@ COPY shared ./shared
 COPY client ./client
 COPY scripts ./scripts
 
-# `npm run build` == scripts/build.sh:
-#   * rm -rf dist
-#   * generates API/page route metadata into dist/
-#   * builds server (SWC, via `nest build`) and client (Vite) in parallel
-#   * copies server + shared into dist/, moves every emitted HTML into
-#     dist/dist/client and promotes the nested entry document to
-#     dist/dist/client/index.html
-# NOTE: `nest build` uses SWC and does NOT typecheck. That is why the CI workflow
-# runs `npm run type:check` as its own step — the build would happily ship a type
-# error. See .github/workflows/ci.yml.
-# FIRST-BUILD RISK: the script pushes NODE_OPTIONS=--max-old-space-size=8192 into
-# the Vite/server children. If the builder runs with a hard memory cap, raise it
-# (`docker build --memory=8g`) or the client build OOMs.
 RUN npm run build
 
 # Drop build-only dependencies from the tree that will be copied into the image.
-# Production deps are what the server imports at run time; devDependencies
-# (typescript, eslint, the Vite/Tailwind toolchain, @nestjs/cli) are not.
-# FIRST-BUILD RISK: if the running server turns out to import something that is
-# declared as a devDependency, `npm ci --omit=dev` here will remove it and the
-# container will fail at startup with MODULE_NOT_FOUND. The fix is to correct the
-# dependency classification, not to ship the dev tree.
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --no-audit --no-fund
+RUN npm ci --omit=dev --no-audit --no-fund
 
 # -----------------------------------------------------------------------------
 # Stage 2 — runtime
 # -----------------------------------------------------------------------------
-FROM ${NODE_IMAGE} AS runtime
+FROM --platform=linux/amd64 ${NODE_IMAGE} AS runtime
 
-# dumb-init: a ~50 KB static binary that becomes PID 1, forwards signals, and
-# reaps orphaned children. Copied from its own image so no apt/apk package
-# install (and no extra package-manager state) lands in the runtime layer.
-# FIRST-BUILD RISK: the reference below is a third-party image. If your registry
-# policy forbids that, replace it with your distro's `tini`/`dumb-init` package
-# (Debian: `apt-get install -y --no-install-recommends dumb-init`) or rely on
-# `docker run --init`, and keep the exec-form ENTRYPOINT either way.
-COPY --from=${DUMB_INIT_IMAGE} /usr/bin/dumb-init /usr/bin/dumb-init
+RUN apt-get update && apt-get install -y --no-install-recommends dumb-init && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \
     SERVER_HOST=0.0.0.0 \

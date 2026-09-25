@@ -102,7 +102,7 @@ STEP_START=$(node -e "console.log(Date.now())")
 # 给 server/client 构建子进程预留 8GB heap，缓解 vite build transform 阶段 OOM
 # （典型错误：Reached heap limit Allocation failed）。
 # 仅在外部未设置 NODE_OPTIONS 时注入，允许 CI / 用户通过外部环境变量完全覆盖
-BUILD_NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=8192}"
+BUILD_NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
 
 # 根据 only_frontend_change 决定是否构建 server
 if [[ "${only_frontend_change:-false}" == "true" ]]; then
