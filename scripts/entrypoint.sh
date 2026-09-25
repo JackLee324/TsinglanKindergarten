@@ -69,17 +69,23 @@ if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
       if [ "$PROVISION_RC" -ne 0 ]; then
         echo "[entrypoint] ⚠️ 管理员创建/更新未成功（退出码 $PROVISION_RC），继续校验是否已存在可用管理员..."
       fi
-    # 无论上面走了哪条分支，都必须能证明"存在一个真正可登录的 super_admin"。
-    # 只报"账号存在"是不够的：本库里就有一个有角色但无法登录的账号。
-    if node /app/scripts/bootstrap-super-admin.mjs --verify; then
-      echo "[entrypoint] ✓ 已存在可登录的 super_admin"
-    else
-      echo "[entrypoint] ✗ 没有任何可登录的 super_admin，拒绝启动。" >&2
-      echo "[entrypoint]   没有它，部署成功后也没有人能进入管理平台。" >&2
-      echo "[entrypoint]   设置 INITIAL_ADMIN_USER/INITIAL_ADMIN_PASSWORD，或执行：" >&2
-      echo "[entrypoint]     node scripts/bootstrap-super-admin.mjs   （只读，会给出精确步骤）" >&2
-      exit 1
-    fi
+    # 校验：至少存在一个"能凭密码认证"的 super_admin，否则明确警告。
+    #
+    # 这里刻意【不】使用 bootstrap-super-admin.mjs --verify 的结论来阻断启动，
+    # 原因有两条，都是我第一版写错后才发现的：
+    #   1. --verify 的 superAdminUsable 只有在 MFA 也绑定后才 > 0，而它的
+    #      退出码在不可用时仍然是 0（实测：superAdminUsable=0，exit=0）。
+    #      用它当 if 条件会得到一个永远通过的空断言 —— 又一例假绿。
+    #   2. 更重要的是会造成死锁：绑定 MFA 只能通过 /api/auth/mfa/enroll，
+    #      而该接口需要服务先跑起来。若要求"已绑定 MFA"才允许启动，
+    #      全新部署将永远无法启动。
+    # 因此这里只做检查并大声告警，把"必须已绑定 MFA 才能算可用"这一严格
+    # 判定留给上线门禁 npm run predeploy（它不在启动路径上，不会死锁）。
+    echo "[entrypoint] 校验超级管理员状态（只读）："
+    node /app/scripts/bootstrap-super-admin.mjs 2>/dev/null | grep -E "能否真正登录|未设置|未绑定|共 .* 个账号" | sed 's/^/[entrypoint]   /' || true
+    echo "[entrypoint] ⚠️ 若上面显示没有可登录的 super_admin，请在浏览器完成 MFA 绑定；"
+    echo "[entrypoint]    或设置 INITIAL_ADMIN_USER / INITIAL_ADMIN_PASSWORD 后重新部署。"
+    echo "[entrypoint]    严格验收请运行：npm run predeploy（期望不再出现 FAIL [07]/[08]）。"
   fi
 fi
 
