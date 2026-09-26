@@ -1,0 +1,26 @@
+=== 03-dependency-install.txt / build noise ===
+### 修复前：每次构建都出现的 E404 噪音 ###
+npm error code E404
+npm error 404 Not Found - GET https://registry.npmjs.org/generate-api-routes - Not found
+npm error 404 'generate-api-routes@*' is not in this registry.
+npm error 404 Not Found - GET https://registry.npmjs.org/generate-page-routes - Not found
+npm error 404 'generate-page-routes@*' is not in this registry.
+
+原因: scripts/build.sh 第 3 步无条件执行
+  npx generate-api-routes  --server-dir ./server --out-dir ./dist &
+  npx generate-page-routes --app-path ./client/src/app.tsx --out-dir ./dist &
+这两个包是**妙搭平台内部工具**，公开 npm registry 上不存在。
+妙搭上工具在 PATH 里所以正常；Docker/VPS/Zeabur 上必然 404，
+而 404 的每一行都以 ERROR 级别进日志 —— 构建其实成功了，但日志像失败。
+
+### 修复后：全新构建 ###
+  build exit=0
+0
+  E404 次数: 0
+  🗺️  [3/6] 生成路由定义
+     ⏭️  跳过路由定义生成：generate-api-routes / generate-page-routes 未安装
+         （它们是妙搭平台内部工具，公开 npm 上不存在；独立部署不需要它们）
+
+### 安全性证明：跳过它们后应用仍然完整可用 ###
+  scripts/verify-e2e-deploy.sh: pass=31 fail=0
+  镜像构建日志 E404 次数: 0

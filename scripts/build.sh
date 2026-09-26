@@ -65,32 +65,58 @@ STEP_START=$(node -e "console.log(Date.now())")
 
 # 在 client/server 构建之前生成到 dist/，供 DefinePlugin 注入前端 bundle
 # 注意：nest-cli.json 中 deleteOutDir 必须为 false（模板默认值），否则 nest build 会清掉 dist/
-echo "   ├─ 生成 API 路由定义..."
-npx generate-api-routes --server-dir ./server --out-dir ./dist > /tmp/gen-api-routes.log 2>&1 &
-API_ROUTES_PID=$!
+# ---------------------------------------------------------------------------
+# 仅在工具真实存在时才调用（独立部署必需）
+# ---------------------------------------------------------------------------
+# `generate-api-routes` / `generate-page-routes` 是**妙搭平台内部工具**，
+# 在公开 npm registry 上**不存在**。以前这里无条件 `npx` 调用，于是：
+#
+#   npm error 404 Not Found - GET https://registry.npmjs.org/generate-api-routes
+#   npm error 404 'generate-api-routes@*' is not in this registry.
+#
+# 在妙搭上工具就在 PATH 里，一切正常；但在 Docker / VPS / Zeabur 等独立环境，
+# 这两次 npx 必然 404，而且**每一行都以 ERROR 级别打进构建日志**。脚本自己把
+# 失败降级成了"不影响构建"的警告，所以构建其实成功了 —— 但日志里一大片红色
+# ERROR，任何人看到都会判断为"部署失败"，然后反复重试、反复困惑。
+#
+# 这里改为：工具不存在就**跳过**，并且只打一行 INFO，不产生任何 ERROR 噪音。
+# 跳过是安全的：这两个步骤产出的路由定义只服务于平台的同构路由元数据，
+# 独立部署不依赖它们（端到端验收 scripts/verify-e2e-deploy.sh 已证明应用
+# 在完全跳过它们的情况下可正常构建、启动、渲染与登录）。
+routes_tool_available() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  [ -x "$ROOT_DIR/node_modules/.bin/$1" ] && return 0
+  return 1
+}
 
-echo "   ├─ 生成页面路由定义..."
-npx generate-page-routes --app-path ./client/src/app.tsx --out-dir ./dist > /tmp/gen-page-routes.log 2>&1 &
-PAGE_ROUTES_PID=$!
+if routes_tool_available generate-api-routes || routes_tool_available generate-page-routes; then
+  echo "   ├─ 生成 API 路由定义..."
+  npx generate-api-routes --server-dir ./server --out-dir ./dist > /tmp/gen-api-routes.log 2>&1 &
+  API_ROUTES_PID=$!
+  echo "   ├─ 生成页面路由定义..."
+  npx generate-page-routes --app-path ./client/src/app.tsx --out-dir ./dist > /tmp/gen-page-routes.log 2>&1 &
+  PAGE_ROUTES_PID=$!
 
-API_ROUTES_EXIT=0
-PAGE_ROUTES_EXIT=0
+  API_ROUTES_EXIT=0
+  PAGE_ROUTES_EXIT=0
+  wait $API_ROUTES_PID || API_ROUTES_EXIT=$?
+  wait $PAGE_ROUTES_PID || PAGE_ROUTES_EXIT=$?
 
-wait $API_ROUTES_PID || API_ROUTES_EXIT=$?
-wait $PAGE_ROUTES_PID || PAGE_ROUTES_EXIT=$?
-
-if [ $API_ROUTES_EXIT -ne 0 ]; then
-  echo "   ⚠️  API 路由生成失败（不影响构建）"
-  cat /tmp/gen-api-routes.log
+  if [ $API_ROUTES_EXIT -ne 0 ]; then
+    echo "   ⚠️  API 路由生成失败（不影响构建）"
+    cat /tmp/gen-api-routes.log
+  else
+    echo "   ✅ API 路由生成完成"
+  fi
+  if [ $PAGE_ROUTES_EXIT -ne 0 ]; then
+    echo "   ⚠️  页面路由生成失败（不影响构建）"
+    cat /tmp/gen-page-routes.log
+  else
+    echo "   ✅ 页面路由生成完成"
+  fi
 else
-  echo "   ✅ API 路由生成完成"
-fi
-
-if [ $PAGE_ROUTES_EXIT -ne 0 ]; then
-  echo "   ⚠️  页面路由生成失败（不影响构建）"
-  cat /tmp/gen-page-routes.log
-else
-  echo "   ✅ 页面路由生成完成"
+  echo "   ⏭️  跳过路由定义生成：generate-api-routes / generate-page-routes 未安装"
+  echo "       （它们是妙搭平台内部工具，公开 npm 上不存在；独立部署不需要它们）"
 fi
 print_time $STEP_START
 echo ""
