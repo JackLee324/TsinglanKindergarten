@@ -31,7 +31,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -140,5 +140,54 @@ describe('这条判定镜像的后端规则必须仍然存在', () => {
       '后端不再对 super_admin 无条件放行了 —— isPlatformAdmin 里的 super_admin 通配就是' +
         '照它写的。请先确认后端语义，再决定这里该怎么改，然后同步更新本文件。',
     );
+  });
+});
+
+describe('整个 server 不得再出现任何"自己发明的管理员名单"', () => {
+  /**
+   * 这是本文件最重要的那一条，因为同一个缺陷在服务端被找到了 **三次**：
+   *   resources.service.ts    → 每个科目页 403 → 前端整页崩溃（用户报的那个）
+   *   dashboard.service.ts    → 首页「Pre-K 资源 / K 资源 / 本周绘本封面」恒为 0
+   *   curriculum.service.ts   → 班型结构判定
+   * 它们都写着同一行 `const ADMIN_ROLES = ['principal','curriculum_director']`。
+   *
+   * 所以守不守得住，不取决于"这次改对了没有"，而取决于"下次还能不能再写一遍"。
+   */
+  function walk(dir, out = []) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) { walk(full, out); continue; }
+      if (/\.[cm]?ts$/.test(e.name) && !/\.(test|spec)\./.test(e.name)) out.push(full);
+    }
+    return out;
+  }
+
+  test('没有任何模块再定义本地 ADMIN_ROLES', () => {
+    const offenders = [];
+    for (const f of walk(join(ROOT, 'server'))) {
+      const src = readFileSync(f, 'utf8');
+      // 只看真正的声明，不看注释里提到这个词
+      for (const m of src.matchAll(/^\s*(?:const|let|var)\s+[A-Z_]*ADMIN[A-Z_]*\s*[:=]/gm)) {
+        offenders.push(`${f.slice(ROOT.length + 1)}:${src.slice(0, m.index).split('\n').length}`);
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      '以下位置又定义了自己的管理员名单。请改用 shared/rbac.ts 的 isPlatformAdmin()。\n' +
+        '同一行代码已经造成三次线上故障（科目页 403、首页统计恒 0、班型结构判定）。\n  ' +
+        offenders.join('\n  '),
+    );
+  });
+
+  test('没有任何模块再用角色字面量做管理员判定', () => {
+    const offenders = [];
+    for (const f of walk(join(ROOT, 'server'))) {
+      const src = readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/roles\.some\([^)]*includes\(\s*'(principal|curriculum_director)'/g)) {
+        offenders.push(`${f.slice(ROOT.length + 1)}:${src.slice(0, m.index).split('\n').length}  ${m[0].slice(0, 60)}`);
+      }
+    }
+    assert.deepEqual(offenders, [], '请改用 isPlatformAdmin()：\n  ' + offenders.join('\n  '));
   });
 });

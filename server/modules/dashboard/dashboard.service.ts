@@ -22,8 +22,11 @@ import {
   subjectPermissions,
 } from '@server/database/schema';
 import type { RoleCode } from '@shared/api.interface';
-
-const ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
+// 全平台课程管理员判定只有一处实现：shared/rbac.ts 的 isPlatformAdmin。
+// 这里原本自带一份 ADMIN_ROLES = ['principal','curriculum_director']，
+// 漏掉 super_admin，导致首页的「Pre-K 资源 / K 资源 / 本周绘本封面」
+// 三张卡对 super_admin 恒为 0（与 resources.service.ts 那次 403 同一缺陷形态）。
+import { isPlatformAdmin } from '@shared/rbac';
 
 /**
  * The soft-delete predicate (migration 0007).
@@ -77,7 +80,7 @@ export class DashboardService {
       .limit(1);
 
     const roles: string[] = teacherRows[0]?.roles ?? [];
-    const isAdmin = ADMIN_ROLES.some((r: string) => roles.includes(r));
+    const isAdmin = isPlatformAdmin(roles as RoleCode[]);
 
     // 我的资源总数
     const myRes = await this.db
@@ -262,7 +265,7 @@ export class DashboardService {
       .where(eq(teachers.id, teacherId))
       .limit(1);
     const roles: string[] = teacherRows[0]?.roles ?? [];
-    const isAdmin = ADMIN_ROLES.some((r: string) => roles.includes(r));
+    const isAdmin = isPlatformAdmin(roles as RoleCode[]);
 
     // Soft delete first: it applies to BOTH branches. An administrator's "recent
     // updates" list must not advertise a resource that has been deleted, and a

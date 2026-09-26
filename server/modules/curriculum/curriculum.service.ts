@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PROGRAM_STRUCTURES, FOLDER_DEFINITIONS, ROLE_DEFINITIONS } from './curriculum.data';
 import type { ProgramStructure, FolderType, RoleCode, SubjectNode } from '@shared/api.interface';
+// 与 resources/dashboard 同一个判定：shared/rbac.ts 的 isPlatformAdmin。
+// 这里原本自带 ADMIN_ROLES，漏掉 super_admin —— super_admin 会看到
+// 「无权限」的各班型结构。第六个同源缺陷点。
+import { isPlatformAdmin } from '@shared/rbac';
 
 export interface FolderDefinitionResponse {
   key: FolderType;
@@ -15,14 +19,12 @@ export interface RoleDefinitionResponse {
   description: string;
 }
 
-const ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
-
 @Injectable()
 export class CurriculumService {
   private readonly logger = new Logger(CurriculumService.name);
 
   getStructure(roles: RoleCode[] = []): ProgramStructure[] {
-    if (roles.length === 0 || roles.some((r: RoleCode) => ADMIN_ROLES.includes(r))) {
+    if (roles.length === 0 || isPlatformAdmin(roles)) {
       return PROGRAM_STRUCTURES;
     }
     const hasPrekHead = roles.includes('prek_head');
