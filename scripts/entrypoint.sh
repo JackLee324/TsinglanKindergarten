@@ -118,21 +118,51 @@ if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
     exit 1
   fi
   # 若配置了初始管理员密码，自动创建超级管理员账号
+  #
+  # ── 为什么这里要先判断"账号是否已存在" ────────────────────────────────────
+  # 以前这段在**每次容器启动**时都无条件跑一遍 provision-super-admin.mjs，而后者
+  # 会覆盖 password_hash 与 roles。后果是：**每一次重新部署都会把管理员密码打回
+  # INITIAL_ADMIN_PASSWORD 的值**，部署者在界面上改过的密码被静默丢弃，随后登录
+  # 返回 401「用户名或密码错误」。实测证据（线上库）：
+  #     select password_updated_at from teachers where username='TsinglanAdmin';
+  #     → 2026-09-26T03:54:11.179Z     ← 正好落在一次重新部署的时刻
+  # 现在改为：账号已存在就**不动它的密码与角色**；要用环境变量强制重置，显式设置
+  # RESET_ADMIN_PASSWORD_ON_BOOT=true。恢复路径没丢，破坏性没了。
   if [ -n "${INITIAL_ADMIN_PASSWORD:-}" ]; then
     ADMIN_USER="${INITIAL_ADMIN_USER:-TsinglanAdmin}"
-    echo "[entrypoint] 正在初始化超级管理员账号: ${ADMIN_USER}..."
-    # 密码经临时文件传入，不出现在进程列表（ps）或 shell 历史里。
-    PW_FILE="$(mktemp)"
-    chmod 600 "$PW_FILE"
-    printf '%s' "$INITIAL_ADMIN_PASSWORD" > "$PW_FILE"
-    if ! node /app/scripts/provision-super-admin.mjs \
-      --username "${ADMIN_USER}" \
-      --password-file "$PW_FILE" \
-      --name '系统超级管理员' \
-      --yes-create-account; then
-      echo "[entrypoint] ⚠️ 管理员创建/更新未成功，继续校验是否已存在可用管理员..."
+
+    # 0 = 明确不存在；1 = 明确存在；2 = 查不出来（连不上/表不存在）
+    ADMIN_EXISTS=2
+    if node /app/scripts/admin-account-exists.mjs --username "${ADMIN_USER}" >/dev/null 2>&1; then
+      ADMIN_EXISTS=1
+    else
+      case "$?" in
+        1) ADMIN_EXISTS=0 ;;
+        *) ADMIN_EXISTS=2 ;;
+      esac
     fi
-    rm -f "$PW_FILE"
+
+    if [ "$ADMIN_EXISTS" = "1" ] && [ "${RESET_ADMIN_PASSWORD_ON_BOOT:-false}" != "true" ]; then
+      echo "[entrypoint] 管理员 ${ADMIN_USER} 已存在 —— 保持其现有密码与角色不变。"
+      echo "[entrypoint]   如需用 INITIAL_ADMIN_PASSWORD 强制重置：RESET_ADMIN_PASSWORD_ON_BOOT=true"
+    else
+      if [ "$ADMIN_EXISTS" = "2" ]; then
+        echo "[entrypoint] ⚠️ 无法确认 ${ADMIN_USER} 是否存在，退回创建/更新流程（可能覆盖已有密码）。"
+      fi
+      echo "[entrypoint] 正在初始化超级管理员账号: ${ADMIN_USER}..."
+      # 密码经临时文件传入，不出现在进程列表（ps）或 shell 历史里。
+      PW_FILE="$(mktemp)"
+      chmod 600 "$PW_FILE"
+      printf '%s' "$INITIAL_ADMIN_PASSWORD" > "$PW_FILE"
+      if ! node /app/scripts/provision-super-admin.mjs \
+        --username "${ADMIN_USER}" \
+        --password-file "$PW_FILE" \
+        --name '系统超级管理员' \
+        --yes-create-account; then
+        echo "[entrypoint] ⚠️ 管理员创建/更新未成功，继续校验是否已存在可用管理员..."
+      fi
+      rm -f "$PW_FILE"
+    fi
     # 校验：至少存在一个"能凭密码认证"的 super_admin，否则明确警告。
     #
     # 这里刻意【不】使用 bootstrap-super-admin.mjs --verify 的结论来阻断启动，
