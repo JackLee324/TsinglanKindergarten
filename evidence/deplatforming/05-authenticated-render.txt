@@ -1,0 +1,53 @@
+================================================================================
+脱平台证据 5/5 —— 登录后的页面在真实浏览器里也渲染正常（antd 表格）
+生成时间: 2026-09-26 10:34:08
+================================================================================
+
+背景：scripts/verify-e2e-deploy.sh 只渲染未登录的登录页，因此 antd Table 所在的
+管理页不在它的覆盖范围内。这次迁移把 client-toolkit 的 antd-table re-export 换成了
+直接 import antd，并且把 AppContainer 里的 antd ConfigProvider 复刻进 AppRoot ——
+这两处正是最可能出现视觉回归的地方，所以额外做了一次真浏览器渲染。
+
+方法（脚本见同目录 05-authenticated-render.mjs）：
+  1. 用 curl 登录拿到 qls_session 会话 cookie（账号 E2EPrincipal / principal 角色）；
+  2. 用 Chrome DevTools Protocol 把 cookie 注入无头 Chrome（HttpOnly cookie 只能用
+     Network.setCookie 设，页面 JS 设不了）；
+  3. 逐个导航到各路由，读回 document.title、antd 元素数量与页面文本。
+
+结果（127.0.0.1:3200，本仓库构建的产物）：
+
+URL          : http://127.0.0.1:3200/ -> actual: http://127.0.0.1:3200/
+element counts: {"tables":0,"tableRows":0,"headers":0,"pagination":0,"paginationText":"","sidebarLinks":4,"title":"TsinglanKindergarten - 清澜山幼儿园课程资源平台","watermark":0}
+body text    : TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 早上好，园长/平台管理员 今天是 2026年9月26日 星期六 Pr
+
+URL          : http://127.0.0.1:3200/prek -> actual: http://127.0.0.1:3200/prek
+element counts: {"tables":0,"tableRows":0,"headers":0,"pagination":0,"paginationText":"","sidebarLinks":4,"title":"TsinglanKindergarten - 清澜山幼儿园课程资源平台","watermark":0}
+body text    : TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 Pre-K 课程 Pre-K 阶段课程资源目录 Pre-K 美德 Virtue 品格塑�
+
+URL          : http://127.0.0.1:3200/k -> actual: http://127.0.0.1:3200/k
+element counts: {"tables":0,"tableRows":0,"headers":0,"pagination":0,"paginationText":"","sidebarLinks":4,"title":"TsinglanKindergarten - 清澜山幼儿园课程资源平台","watermark":0}
+body text    : TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 K 阶段课程 K 阶段课程资源目录 K 美德 Virtue 品格塑造与�
+
+URL          : http://127.0.0.1:3200/my-resources -> actual: http://127.0.0.1:3200/my-resources
+element counts: {"tables":1,"tableRows":0,"headers":7,"pagination":0,"paginationText":"","sidebarLinks":4,"title":"TsinglanKindergarten - 清澜山幼儿园课程资源平台","watermark":0}
+body text    : TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 我的资源 查看和管理您上传的资源 全部 草稿 待审核 已
+
+URL          : http://127.0.0.1:3200/review -> actual: http://127.0.0.1:3200/review
+element counts: {"tables":1,"tableRows":0,"headers":6,"pagination":0,"paginationText":"","sidebarLinks":4,"title":"TsinglanKindergarten - 清澜山幼儿园课程资源平台","watermark":0}
+body text    : TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 审核工作台 审核待发布的课程资源 待审核 已发布 已退�
+
+URL          : http://127.0.0.1:3200/admin/teachers -> actual: http://127.0.0.1:3200/admin/teachers
+element counts: {"tables":1,"tableRows":10,"headers":9,"pagination":1,"paginationText":"","sidebarLinks":4,"title":"TsinglanKindergarten - 清澜山幼儿园课程资源平台","watermark":0}
+body text    : TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 教师管理 管理教师账号和权限 添加教师 搜索 全部 全部
+
+URL          : http://127.0.0.1:3200/admin/audit -> actual: http://127.0.0.1:3200/admin/audit
+element counts: {"tables":1,"tableRows":20,"headers":8,"pagination":1,"paginationText":"","sidebarLinks":4,"title":"TsinglanKindergarten - 清澜山幼儿园课程资源平台","watermark":0}
+body text    : TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 审计日志 查看系统操作审计记录 导出 CSV 动作 全部 班�
+
+解读：
+  · 7 条路由全部渲染出内容，没有一条是空白（白屏会让 body 文本为空、title 为空）；
+  · 4 个用 antd Table 的页面都渲染出了表头/数据行/分页：
+      /my-resources 7 列、/review 6 列、/admin/teachers 10 行 9 列 + 分页、/admin/audit 20 行 8 列 + 分页；
+  · 每页 document.title 都是产品名（不是「妙搭应用」）；
+  · 每页 watermark 元素数量为 0（平台水印已移除）；
+  · 侧边栏 4 个链接、页脚、双语切换按钮都在。

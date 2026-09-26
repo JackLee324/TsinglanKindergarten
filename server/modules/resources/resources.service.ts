@@ -9,11 +9,7 @@ import {
 } from '@nestjs/common';
 import { createReadStream, existsSync } from 'fs';
 import { join } from 'path';
-import {
-  DRIZZLE_DATABASE,
-  FileService,
-  type PostgresJsDatabase,
-} from '@lark-apaas/fullstack-nestjs-core';
+import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@server/database/database.module';
 import {
   eq,
   and,
@@ -250,7 +246,6 @@ export class ResourcesService {
 
   constructor(
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
-    private readonly fileService: FileService,
   ) {}
 
   // ========== 辅助方法 ==========
@@ -2436,10 +2431,11 @@ export class ResourcesService {
     // NOTE ON WHAT IS *NOT* WIRED HERE:
     // this audits that a LINK was issued. The bytes are served (or refused) later
     // by GET /api/files/download, which audits the serving attempt separately and
-    // is where the platform object-store integration
-    // (@lark-apaas/file-service / dataloom) is actually called. In this
-    // environment that call cannot succeed, and it fails with an explicit 503
-    // naming the missing integration — never with a silent success.
+    // is the only place the object-storage backend is called
+    // (server/modules/files/object-storage.ts). No backend is configured in this
+    // deployment, so that call cannot succeed: it fails with an explicit 503
+    // (STORAGE_NOT_CONFIGURED), never with a silent success and never with a
+    // fabricated URL.
     await this.logAudit({
       action: 'resource_download',
       teacherId: currentTeacherId,

@@ -1,14 +1,52 @@
 {
-  "extends": "@lark-apaas/fullstack-presets/lib/simple/tsconfig/tsconfig.app.json",
+  /*
+   * The client's TypeScript settings, inlined.
+   *
+   * These values used to be inherited from
+   * `@lark-apaas/fullstack-presets/lib/simple/tsconfig/tsconfig.app.json`. With the
+   * platform package gone the settings live here, unchanged — so the type-checking
+   * strictness this project has always run under (`strict: false`,
+   * `strictNullChecks: false`, `noImplicitAny: false`, `allowJs: true`) is preserved
+   * exactly. Tightening any of them would surface hundreds of pre-existing errors and
+   * is a separate decision from de-platforming.
+   *
+   * The `@lark-apaas/client-toolkit/tools/*` path mapping is dropped with the package
+   * it pointed at; the import that used it lived in the deleted `business-ui` tree.
+   */
   "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode — Vite resolves and bundles; tsc only checks. */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting (deliberately as loose as it has always been; see the header) */
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitAny": false,
+    "noFallthroughCasesInSwitch": false,
+
+    "sourceMap": true,
+    "allowJs": true,
+    "strictNullChecks": false,
+
+    "incremental": false,
+
     "baseUrl": "./",
     "paths": {
       "@client/*": ["client/*"],
       "@shared/*": ["shared/*"],
-      "@/*": ["./client/src/*"],
-      "@lark-apaas/client-toolkit/tools/*": ["node_modules/@lark-apaas/client-toolkit/lib/apis/tools/*"]
-    },
-    "incremental": true,
+      "@/*": ["./client/src/*"]
+    }
   },
   "include": [
     "client/**/*",

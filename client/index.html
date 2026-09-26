@@ -8,12 +8,25 @@
   <meta name="googlebot" content="noindex,nofollow">
   <link rel="icon" href="/favicon.svg">
   <title>TsinglanKindergarten - 清澜山幼儿园课程资源平台</title>
+  <!--
+    The CSRF token, written into the document by the server.
+
+    `res.locals.csrfToken` is set for every page request by
+    `server/common/http/csrf-token.middleware.ts`; Express merges `res.locals` into
+    the template context that `@Render('index')` uses, so `{{csrfToken}}` interpolates
+    here without the controller passing anything. The client's axios instance reads
+    `window.csrfToken` and echoes it as `x-suda-csrf-token`, which the server compares
+    against the `suda-csrf-token` COOKIE on every mutating /api/* call.
+
+    This block replaces the aPaaS platform's bootstrap script — a JSON blob the
+    platform's view middleware injected (router basename, application name, appId,
+    tenantId, …) and which only that platform could fill in. Nothing in this client
+    reads any of it any more: the router is mounted at "/", and the product name is
+    the <title> above. (`scripts/verify-e2e-deploy.sh` asserts that no platform
+    placeholder survives in the served document.)
+  -->
   <script>
-    try {
-      window.__platform__ = JSON.parse('{{{__platform__}}}');
-    } catch (e) {
-      console.error('Failed to parse __platform__', e);
-    }
+    window.csrfToken = "{{csrfToken}}";
   </script>
 </head>
 

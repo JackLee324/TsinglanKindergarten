@@ -1,0 +1,122 @@
+/*
+ * Sonner toast styling vendored from the 妙搭 client toolkit.
+ * ==========================================================
+ *
+ * WHERE THIS CAME FROM, AND WHY IT IS STILL HERE
+ * ----------------------------------------------
+ * The platform's AppContainer module imported this stylesheet statically. It never
+ * defined the app's toasts — sonner itself does that, and the app's own
+ * components/ui/sonner.tsx configures the Toaster — but it declares the `--ud-*`
+ * (universal design) tokens and styles two toast variants. The app does NOT set
+ * `richColors`, so the [data-rich-colors="true"] rules are inert today; the
+ * `[data-button]` rule still applies to any toast that renders an action button.
+ *
+ * It is vendored rather than dropped so that this migration changes NOTHING a user
+ * can see. If the product later wants its toasts themed by its own tokens, this file
+ * is the place to edit — and it is small enough to read in full (2.7KB).
+ *
+ * PROVENANCE: @lark-apaas/client-toolkit, lib/components/AppContainer/sonner.css,
+ * copied verbatim.
+ */
+
+:root {
+  --ud-normal-bg: #fff;
+  --ud-normal-border: #dee0e3;
+  --ud-normal-text: #1f2329;
+  --ud-success-bg: #e4fae1;
+  --ud-success-border: #32a645;
+  --ud-success-text: #1f2329;
+  --ud-info-bg: #f0f4ff;
+  --ud-info-border: #1456f0;
+  --ud-info-text: #1f2329;
+  --ud-warning-bg: #fff3e5;
+  --ud-warning-border: #ed6d0c;
+  --ud-warning-text: #1f2329;
+  --ud-error-bg: #fef0f0;
+  --ud-error-border: #f54a45;
+  --ud-error-text: #1f2329;
+}
+
+[data-sonner-toast][data-styled="true"] [data-button] {
+  background: var(--ud-info-border);
+}
+
+[data-sonner-toaster][data-sonner-theme="dark"] [data-sonner-toast] [data-close-button] {
+  background: var(--ud-normal-bg);
+  border-color: var(--ud-normal-border);
+  color: var(--ud-normal-text);
+}
+
+[data-sonner-toaster][data-sonner-theme="dark"] [data-sonner-toast] [data-close-button]:hover {
+  background: var(--ud-normal-bg-hover);
+  border-color: var(--ud-normal-border-hover);
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="success"] {
+  background: var(--ud-success-bg);
+  border-color: var(--ud-success-border);
+  color: var(--ud-success-text);
+
+  & [data-icon] {
+    color: var(--ud-success-border);
+  }
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="success"] [data-close-button] {
+  background: var(--ud-success-bg);
+  border-color: var(--ud-success-border);
+  color: var(--ud-success-text);
+
+  & [data-icon] {
+    color: var(--ud-success-border);
+  }
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="info"] {
+  background: var(--ud-info-bg);
+  border-color: var(--ud-info-border);
+  color: var(--ud-info-text);
+
+  & [data-icon] {
+    color: var(--ud-info-border);
+  }
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="info"] [data-close-button] {
+  background: var(--ud-info-bg);
+  border-color: var(--ud-info-border);
+  color: var(--ud-info-text);
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="warning"] {
+  background: var(--ud-warning-bg);
+  border-color: var(--ud-warning-border);
+  color: var(--ud-warning-text);
+
+  & [data-icon] {
+    color: var(--ud-warning-border);
+  }
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="warning"] [data-close-button] {
+  background: var(--ud-warning-bg);
+  border-color: var(--ud-warning-border);
+  color: var(--ud-warning-text);
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="error"] {
+  background: var(--ud-error-bg);
+  border-color: var(--ud-error-border);
+  color: var(--ud-error-text);
+
+  & [data-icon] {
+    color: var(--ud-error-border);
+  }
+}
+
+[data-rich-colors="true"][data-sonner-toast][data-type="error"] [data-close-button] {
+  background: var(--ud-error-bg);
+  border-color: var(--ud-error-border);
+  color: var(--ud-error-text);
+}
+

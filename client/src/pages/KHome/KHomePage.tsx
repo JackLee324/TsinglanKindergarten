@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Heart, BookOpen, Languages, Dumbbell, ArrowRight, GraduationCap } from 'lucide-react';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@client/src/lib/logger';
 
 import { Card, CardContent } from '@client/src/components/ui/card';
 import { Badge } from '@client/src/components/ui/badge';

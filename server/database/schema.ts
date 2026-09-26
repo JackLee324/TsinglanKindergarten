@@ -365,7 +365,8 @@ export const teachers = pgTable("teachers", {
 ]);
 
 // =============================================================================
-// RBAC tables — added by migration 0003, NOT emitted by @lark-apaas/db-schema-sync.
+// RBAC tables — added by migration 0003, NOT emitted by the schema generator that
+// produced the rest of this file (the platform's db-schema-sync; see package.json).
 // If you regenerate this file, these definitions must be re-added (see
 // DEPLOYMENT_PRODUCTION.md → "schema regeneration").
 // =============================================================================
@@ -424,7 +425,8 @@ export const accountScopes = pgTable("account_scopes", {
 ]);
 
 // =============================================================================
-// MFA tables — added by migration 0006, NOT emitted by @lark-apaas/db-schema-sync.
+// MFA tables — added by migration 0006, NOT emitted by the schema generator that
+// produced the rest of this file (the platform's db-schema-sync; see package.json).
 // Re-add these if you regenerate this file (see DEPLOYMENT_PRODUCTION.md).
 // =============================================================================
 

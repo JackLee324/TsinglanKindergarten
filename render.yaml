@@ -24,8 +24,6 @@ services:
         value: 0.0.0.0
       - key: SERVER_PORT
         value: "3000"
-      - key: FORCE_AUTHN_INNERAPI_DOMAIN
-        value: https://127.0.0.1:1
       - key: MFA_ENCRYPTION_KEY
         generateValue: true
       - key: DOWNLOAD_TOKEN_SECRET

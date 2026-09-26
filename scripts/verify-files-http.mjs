@@ -236,11 +236,20 @@ try {
   console.log('\n=== C. NO SILENT SUCCESS WITHOUT A STORAGE BACKEND ===');
   // =========================================================================
   // The token is valid, the session matches, the permission is held — the ONLY
-  // thing that can still fail is the platform object store, which is genuinely
-  // unreachable here. This is the check that forbids a fabricated placeholder URL.
+  // thing that can still fail is the object-storage backend, and this deployment
+  // has none (server/modules/files/object-storage.ts). This is the check that
+  // forbids a fabricated placeholder URL.
+  //
+  // The expected code changed with the de-platforming: the message used to name
+  // `@lark-apaas/file-service` (the 妙搭 object store) and now carries the stable,
+  // machine-readable code STORAGE_NOT_CONFIGURED, both in `error.message` and as
+  // `error.details.code`. Both are asserted — the code is what a client can branch
+  // on without matching Chinese prose.
   const redeem = await req('GET', `/api/files/download?token=${encodeURIComponent(first.token)}`);
   check('redemption cannot silently succeed', redeem.status, 503);
-  check('  -> the error names the missing platform integration', /@lark-apaas\/file-service/.test(errMessage(redeem)), true);
+  check('  -> the error names the missing storage backend', /STORAGE_NOT_CONFIGURED/.test(errMessage(redeem)), true);
+  check('  -> the machine-readable code is in error.details',
+    /STORAGE_NOT_CONFIGURED/.test(JSON.stringify(redeem.data?.error?.details ?? '')), true);
   check('  -> no fabricated link is returned', /downloadUrl|signedURL|https?:/.test(JSON.stringify(redeem.data ?? {})), false);
   console.log('       response: ' + redeem.status + ' ' + errMessage(redeem).slice(0, 110) + '…');
 

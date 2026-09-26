@@ -55,19 +55,21 @@ const UUID_PATTERN =
  *
  * WHY THIS IS NECESSARY (verified against a live server, not assumed)
  * ------------------------------------------------------------------
- * The platform's HTTP trace logging writes the REQUEST BODY of every successful
- * request to the application log, unconditionally: in
- * `@lark-apaas/nestjs-logger` the success-path `tap()` does
- *      if (req.body) responseData.request_body = req.body;
- *      if (data)     responseData.response = data;
- * BEFORE consulting its own `logRequestBody` / `logResponseBody` options (those
- * flags only gate the other two branches). Grepping the log of a live gate run
- * found 28 plaintext login passwords and every MFA code this suite sent.
+ * The platform's HTTP trace interceptor wrote the REQUEST BODY of every
+ * successful request to the application log, unconditionally, BEFORE consulting
+ * its own `logRequestBody` / `logResponseBody` options (those flags only gated
+ * the other two branches). Grepping the log of a live gate run found 28 plaintext
+ * login passwords and every MFA code that run sent.
  *
- * A credential that has already been consumed has no further use in the request
- * object, so it is removed here. This is defence in depth for requirement
- * "never log a password, token or MFA secret": the value exists in a local
- * variable for the duration of the handler and nowhere else.
+ * THAT INTERCEPTOR IS GONE — it was part of `PlatformModule`, and scrubbing
+ * request bodies is why its removal is a security fix rather than a tidiness
+ * change. The application now logs with the standard Nest `Logger`, which records
+ * messages and never payloads.
+ *
+ * This scrub stays anyway, as defence in depth for the requirement "never log a
+ * password, token or MFA secret": a credential that has already been consumed has
+ * no further use in the request object, so the value exists in a local variable
+ * for the duration of the handler and nowhere else.
  *
  * (The response half — a response body that carries a freshly issued credential —
  * is handled per route below by sending the response explicitly, since the same

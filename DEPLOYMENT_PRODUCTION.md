@@ -560,6 +560,10 @@ LOG [Bootstrap] environment: NODE_ENV=production HTTPS_ENABLED=true
 
 ### 7.1 非平台部署必须先解决的两件事
 
+> **2026-09-26 更新：本节已过时 —— 平台依赖已完全移除，`FORCE_AUTHN_INNERAPI_DOMAIN`
+> 不再需要，也不要再设置。** 下面记录的是脱平台之前的事实，保留是为了让读到这里的人
+> 知道当年为什么会有一条"必须设一个假域名"的启动依赖。证据见 `evidence/deplatforming/`。
+
 1. **`FORCE_AUTHN_INNERAPI_DOMAIN`**：只要引入 `PlatformModule`，
    平台 HTTP 客户端在构造时就要求该变量，否则**进程直接退出**：
    ```

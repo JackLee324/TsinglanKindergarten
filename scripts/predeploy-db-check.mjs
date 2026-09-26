@@ -365,67 +365,78 @@ async function cmdMfa() {
 /**
  * Object storage.
  *
- * The platform object store (dataloom, via `@lark-apaas/file-service`) is reached
- * through a PER-REQUEST platform context: app id, credentials and bucket are
- * supplied by the platform middleware (server/modules/files/files.service.ts:24-27).
- * A standalone process has none of that, and the application refuses to invent a
- * URL — it returns 503 STORAGE_NOT_CONFIGURED (files.service.ts:59-63,126-128) or
- * 503 STORAGE_UNAVAILABLE when a context exists but signing fails.
+ * Downloads are served by asking an `ObjectStorage` backend for a signed URL
+ * (server/modules/files/object-storage.ts). This deployment registers the default
+ * backend, `UnconfiguredObjectStorage`, which is the honest implementation of
+ * "there is no object store here": the application then refuses to invent a URL and
+ * answers 503 STORAGE_NOT_CONFIGURED (or 503 STORAGE_UNAVAILABLE when a backend is
+ * configured but the signing call fails).
  *
- * This probe therefore reports HONESTLY: it looks for a real platform context and
- * says "not configured" when there is none. It never fabricates a download URL and
- * never treats "no evidence of storage" as "storage works".
+ * The platform-era version of this probe looked for a 妙搭 request context
+ * (SUDA_APP_ID, dataloom bucket, …). Those variables are no longer read by
+ * anything, so the probe now checks the CONTRACT THAT ACTUALLY HOLDS: no backend is
+ * registered, a real backend can be plugged in through the OBJECT_STORAGE token, and
+ * the service fails closed with the two named codes instead of returning a URL that
+ * cannot work.
+ *
+ * It never fabricates a download URL and never treats "no evidence of storage" as
+ * "storage works".
  */
 async function cmdStorage() {
-  const candidates = [
-    'SUDA_APP_ID',
-    'SUDA_APP_SECRET',
-    'SUDA_PROJECT_ID',
-    'SUDA_ENV',
-    'LARK_APP_ID',
-    'LARK_APP_SECRET',
-    'DATALOOM_BUCKET',
-    'STORAGE_BUCKET',
-    'SUDA_STORAGE_BUCKET',
-  ];
-  const present = candidates.filter((name) => (process.env[name] ?? '') !== '');
-
-  say(`platform storage context variables checked: ${candidates.join(', ')}`);
-  say(present.length > 0
-    ? `present: ${present.join(', ')}`
-    : 'present: (none)');
-
-  // The application's own detection path, quoted, so the claim is checkable.
+  // The interface file and the service, both quoted, so every claim below is checkable.
+  const objectStorage = join(ROOT, 'server/modules/files/object-storage.ts');
   const filesService = join(ROOT, 'server/modules/files/files.service.ts');
-  if (!existsSync(filesService)) {
-    say(`missing ${filesService} — cannot confirm the storage contract`);
+  const filesModule = join(ROOT, 'server/modules/files/files.module.ts');
+  for (const path of [objectStorage, filesService, filesModule]) {
+    if (!existsSync(path)) {
+      say(`missing ${path} — cannot confirm the storage contract`);
+      fail();
+    }
+  }
+
+  const storageSrc = readFileSync(objectStorage, 'utf8');
+  const serviceSrc = readFileSync(filesService, 'utf8');
+  const moduleSrc = readFileSync(filesModule, 'utf8');
+
+  const interfaceOk =
+    /export interface ObjectStorage/.test(storageSrc) &&
+    /createSignedUrl\(/.test(storageSrc) &&
+    /OBJECT_STORAGE/.test(storageSrc);
+  say(`a replaceable backend interface exists (ObjectStorage / OBJECT_STORAGE token): ${interfaceOk ? 'confirmed' : 'NOT confirmed'}`);
+  if (!interfaceOk) {
+    say('without it, wiring S3/R2/MinIO later would mean editing the download path itself');
     fail();
   }
-  const src = readFileSync(filesService, 'utf8');
-  const contractOk =
-    /getDefaultBucket\(\)/.test(src) &&
-    /STORAGE_NOT_CONFIGURED_MESSAGE/.test(src) &&
-    /STORAGE_UNAVAILABLE_MESSAGE/.test(src) &&
-    /ServiceUnavailableException/.test(src);
-  say(`application fails closed with 503 on missing storage: ${contractOk ? 'confirmed' : 'NOT confirmed'}`);
-  if (!contractOk) {
+
+  const noFakeUrl =
+    /STORAGE_NOT_CONFIGURED_MESSAGE/.test(storageSrc) &&
+    /STORAGE_UNAVAILABLE_MESSAGE/.test(storageSrc) &&
+    /STORAGE_NOT_CONFIGURED/.test(serviceSrc) &&
+    /STORAGE_UNAVAILABLE/.test(serviceSrc) &&
+    /ServiceUnavailableException/.test(serviceSrc) &&
+    /isStorageConfigured/.test(serviceSrc);
+  say(`application fails closed with 503 STORAGE_NOT_CONFIGURED / STORAGE_UNAVAILABLE: ${noFakeUrl ? 'confirmed' : 'NOT confirmed'}`);
+  if (!noFakeUrl) {
     say('the storage service no longer refuses on missing configuration — that would be a REGRESSION,');
     say('because the only alternative is returning a URL that cannot work');
     fail();
   }
 
-  if (present.length === 0) {
+  const defaultIsUnconfigured = /provide: OBJECT_STORAGE, useClass: UnconfiguredObjectStorage/.test(moduleSrc);
+  say(`the registered backend is the honest "not configured" one: ${defaultIsUnconfigured ? 'confirmed' : 'NOT confirmed'}`);
+
+  if (defaultIsUnconfigured) {
     say('RESULT: object storage is NOT configured for this process.');
-    say('Reason: no platform storage context is present, so FileService.getDefaultBucket() has');
-    say('nothing to resolve. Downloads will (correctly) return 503 STORAGE_NOT_CONFIGURED.');
-    say('This cannot be verified from a standalone box: the 妙搭 platform supplies the context at');
-    say('request time. Verify it on the deployed instance instead — see PREDEPLOY notes.');
+    say('Reason: UnconfiguredObjectStorage is bound to OBJECT_STORAGE, so the service has no backend');
+    say('to sign with. Downloads return 503 STORAGE_NOT_CONFIGURED, never a fabricated URL.');
+    say('To serve real bytes, implement ObjectStorage (S3 / Cloudflare R2 / MinIO) and bind it in');
+    say('server/modules/files/files.module.ts. Until then this check reports a WAIVER, not a pass.');
     warnStatus();
   }
 
-  say('RESULT: platform storage context variables are present.');
-  say('Presence is NOT proof that dataloom is reachable or that a bucket resolves: signing is');
-  say('performed at request time against a live platform context. Treat as UNVERIFIED here.');
+  say('RESULT: an object-storage backend is registered.');
+  say('Presence is NOT proof that it is reachable or that a bucket resolves: signing happens per');
+  say('request. Call the download endpoint on the deployed instance to verify it. Treat as UNVERIFIED.');
   warnStatus();
 }
 

@@ -1,6 +1,37 @@
-@import '@lark-apaas/client-toolkit/lib/index.css';
+/*
+ * The application's stylesheet root.
+ * =================================
+ *
+ * The import order is load-bearing and is unchanged from before the de-platforming:
+ *
+ *   1. vendor/toolkit-theme.css — brings in Tailwind itself
+ *      (`@import 'tailwindcss' source(none)`), the layer order
+ *      (`theme, base, antd, components, utilities`), the product palette declared
+ *      inside `@layer base`, the base border/body rules and the CJK font faces.
+ *      Read that file's header before changing anything in it.
+ *   2. tw-animate-css — the `animate-in` / `fade-in-0` / `slide-in-from-*` utilities
+ *      that dialogs, dropdowns, tooltips and sheets in components/ui rely on.
+ *   3. ./tailwind-theme.css — OUR semantic tokens (--primary, --background, …) plus
+ *      the `@theme inline` mapping. It comes after the vendored palette on purpose:
+ *      later declarations win, which is how `--shadow-*`, `--radius` and
+ *      `--font-sans` are the values this product actually ships.
+ *   4. ./typography.css, then the Tailwind config that supplies the content globs.
+ *
+ * Until this change, step 1 was
+ * `@import '@lark-apaas/client-toolkit/lib/index.css'` — the same four stylesheets,
+ * read out of the platform package. They are vendored now (see
+ * client/src/vendor/toolkit-theme.css) so the tokens survive the package's removal.
+ */
+@import './vendor/toolkit-theme.css';
 @import "tw-animate-css";
 @import "./tailwind-theme.css";
 @import "./typography.css";
+/*
+ * The vendored sonner sheet comes LAST on purpose. It is unlayered CSS, and unlayered
+ * rules beat every `@layer` regardless of order, so its position cannot change how it
+ * competes with Tailwind's layers. Putting it here also keeps `@import 'tailwindcss'`
+ * ahead of all style rules, which CSS (and Tailwind's import resolver) requires.
+ */
+@import './vendor/toolkit-sonner.css';
 
 @config "../../tailwind.config.ts";

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ImageOff, Loader2 } from 'lucide-react';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@client/src/lib/logger';
 
 import { resources as resourcesApi } from '@client/src/api';
 import { Image } from '@client/src/components/ui/image';

@@ -34,8 +34,13 @@ fi
 
 export DATABASE_URL="$DB_CONN"
 export SUDA_DATABASE_URL="$DB_CONN"
-export FORCE_AUTHN_INNERAPI_DOMAIN="${FORCE_AUTHN_INNERAPI_DOMAIN:-https://127.0.0.1:1}"
 export SERVER_HOST="${SERVER_HOST:-0.0.0.0}"
+
+# 说明：这里以前会设置 FORCE_AUTHN_INNERAPI_DOMAIN（默认 https://127.0.0.1:1）。
+# 那是妙搭平台鉴权 SDK 的启动硬依赖 —— 只要 import PlatformModule 就必须有它，
+# 否则 DI 容器直接失败、进程以非 0 退出。平台依赖已完全移除（见
+# server/app.module.ts 与 server/main.ts 的说明），本进程不再访问任何内网鉴权
+# 接口，因此该变量既不读取、也不再需要设置；即使外部仍然设置了它，也只是被忽略。
 
 # 端口规范化：必须为合法数字，否则回退到 3000
 RAW_PORT="$(sanitize_var "${PORT:-}")"

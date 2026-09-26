@@ -46,20 +46,20 @@ import type { AuthUser } from '@shared/api.interface';
  *       link and using it, and a link must not outlive the permission that
  *       justified it,
  *   (e) the attempt is audited: success and every distinct failure reason,
- *   (f) only then is the platform object store asked for a signed URL and the
+ *   (f) only then is the object-storage backend asked for a signed URL and the
  *       browser redirected to it.
  *
  * WHY THE FINAL STEP CANNOT SILENTLY SUCCEED ANYWHERE
  * ---------------------------------------------------
- * This environment has no reachable platform object store (see files.service.ts),
- * so (f) answers 503 with a message naming `@lark-apaas/file-service` /
- * dataloom. There is no code path that returns a placeholder URL, an empty body
- * or a fabricated link: an unroutable download must look broken, not work-looking.
+ * This deployment has no object-storage backend configured (see files.service.ts
+ * and object-storage.ts), so (f) answers 503 STORAGE_NOT_CONFIGURED. There is no
+ * code path that returns a placeholder URL, an empty body or a fabricated link:
+ * an unroutable download must look broken, not work-looking.
  *
  * KNOWN LIMITATION, STATED RATHER THAN HIDDEN
  * -------------------------------------------
  * The redirect hands the browser to the object store, so the response headers of
- * the actual file are chosen by the platform, not by us — `Content-Disposition:
+ * the actual file are chosen by the storage backend, not by us — `Content-Disposition:
  * attachment` cannot be enforced on a cross-origin redirect. The compensating
  * controls are on the WRITE side: HTML/SVG are refused by the upload validator
  * (stored XSS needs a file that the browser will execute, and none of the allowed

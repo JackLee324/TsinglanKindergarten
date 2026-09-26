@@ -1,0 +1,439 @@
+/*
+ * Design tokens vendored from the 妙搭 client toolkit.
+ * ===================================================
+ *
+ * WHY THIS FILE EXISTS AT ALL, RATHER THAN A REIMPLEMENTATION
+ * ----------------------------------------------------------
+ * These declarations ARE this product's visual design, not platform plumbing:
+ *
+ *   * the palette below re-declares Tailwind's colour tokens inside `@layer base`,
+ *     which sits AFTER `@layer theme` in the cascade. That is what makes
+ *     `bg-blue-100`, `text-red-700`, `border-green-200`, `bg-amber-100` … resolve
+ *     to this product's soft palette instead of Tailwind's saturated defaults. The
+ *     app uses those utilities in hundreds of places (measured: 14x bg-red-100,
+ *     11x border-red-200, 9x bg-orange-100, 9x bg-green-100, 9x bg-blue-100, …).
+ *   * font-family.css defines the CJK quote/emoji faces named by --font-sans in
+ *     ../tailwind-theme.css.
+ *   * override.css sets the base border-color / outline-color / body colours that
+ *     every component inherits.
+ *
+ * Deleting them and re-deriving an "equivalent" palette would change what every
+ * screen looks like, so they are copied verbatim and kept under review here. The
+ * build is verified by measuring the emitted CSS against the pre-migration build.
+ *
+ * WHAT WAS REMOVED (exactly two things)
+ * -------------------------------------
+ *   1. The toolkit's own source glob. It scanned the toolkit's compiled components
+ *      for class names; those components are no longer installed, so it has nothing
+ *      left to point at. Only utility classes that were used exclusively by deleted
+ *      components fall out of the stylesheet.
+ *   2. The dev-only inspector stylesheet import. It contributed nothing to a
+ *      production build (verified: the pre-migration built CSS contains zero
+ *      occurrences of "inspector").
+ *
+ * PROVENANCE: the package's lib/index.css used to pull in these four files in this
+ * order: theme-layer.css, tailwind-theme.css, override.css, font-family.css. They
+ * are concatenated in that same order below, with the two edits above. Vendored from
+ * the version pinned in the pre-migration package.json.
+ *
+ * NOTE ON THIS COMMENT: it deliberately does not quote the removed source glob. A CSS
+ * comment cannot contain the two-character sequence that ends a comment, and that
+ * glob ends with exactly that sequence.
+ */
+
+@layer theme, base, antd, components, utilities;
+@import 'tailwindcss' source(none);
+
+@layer base {
+  :root {
+    --color-blue-50: #f0f4ff;
+    --color-blue-100: #e0e9ff;
+    --color-blue-200: #c2d4ff;
+    --color-blue-300: #94b4ff;
+    --color-blue-400: #7aa2ff;
+    --color-blue-500: #5083fb;
+    --color-blue-600: #336df4;
+    --color-blue-700: #1456f0;
+    --color-blue-800: #0442d2;
+    --color-blue-900: #002f9e;
+    --color-blue-950: #002270;
+    --color-pink-50: #fef0f8;
+    --color-pink-100: #fee2f2;
+    --color-pink-200: #f8c4e1;
+    --color-pink-300: #f598cc;
+    --color-pink-400: #eb78b8;
+    --color-pink-500: #df58a5;
+    --color-pink-600: #cc398c;
+    --color-pink-700: #b82879;
+    --color-pink-800: #9d1562;
+    --color-pink-900: #730744;
+    --color-pink-950: #550c35;
+    --color-neutral-00: #fff;
+    --color-neutral-50: #f5f6f7;
+    --color-neutral-100: #f2f3f5;
+    --color-neutral-200: #eff0f1;
+    --color-neutral-300: #dee0e3;
+    --color-neutral-400: #d0d3d6;
+    --color-neutral-500: #bbbfc4;
+    --color-neutral-600: #8f959e;
+    --color-neutral-650: #51565d;
+    --color-neutral-700: #646a73;
+    --color-neutral-800: #373c43;
+    --color-neutral-900: #2b2f36;
+    --color-neutral-950: #1f2329;
+    --color-neutral-1000: #000;
+    --color-green-50: #e4fae1;
+    --color-green-100: #d0f5ce;
+    --color-green-200: #95e599;
+    --color-green-300: #5cd168;
+    --color-green-400: #35bd4b;
+    --color-green-500: #32a645;
+    --color-green-600: #258832;
+    --color-green-700: #1a7526;
+    --color-green-800: #0b6017;
+    --color-green-900: #04430c;
+    --color-green-950: #022c07;
+    --color-indigo-50: #f2f3fd;
+    --color-indigo-100: #e9eafb;
+    --color-indigo-200: #cccff9;
+    --color-indigo-300: #abb0f2;
+    --color-indigo-400: #959bee;
+    --color-indigo-500: #757df0;
+    --color-indigo-600: #5b65f5;
+    --color-indigo-700: #4752e6;
+    --color-indigo-800: #333dcc;
+    --color-indigo-900: #1e27a4;
+    --color-indigo-950: #151b70;
+    --color-lime-50: #f2f8d3;
+    --color-lime-100: #e3f0a3;
+    --color-lime-200: #c8dd5f;
+    --color-lime-300: #a2c10b;
+    --color-lime-400: #91ad00;
+    --color-lime-500: #7b9207;
+    --color-lime-600: #6b7f06;
+    --color-lime-700: #5c6d08;
+    --color-lime-800: #4a5804;
+    --color-lime-900: #333d00;
+    --color-lime-950: #262e00;
+    --color-orange-50: #fff3e5;
+    --color-orange-100: #fee7cd;
+    --color-orange-200: #fec48b;
+    --color-orange-300: #ff9d4c;
+    --color-orange-400: #ff811a;
+    --color-orange-500: #ed6d0c;
+    --color-orange-600: #c25705;
+    --color-orange-700: #a44904;
+    --color-orange-800: #853a05;
+    --color-orange-900: #642b02;
+    --color-orange-950: #3b1a02;
+    --color-purple-50: #f5f0fe;
+    --color-purple-100: #efe6fe;
+    --color-purple-200: #dcc9fd;
+    --color-purple-300: #c8a9fc;
+    --color-purple-400: #b791fa;
+    --color-purple-500: #9f6ff1;
+    --color-purple-600: #8d55ed;
+    --color-purple-700: #7a35f0;
+    --color-purple-800: #611fd6;
+    --color-purple-900: #4811a6;
+    --color-purple-950: #2f0080;
+    --color-red-50: #fef0f0;
+    --color-red-100: #fee3e2;
+    --color-red-200: #fdc6c4;
+    --color-red-300: #f89e9b;
+    --color-red-400: #ff7570;
+    --color-red-500: #f54a45;
+    --color-red-600: #e22e28;
+    --color-red-700: #c02a26;
+    --color-red-800: #a11c17;
+    --color-red-900: #741915;
+    --color-red-950: #590603;
+    --color-amber-50: #ffffdb;
+    --color-amber-100: #fffca3;
+    --color-amber-200: #fff67a;
+    --color-amber-300: #fff258;
+    --color-amber-400: #ffe928;
+    --color-amber-500: #e5ce00;
+    --color-amber-600: #c2a800;
+    --color-amber-700: #8f7c00;
+    --color-amber-800: #5c4f00;
+    --color-amber-900: #423700;
+    --color-amber-950: #2c2502;
+    --color-teal-50: #e2f8f5;
+    --color-teal-100: #c4f2ec;
+    --color-teal-200: #6fe8d8;
+    --color-teal-300: #33d6c0;
+    --color-teal-400: #2dbeab;
+    --color-teal-500: #10a893;
+    --color-teal-600: #0f8575;
+    --color-teal-700: #067062;
+    --color-teal-800: #045d51;
+    --color-teal-900: #03443b;
+    --color-teal-950: #02312a;
+    --color-cyan-50: #e7f8fe;
+    --color-cyan-100: #caeffc;
+    --color-cyan-200: #97dcfc;
+    --color-cyan-300: #3ec3f7;
+    --color-cyan-400: #25b0e7;
+    --color-cyan-500: #1295ca;
+    --color-cyan-600: #047fb0;
+    --color-cyan-700: #076a94;
+    --color-cyan-800: #0f587a;
+    --color-cyan-900: #06415c;
+    --color-cyan-950: #072b3d;
+    --color-yellow-50: #fbf4df;
+    --color-yellow-100: #faedc2;
+    --color-yellow-200: #fcdf7e;
+    --color-yellow-300: #fad355;
+    --color-yellow-400: #ffc60a;
+    --color-yellow-500: #d99904;
+    --color-yellow-600: #ad7a03;
+    --color-yellow-700: #865b03;
+    --color-yellow-800: #6f4a01;
+    --color-yellow-900: #573601;
+    --color-yellow-950: #382201;
+    --color-violet-50: #fceefc;
+    --color-violet-100: #f9e2f9;
+    --color-violet-200: #f3c4f3;
+    --color-violet-300: #e59ce5;
+    --color-violet-400: #de81de;
+    --color-violet-500: #cf5ecf;
+    --color-violet-600: #bf3dbf;
+    --color-violet-700: #a630a6;
+    --color-violet-800: #872787;
+    --color-violet-900: #6a116a;
+    --color-violet-950: #520052;
+    --fontReverse: #fff;
+    --bgContentBase: #f8f9fa;
+    --bgMask: 0, 0, 0, .4;
+    --bgTextSelection: 20, 86, 240, .3;
+    --lineDividerDefault: 31, 35, 41, .15;
+    --lineDividerModule: 31, 35, 41, .15;
+  }
+
+  .dark {
+    --color-blue-50: #152340;
+    --color-blue-100: #173166;
+    --color-blue-200: #194294;
+    --color-blue-300: #2655b6;
+    --color-blue-400: #275fce;
+    --color-blue-500: #3370eb;
+    --color-blue-600: #4c88ff;
+    --color-blue-700: #75a4ff;
+    --color-blue-800: #8fb4ff;
+    --color-blue-900: #bdd2ff;
+    --color-blue-950: #bdd2ff;
+    --color-pink-50: #3a182b;
+    --color-pink-100: #591c3f;
+    --color-pink-200: #782b57;
+    --color-pink-300: #94386c;
+    --color-pink-400: #ab417d;
+    --color-pink-500: #c24a8e;
+    --color-pink-600: #db5ea4;
+    --color-pink-700: #ed77ba;
+    --color-pink-800: #fc94cf;
+    --color-pink-900: #ffc2e5;
+    --color-pink-950: #ffe0f2;
+    --color-neutral-00: #aaa;
+    --color-neutral-50: #1a1a1a;
+    --color-neutral-100: #292929;
+    --color-neutral-200: #373737;
+    --color-neutral-300: #434343;
+    --color-neutral-400: #505050;
+    --color-neutral-500: #5f5f5f;
+    --color-neutral-600: #757575;
+    --color-neutral-700: #a6a6a6;
+    --color-neutral-800: #e0e0e0;
+    --color-neutral-900: #e8e8e8;
+    --color-neutral-950: #ebebeb;
+    --color-neutral-1000: #fff;
+    --color-green-50: #022c07;
+    --color-green-100: #04430c;
+    --color-green-200: #0b6017;
+    --color-green-300: #1a7526;
+    --color-green-400: #258832;
+    --color-green-500: #32a645;
+    --color-green-600: #35bd4b;
+    --color-green-700: #5cd168;
+    --color-green-800: #95e599;
+    --color-green-900: #d0f5ce;
+    --color-green-950: #e4fae1;
+    --color-indigo-50: #1e204a;
+    --color-indigo-100: #2a2d69;
+    --color-indigo-200: #373d90;
+    --color-indigo-300: #474fb8;
+    --color-indigo-400: #515ad6;
+    --color-indigo-500: #5e68e8;
+    --color-indigo-600: #7b83f7;
+    --color-indigo-700: #9499f7;
+    --color-indigo-800: #aaaff8;
+    --color-indigo-900: #cdd0f9;
+    --color-indigo-950: #e7e9fe;
+    --color-lime-50: #212702;
+    --color-lime-100: #303804;
+    --color-lime-200: #404c06;
+    --color-lime-300: #53610a;
+    --color-lime-400: #5f700a;
+    --color-lime-500: #6b7f05;
+    --color-lime-600: #82990a;
+    --color-lime-700: #93af04;
+    --color-lime-800: #a6c313;
+    --color-lime-900: #c2e12d;
+    --color-lime-950: #e3f391;
+    --color-orange-50: #33210b;
+    --color-orange-100: #4a2b10;
+    --color-orange-200: #683a12;
+    --color-orange-300: #8a4a19;
+    --color-orange-400: #a15317;
+    --color-orange-500: #b85e1a;
+    --color-orange-600: #db7018;
+    --color-orange-700: #f3871b;
+    --color-orange-800: #f89e44;
+    --color-orange-900: #fec88b;
+    --color-orange-950: #fee7cd;
+    --color-purple-50: #2b194a;
+    --color-purple-100: #3f2073;
+    --color-purple-200: #5529a3;
+    --color-purple-300: #6c39c6;
+    --color-purple-400: #7c4ad4;
+    --color-purple-500: #8c55ec;
+    --color-purple-600: #a575fa;
+    --color-purple-700: #b88ffe;
+    --color-purple-800: #c5a3ff;
+    --color-purple-900: #dbc8fd;
+    --color-purple-950: #efe5ff;
+    --color-red-50: #590603;
+    --color-red-100: #741915;
+    --color-red-200: #a11c17;
+    --color-red-300: #c02a26;
+    --color-red-400: #e22e28;
+    --color-red-500: #f54a45;
+    --color-red-600: #ff7570;
+    --color-red-700: #f89e9b;
+    --color-red-800: #fdc6c4;
+    --color-red-900: #fee3e2;
+    --color-red-950: #fef0f0;
+    --color-amber-50: #29250a;
+    --color-amber-100: #38320c;
+    --color-amber-200: #574d01;
+    --color-amber-300: #7a6a01;
+    --color-amber-400: #9c8702;
+    --color-amber-500: #c9b218;
+    --color-amber-600: #e5cd17;
+    --color-amber-700: #f5df36;
+    --color-amber-800: #f7e663;
+    --color-amber-900: #faed7a;
+    --color-amber-950: #fff59e;
+    --color-teal-50: #132926;
+    --color-teal-100: #173b36;
+    --color-teal-200: #1d4e47;
+    --color-teal-300: #25665e;
+    --color-teal-400: #227369;
+    --color-teal-500: #198578;
+    --color-teal-600: #1fa18f;
+    --color-teal-700: #1ab7a1;
+    --color-teal-800: #17cfb5;
+    --color-teal-900: #65e7d5;
+    --color-teal-950: #b7f7ef;
+    --color-cyan-50: #152830;
+    --color-cyan-100: #103647;
+    --color-cyan-200: #164359;
+    --color-cyan-300: #135a78;
+    --color-cyan-400: #146c91;
+    --color-cyan-500: #1a7fab;
+    --color-cyan-600: #1099cc;
+    --color-cyan-700: #25b2e5;
+    --color-cyan-800: #51c3f0;
+    --color-cyan-900: #89dffe;
+    --color-cyan-950: #c7f0ff;
+    --color-yellow-50: #30250a;
+    --color-yellow-100: #473409;
+    --color-yellow-200: #63470f;
+    --color-yellow-300: #8a6419;
+    --color-yellow-400: #ad7d15;
+    --color-yellow-500: #d49b0b;
+    --color-yellow-600: #f0b622;
+    --color-yellow-700: #fbcb46;
+    --color-yellow-800: #fcd456;
+    --color-yellow-900: #ffde75;
+    --color-yellow-950: #ffeaa3;
+    --color-violet-50: #3b153b;
+    --color-violet-100: #541854;
+    --color-violet-200: #712871;
+    --color-violet-300: #8b378b;
+    --color-violet-400: #a43da4;
+    --color-violet-500: #b54ab5;
+    --color-violet-600: #d661d6;
+    --color-violet-700: #e17fe1;
+    --color-violet-800: #e99be9;
+    --color-violet-900: #f4c3f4;
+    --color-violet-950: #fcdffc;
+    --fontReverse: #000;
+    --bgContentBase: #121212;
+    --bgMask: 0, 0, 0, .6;
+    --bgTextSelection: 117, 164, 255, .3;
+    --lineDividerDefault: 207, 207, 207, .15;
+    --lineDividerModule: 0, 0, 0, 1;
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: var(--ring);
+
+    @supports (color: color-mix(in lab, red, red)) {
+      outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+    }
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+
+  .container {
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+@font-face {
+  font-family: LarkChineseQuote;
+  font-weight: 300;
+  src: local(PingFangSC-Light);
+  unicode-range: U+2018, U+2019, U+201A, U+201C, U+201D, U+201E;
+}
+
+@font-face {
+  font-family: LarkChineseQuote;
+  font-weight: 400;
+  src: local(PingFangSC-Regular);
+  unicode-range: U+2018, U+2019, U+201A, U+201C, U+201D, U+201E;
+}
+
+@font-face {
+  font-family: LarkChineseQuote;
+  font-weight: 500;
+  src: local(PingFangSC-Medium);
+  unicode-range: U+2018, U+2019, U+201A, U+201C, U+201D, U+201E;
+}
+
+@font-face {
+  font-family: LarkChineseQuote;
+  font-weight: 600;
+  src: local(PingFangSC-Semibold);
+  unicode-range: U+2018, U+2019, U+201A, U+201C, U+201D, U+201E;
+}
+
+@font-face {
+  font-family: LarkEmojiFont;
+  src: local(Apple Color Emoji), local(Noto Color Emoji);
+  unicode-range: U+1F21A, U+1F250, U+1F237, U+26A0;
+}
+
+@font-face {
+  font-family: LarkHackSafariFont;
+  src: local(Helvetica Neue);
+  unicode-range: U+0;
+}

@@ -1,0 +1,74 @@
+================================================================================
+脱平台证据 3/4 —— 界面没有变化（样式表 + 渲染 DOM）
+生成时间: 2026-09-26 10:25:32
+================================================================================
+
+改动开始前先跑过一次完整构建，产物快照保存在 /tmp/qls-baseline/。
+  OLD = /tmp/qls-baseline/client-dist/bundle/index-C5eMfKdt.css  （平台预设在位时的产物）
+  NEW = dist/client/bundle/index-Dcmjbbb6.css  （脱平台后的产物）
+
+=== 1. 体积 ===
+  226784 /tmp/qls-baseline/client-dist/bundle/index-C5eMfKdt.css
+  193500 dist/client/bundle/index-Dcmjbbb6.css
+  420284 total
+   变小是**预期**的：平台预设用 @source inline(...) 预先产出了整张调色板的全部工具类
+   （那是给平台可视化编辑器用的 safelist），再加上已删除组件的类。下面逐条证明应用用到的类都在。
+
+=== 2. 覆盖性检查（最有说服力的一条）===
+从 client/ 的 className / cn() / cva() 里抽出应用真正写下的每一个类名（含 disabled: 这类变体），
+去掉转义后检查构建产物里是否有对应选择器：
+
+class tokens written by the app (incl. variants): 426
+MISSING from the built stylesheet: 5
+    box-shadow]   <- client/src/components/ui/slider.tsx
+    group/native-select   <- client/src/components/ui/native-select.tsx
+    size:   <- client/src/components/ui/toggle-group.tsx
+    text-l/[22px]   <- client/src/pages/NotFound/NotFound.tsx
+    variant:   <- client/src/components/ui/alert-dialog.tsx
+
+of those, also missing BEFORE the migration: 5
+   (pre-existing gap, not caused by this change) box-shadow]
+   (pre-existing gap, not caused by this change) group/native-select
+   (pre-existing gap, not caused by this change) size:
+   (pre-existing gap, not caused by this change) text-l/[22px]
+   (pre-existing gap, not caused by this change) variant:
+
+=== 3. 关键 token / 工具类出现次数（OLD vs NEW）===
+  --color-blue-100               OLD=6     NEW=6
+  --color-red-700                OLD=6     NEW=6
+  --color-amber-100              OLD=6     NEW=6
+  --color-gray-200               OLD=5     NEW=5
+  --color-rose-700               OLD=4     NEW=4
+  --ud-normal-bg                 OLD=3     NEW=3
+  LarkChineseQuote               OLD=9     NEW=5
+  animate-in                     OLD=7     NEW=5
+  animate-out                    OLD=5     NEW=4
+  fade-in-0                      OLD=3     NEW=3
+  zoom-in-95                     OLD=3     NEW=3
+  slide-in-from-top-2            OLD=1     NEW=1
+  tw-enter-opacity               OLD=14    NEW=9
+  @keyframes enter               OLD=1     NEW=1
+  disabled:cursor-not-allowed    OLD=0     NEW=0
+  sm:px-6                        OLD=0     NEW=0
+  data-disabled:opacity-60       OLD=0     NEW=0
+
+=== 4. 设计 token 的来源（vendored，逐字保留）===
+  client/src/vendor/toolkit-theme.css  —— theme-layer + tailwind-theme(调色板/.dark) + override + font-family
+  client/src/vendor/toolkit-sonner.css —— sonner toast 样式（含 --ud-* token）
+  两处删减：toolkit 自己的 @source glob（指向已删除的组件）、dev-only 的 inspector 样式（生产构建里本来就是 0 字节）
+
+=== 5. 渲染出来的 DOM ===
+  这是唯一能发现白屏的断言，E2E 的浏览器检查在改动前后都是 PASS。
+
+  · #root 文本长度：改动前 63 字符 -> 改动后 58 字符
+    差值 5 = 被移除的水印文案「妙搭生成 」（4 字 + 1 空格）
+  · 逐字节比对根子树：除被移除的水印元素、以及 React 内部 id 计数器因少渲染一个组件
+    而从 _r_2_ 变成 _r_1_ 之外，两者完全相同（归一化该 id 后字符串相等）
+  · antd ConfigProvider 仍生效：注入的 ant- 样式数量改动前后同为 381
+
+=== 6. 两处刻意的、用户可见的变化（必须点名）===
+  1) 右下角「妙搭生成」水印徽标消失。它由平台 AppContainer 的 Watermark 渲染，并向
+     lf3-static.bytednsdoc.com 请求一张 logo —— 既是平台品牌，也是第三方运行时依赖。
+  2) 404 页插图改为本地文件 client/public/not-found.svg（同一份 SVG 的本地副本），
+     页面结构/class/文案/尺寸不变，但不再有对外请求。
+  除这两处外，界面元素、布局、文案、路由与 i18n 字符串均未改动。

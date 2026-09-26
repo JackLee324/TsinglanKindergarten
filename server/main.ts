@@ -1,17 +1,15 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
-import {
-  configureApp,
-  DrizzleDatabaseManager,
-  FileService,
-} from '@lark-apaas/fullstack-nestjs-core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { join } from 'path';
+import express from 'express';
+import cookieParser from 'cookie-parser';
 import { __express as hbsExpressEngine } from 'hbs';
 import http, { type Server } from 'http';
 
-import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { HealthService } from './modules/health/health.module';
+import { DatabaseService } from './database/database.module';
 import {
   resolveTrustProxySetting,
   describeTrustProxy,
@@ -20,7 +18,57 @@ import {
   securityHeaders,
   describeSecurityHeaders,
 } from './common/http/security-headers.middleware';
+import { csrfTokenMiddleware } from './common/http/csrf-token.middleware';
 
+// =============================================================================
+// The standalone bootstrap
+// =============================================================================
+//
+// THIS FILE OWNS THE HTTP SHELL NOW.
+//
+// Until this migration the shell was installed by `configureApp()` from
+// `@lark-apaas/fullstack-nestjs-core`, which — verified by reading the installed
+// bundle at `dist/index.js:36723` — did all of the following, in this order:
+//
+//     app.useLogger(app.get(AppLogger))          // pino + an OTel batch exporter
+//     app.flushLogs()
+//     app.use(express.json({ limit: '1mb' }))
+//     app.use(express.urlencoded({ limit: '1mb', extended: true }))
+//     app.use(cookieParser())
+//     app.use(createLegacyPathRedirectMiddleware())
+//     app.use(createPublicAssetsMiddleware())    // serves <cwd>/dist/client
+//     app.setGlobalPrefix(process.env.CLIENT_BASE_PATH ?? '')
+//     app.set('trust proxy', true)               // <-- unconditionally, see below
+//
+// Every one of those responsibilities is reproduced here, in this file, with two
+// deliberate differences and one deliberate omission:
+//
+//   * **`trust proxy` is NOT `true`.** It is `resolveTrustProxySetting()`, whose
+//     default is the safe one. `X-Forwarded-For` is client-supplied; believing all
+//     of it lets an attacker choose their own `req.ip`, which is what feeds the
+//     per-IP login rate limit and every `audit_logs.ip_address` row. The platform
+//     set `true` because its ingress always overwrote the header — there is no
+//     such ingress here, and this application must not inherit that assumption.
+//     This is the one place where matching the platform would have been wrong.
+//
+//   * **The CSRF token is issued by this application.** The platform's
+//     `CsrfTokenMiddleware` + `ViewContextMiddleware` pair is replaced by
+//     `common/http/csrf-token.middleware.ts`; without it, every mutating
+//     `POST /api/*` answers 403, because this application's own
+//     `CsrfCheckMiddleware` demands a cookie/header pair nothing else would mint.
+//
+//   * **Omitted: the platform's HTTP trace interceptor**, which logged the request
+//     and response BODY of every request — including the plaintext temporary
+//     password returned by `POST /api/teachers`, every login body and every token
+//     response. Logging is now the standard Nest `Logger`, which records messages,
+//     never payloads.
+//
+// The platform's log flush existed because its exporter batched asynchronously.
+// A bounded stdout drain is kept anyway, for a different and still-real reason:
+// `process.stdout` is ASYNCHRONOUS when it is a pipe (which is what both Docker
+// and the shutdown test use), so `process.exit()` can truncate the last lines —
+// and "the last line" is exactly the one an operator needs.
+//
 // =============================================================================
 // Graceful shutdown
 // =============================================================================
@@ -32,12 +80,12 @@ import {
 //
 // THE ORDER IS LOAD-BEARING, AND `app.close()` ALONE CANNOT DO IT
 // ---------------------------------------------------------------
-// Nest runs the teardown in this order (verified in the installed @nestjs/core
+// Nest runs its teardown in this order (verified in the installed @nestjs/core
 // 10.4.22, `nest-application-context.js`):
 //
-//   1. onModuleDestroy()          <- the platform's DataPaas provider closes the
-//   2. beforeApplicationShutdown()   PostgreSQL pool HERE, before anything else
-//   3. dispose()                  <- ONLY NOW does Nest stop the HTTP server
+//   1. onModuleDestroy()             <- DatabaseService closes the PostgreSQL
+//   2. beforeApplicationShutdown()      pool HERE, before anything else
+//   3. dispose()                     <- ONLY NOW does Nest stop the HTTP server
 //   4. onApplicationShutdown()
 //
 // so `await app.close()` on its own closes the database while requests are still
@@ -51,47 +99,18 @@ import {
 // that BECOME idle after `close()` was called (the one that just finished its
 // response) instead of waiting out their keep-alive timeout.
 //
-// MEASURED PLATFORM DEFECT: `app.close()` CANNOT COMPLETE IN THIS APPLICATION
-// --------------------------------------------------------------------------
-// `DRIZZLE_DATABASE` is not a database — it is a Proxy whose `get` trap calls
-// `DrizzleDatabaseManager.getDatabase()` for EVERY property read:
-//
-//     provide: DRIZZLE_DATABASE,
-//     useFactory: async (manager) => new Proxy({}, { get: (_t, prop) => {
-//       const db = manager.getDatabase();          // throws once disconnected
-//       ...
-//
-// (verified in node_modules/@lark-apaas/nestjs-datapaas/dist/index.cjs ~line 944).
-// Nest, meanwhile, decides which hooks to run by READING A PROPERTY on every provider
-// instance (`hasBeforeApplicationShutdownHook` -> `instance.beforeApplicationShutdown`
-// -> ...). Because `onModuleDestroy()` has already disconnected the pool by then
-// (step 1 above), that property read throws:
-//
-//     Error: Database not initialized. Call initialize() first.
-//         at DrizzleDatabaseManager.getDatabase (nestjs-datapaas/dist/index.cjs:305)
-//         at Object.get (nestjs-datapaas/dist/index.cjs:944)
-//         at FilterIterator.hasBeforeApplicationShutdownHook
-//             (@nestjs/core/hooks/before-app-shutdown.hook.js:13)
-//         at callBeforeAppShutdownHook (@nestjs/core/hooks/before-app-shutdown.hook.js:42)
-//
-// Reproduced with a bare `NestFactory.create(AppModule)` + `app.close()` and NOTHING
-// from this file in the picture, so it is the platform's, not this sequence's. Its
-// consequences are handled explicitly below:
-//   * `app.close()` rejects. That rejection is reported in full and, ONLY when this
-//     process can still prove every resource is closed (database disconnected, HTTP
-//     listener gone), it is downgraded from "failed step" to a reported WARN — a
-//     shutdown that closed everything must not be reported to an orchestrator as
-//     unclean. Any other failure stays a failed step and exits 1.
-//   * Nest's `dispose()` never runs, so the HTTP server is closed by step 1 of this
-//     file rather than by the framework. That is not a gap: it is the reason step 1
-//     exists.
-//   * `beforeApplicationShutdown`/`onApplicationShutdown` hooks in the tree do not
-//     run. Nothing in this application implements either (verified: `grep -rn
-//     onApplicationShutdown server/` is empty); the one platform provider that does
-//     (`NestjsCacheModule`, disposing its store) is driven by `MIAODA_CACHE_URL`,
-//     which is unset here — the platform logs "cache-service will be effectively
-//     disabled" at boot. The WARN below names the hooks that were skipped so the
-//     next person inherits the fact rather than the surprise.
+// A PLATFORM DEFECT THIS FILE USED TO WORK AROUND IS GONE
+// ------------------------------------------------------
+// `app.close()` used to reject with "Database not initialized. Call initialize()
+// first." because the platform's `DRIZZLE_DATABASE` was a `Proxy` whose `get` trap
+// called `getDatabase()` on every property read, and Nest reads a property on
+// every provider while choosing shutdown hooks — after `onModuleDestroy` had
+// already disconnected the pool. `DatabaseService` is a plain class holding a real
+// drizzle instance (see `server/database/database.module.ts`), so the framework
+// teardown now completes normally, `beforeApplicationShutdown`/
+// `onApplicationShutdown` hooks run for whatever needs them, and every failure of
+// `app.close()` is a real failure again — reported and counted, with no
+// "expected defect" exemption to hide behind.
 //
 // IDEMPOTENCE: the sequence runs at most once per process. A second signal while it
 // is running is logged and ignored; it does not start a second teardown, cannot
@@ -121,48 +140,30 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 const IDLE_CONNECTION_SWEEP_MS = 50;
 
 /**
- * How long the process stays alive after the last shutdown line so that line actually
- * reaches the operator.
- *
- * MEASURED REASON: the platform's log pipeline is not synchronous. `AppLogger` is
- * pino with `level: 'silent'` outside development, and every record is exported by
- * `@lark-apaas/observable`'s OpenTelemetry `BatchLogRecordProcessor`
- * (`scheduledDelayMillis: 2000`, `maxExportBatchSize: 1`), whose exporter writes the
- * batch from a promise. `process.exit()` — which this file must call, see the header —
- * ends the process before that promise runs, and the records written in the last
- * moments are LOST. Observed before this window existed: a SIGTERM shutdown printed
- * "SIGTERM received…", "stopped accepting new connections…" and "database: PostgreSQL
- * pool closed…" and then the process exited **0 with no "finished cleanly" line at
- * all** — i.e. exactly the line an operator needs was the one that vanished, while the
- * exit code said everything was fine.
- *
- * 250ms is a bounded, explicit drain of the exporter rather than a guess: the batch is
- * flushed on the next tick (batch size 1), so this is ~100x the time the export needs,
- * and it is spent only after every resource is already closed. It is NOT a retry and
- * masks nothing — nothing is asserted after it.
+ * Upper bound on waiting for stdout to drain before `process.exit()`. See the
+ * header: the drain is a real guarantee (the callback fires once the buffered
+ * chunks have been written), and the timeout only exists so a broken stream can
+ * never turn a clean shutdown into a hang.
  */
-const LOG_FLUSH_WINDOW_MS = 250;
+const STDOUT_FLUSH_TIMEOUT_MS = 500;
+
+/**
+ * Request-body limit. 1mb is not a preference — it is what the platform passed
+ * (`DEFAULT_BODY_LIMIT = '1mb'`, `dist/index.js:36719`), and changing it changes
+ * which uploads are accepted: measured before this migration, a 900KB JSON body
+ * reaches the handler while a 1.5MB one is refused by the parser (which surfaces
+ * as a 500 through the exception filter, because `PayloadTooLargeError` is not a
+ * Nest `HttpException`). `BODY_SIZE_LIMIT` keeps overriding it, as it did.
+ */
+const DEFAULT_BODY_LIMIT = '1mb';
 
 const EXIT_CODE_CLEAN = 0;
 const EXIT_CODE_UNCLEAN = 1;
-
-/**
- * The platform's throw-on-any-property-access Proxy defect (see the header).
- * Matched EXACTLY, so a different failure that happens to mention the database is
- * never mistaken for it.
- */
-const PLATFORM_PROXY_SHUTDOWN_ERROR = 'Database not initialized. Call initialize() first.';
 
 interface ShutdownTarget {
   app: NestExpressApplication;
   logger: Logger;
   timeoutMs: number;
-}
-
-/** The slice of the platform's DataPaas manager this file needs. */
-interface ClosableDatabaseManager {
-  isDatabaseConnected(): boolean;
-  disconnect(): Promise<void>;
 }
 
 function errorMessage(error: unknown): string {
@@ -250,27 +251,26 @@ async function drainHttpServer(httpServer: Server, logger: Logger): Promise<stri
 /**
  * Close the PostgreSQL pool, or verify that the framework already did.
  *
- * This calls the platform's own manager rather than guessing at the postgres.js
- * client behind the Proxy, and it CHECKS the outcome — `disconnect()` that leaves
- * `isDatabaseConnected()` true is reported as a failure, not assumed to have worked.
- * On the normal path `app.close()`'s `onModuleDestroy` has already disconnected the
- * pool, so this is a verification; it becomes the actual close if that hook did not
- * run (a provider that throws earlier in the chain, or a future platform change).
+ * `DatabaseService.onModuleDestroy()` closes the pool during `app.close()`, so on
+ * the normal path this is a verification. It becomes the actual close if that hook
+ * did not run — and either way the OUTCOME is checked rather than assumed:
+ * `disconnect()` that leaves `isDatabaseConnected()` true is a failure, not a
+ * success.
  */
 async function closeDatabase(
-  manager: ClosableDatabaseManager | null,
+  database: DatabaseService | null,
   logger: Logger,
 ): Promise<string | null> {
-  if (manager === null) {
+  if (database === null) {
     logger.warn(
-      '[shutdown] database: no DataPaas database manager in the container; cannot verify the pool state',
+      '[shutdown] database: DatabaseService is not in the container; cannot verify the pool state',
     );
     return null;
   }
 
   try {
-    if (manager.isDatabaseConnected()) {
-      await manager.disconnect();
+    if (database.isDatabaseConnected()) {
+      await database.disconnect();
       logger.log('[shutdown] database: pool was still connected; closed it explicitly');
     }
   } catch (error) {
@@ -279,7 +279,7 @@ async function closeDatabase(
     return failure;
   }
 
-  if (manager.isDatabaseConnected()) {
+  if (database.isDatabaseConnected()) {
     const failure = 'the PostgreSQL pool is STILL connected after disconnect()';
     logger.error(`[shutdown] ${failure}`);
     return failure;
@@ -290,59 +290,33 @@ async function closeDatabase(
 }
 
 /**
- * Close a local storage handle if this build has one.
+ * Give stdout a bounded chance to drain before `process.exit()`.
  *
- * Storage here is dataloom, reached through the platform's `FileService`, which is an
- * HTTP client (`@lark-apaas/file-service`) — verified: neither it nor the `HttpClient`
- * it wraps exposes `close()`/`destroy()`/`end()`, so there is no pool or file handle
- * of ours to release and this is a no-op. It is written out rather than omitted so the
- * shutdown log STATES that fact, and so a future build that does hold a handle closes
- * it here instead of leaking it until the process dies.
+ * See `STDOUT_FLUSH_TIMEOUT_MS` and the header. A failure here cannot be reported
+ * through `logger` alone — the logger writes to the very stream that may be broken
+ * — so it also goes to `process.stderr`.
  */
-async function closeStorageHandleIfPresent(
-  storage: unknown,
-  logger: Logger,
-): Promise<string | null> {
-  if (storage === null || storage === undefined) {
-    logger.log('[shutdown] storage: no FileService in the container; nothing to close');
-    return null;
-  }
-
-  const closable = storage as { close?: () => unknown; destroy?: () => unknown };
-  const close = closable.close ?? closable.destroy;
-  if (typeof close !== 'function') {
-    logger.log(
-      '[shutdown] storage: FileService holds no local handle (HTTP client: no close()/destroy()); nothing to close',
-    );
-    return null;
-  }
-
-  try {
-    await close.call(closable);
-    logger.log('[shutdown] storage: closed');
-    return null;
-  } catch (error) {
-    const failure = `storage close failed: ${errorMessage(error)}`;
-    logger.error(`[shutdown] ${failure}`);
-    return failure;
-  }
-}
-
-/**
- * Give the platform's batched log exporter the chance to write what was just logged.
- *
- * See `LOG_FLUSH_WINDOW_MS` for the measurement behind this. A failure here cannot be
- * reported through the same logger (it is the thing that may be broken), so it goes to
- * `process.stderr` — the one channel that does not depend on it.
- */
-async function flushPlatformLogs(logger: Logger): Promise<void> {
-  try {
-    await new Promise((resolve) => setTimeout(resolve, LOG_FLUSH_WINDOW_MS));
-  } catch (error) {
-    // setTimeout itself does not fail; unreachable, and reported rather than swallowed.
-    process.stderr.write(`[shutdown] log flush window failed: ${errorMessage(error)}\n`);
-    logger.error(`[shutdown] log flush window failed: ${errorMessage(error)}`);
-  }
+async function flushStdout(logger: Logger): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, STDOUT_FLUSH_TIMEOUT_MS);
+    try {
+      // Writing an empty chunk and waiting for ITS callback proves every
+      // previously written chunk has been flushed: a Node stream invokes write
+      // callbacks in order.
+      process.stdout.write('', finish);
+    } catch (error) {
+      process.stderr.write(`[shutdown] stdout flush failed: ${errorMessage(error)}\n`);
+      logger.error(`[shutdown] stdout flush failed: ${errorMessage(error)}`);
+      finish();
+    }
+  });
 }
 
 /**
@@ -371,70 +345,37 @@ async function runShutdown(target: ShutdownTarget, signal: string): Promise<numb
   // Resolved BEFORE any teardown: after `app.close()` the container may be closing,
   // and these are the handles this sequence has to be able to reach afterwards.
   const httpServer = app.getHttpServer() as Server;
-  let databaseManager: ClosableDatabaseManager | null = null;
+  let database: DatabaseService | null = null;
   try {
-    databaseManager = app.get(DrizzleDatabaseManager, { strict: false });
+    database = app.get(DatabaseService, { strict: false }) ?? null;
   } catch (error) {
-    logger.warn(`[shutdown] could not resolve the DataPaas database manager: ${errorMessage(error)}`);
-  }
-  let storage: unknown = null;
-  try {
-    storage = app.get(FileService, { strict: false });
-  } catch (error) {
-    logger.warn(`[shutdown] could not resolve FileService: ${errorMessage(error)}`);
+    logger.warn(`[shutdown] could not resolve DatabaseService: ${errorMessage(error)}`);
   }
 
   // 1. Stop accepting new connections, then wait for in-flight requests to finish.
   const drainFailure = await drainHttpServer(httpServer, logger);
   if (drainFailure) failures.push(drainFailure);
 
-  // 2. Framework teardown. Expected to reject because of the platform Proxy defect
-  //    documented in the header; what it does FIRST (onModuleDestroy) is what
-  //    matters, and that outcome is verified in step 3 rather than assumed.
-  let teardownError: unknown = null;
+  // 2. Framework teardown. Runs `onModuleDestroy` (which closes the pool), then
+  //    dispose(), then the shutdown hooks. Any rejection here is a real failure:
+  //    the platform's Proxy defect that used to make this expected is gone.
   try {
     await app.close();
     logger.log(
-      '[shutdown] application context closed (module destroy hooks ran; the DataPaas database manager closed the PostgreSQL pool)',
+      '[shutdown] application context closed (module destroy hooks ran; DatabaseService closed the PostgreSQL pool)',
     );
   } catch (error) {
-    teardownError = error;
+    const failure = `app.close() failed: ${errorMessage(error)}`;
+    failures.push(failure);
+    logger.error(`[shutdown] ${failure}`);
+    logger.error(`[shutdown] app.close() stack: ${errorStack(error)}`);
   }
 
   // 3. Database: verify, and close it here if the framework did not.
-  const databaseFailure = await closeDatabase(databaseManager, logger);
+  const databaseFailure = await closeDatabase(database, logger);
   if (databaseFailure) failures.push(databaseFailure);
 
-  // 4. Storage, if this build holds a handle.
-  const storageFailure = await closeStorageHandleIfPresent(storage, logger);
-  if (storageFailure) failures.push(storageFailure);
-
   clearTimeout(forceExit);
-
-  // 5. Judge the framework teardown, using what was VERIFIED, not what was assumed.
-  if (teardownError !== null) {
-    const message = errorMessage(teardownError);
-    const listenerClosed = !httpServer.listening;
-    const benignPlatformDefect =
-      message === PLATFORM_PROXY_SHUTDOWN_ERROR && databaseFailure === null && listenerClosed;
-
-    if (benignPlatformDefect) {
-      logger.warn(
-        `[shutdown] app.close() reported "${message}" — the platform's DRIZZLE_DATABASE Proxy throws on ANY ` +
-          'property read once the pool is disconnected, and Nest reads a property on every provider while ' +
-          'choosing shutdown hooks (@nestjs/core/hooks/before-app-shutdown.hook.js). Every resource this ' +
-          'process owns is closed and verified (database pool disconnected, HTTP listener closed), so this ' +
-          'is reported and NOT counted as an unclean shutdown. Consequence: Nest beforeApplicationShutdown/' +
-          'onApplicationShutdown hooks did not run — nothing in this application implements either.',
-      );
-      logger.warn(`[shutdown] app.close() stack (platform defect, reported for the record): ${errorStack(teardownError)}`);
-    } else {
-      const failure = `app.close() failed: ${message}`;
-      failures.push(failure);
-      logger.error(`[shutdown] ${failure}`);
-      logger.error(`[shutdown] app.close() stack: ${errorStack(teardownError)}`);
-    }
-  }
 
   const elapsed = Date.now() - startedAt;
   if (failures.length === 0) {
@@ -472,7 +413,7 @@ function installShutdownHandlers(target: ShutdownTarget): void {
     runShutdown(target, signal)
       .then(async (code) => {
         phase = 'finished';
-        await flushPlatformLogs(target.logger);
+        await flushStdout(target.logger);
         process.exit(code);
       })
       .catch((error: unknown) => {
@@ -490,22 +431,64 @@ function installShutdownHandlers(target: ShutdownTarget): void {
   }
 }
 
+/**
+ * `/app/...` → `/...`.
+ *
+ * WHY, AND WHY THIS IS NOT THE OLD WORKAROUND COMING BACK
+ * ------------------------------------------------------
+ * The previous revision of this file redirected `/` to `/app/`, because the
+ * platform forced React Router's basename to `/app/` and a request to `/` matched
+ * no route (a 200 response whose `#root` was empty — a white screen). That
+ * workaround is GONE: the basename is `/`, `/` renders the index route, and
+ * `scripts/verify-e2e-deploy.sh` asserts the render instead of the status code.
+ *
+ * This is the mirror image and a courtesy, not a requirement: every URL a user may
+ * have bookmarked or linked during the platform era lives under `/app/...`
+ * (`/app/`, `/app/login`, `/app/admin/teachers`), and those paths mean nothing to
+ * this router. Rather than show them the application's own "page not found", they
+ * are translated to the real path. No route in `client/src/app.tsx` begins with
+ * `/app`, so nothing can be shadowed — asserted, incidentally, by the E2E check
+ * that `/app/login` lands on `/login` and that `/login` itself still works.
+ *
+ * Query strings are preserved: the K-English and Montessori pages are driven by
+ * `?theme=` / `?subSubject=`.
+ */
+function legacyPlatformPathRedirect(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+): void {
+  const path = req.path || '/';
+  if (path !== '/app' && !path.startsWith('/app/')) {
+    next();
+    return;
+  }
+  const queryIndex = req.originalUrl.indexOf('?');
+  const query = queryIndex === -1 ? '' : req.originalUrl.slice(queryIndex);
+  const rest = path.slice('/app'.length);
+  res.redirect(302, `${rest === '' ? '/' : rest}${query}`);
+}
+
+/**
+ * Static assets of the built client.
+ *
+ * `index: false` is not cosmetic and must not be "simplified": with the default,
+ * `express.static` answers `GET /` with the raw `index.html`, bypassing the HBS
+ * render — which is where `window.csrfToken` is interpolated. The page would then
+ * load, look perfect, and fail every mutating API call with 403 because
+ * `window.csrfToken` was still the literal string `{{csrfToken}}`. Documents are
+ * served by the view engine, assets by this middleware.
+ */
+function clientAssetMiddleware(clientDir: string): express.RequestHandler {
+  return express.static(clientDir, {
+    index: false,
+    // A dotfile in the published client tree would be a build accident, not content.
+    dotfiles: 'ignore',
+  });
+}
+
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-
-  // Cloud PaaS / standalone compatibility fallback (Zeabur / Render / Railway)
-  const dbUrl =
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_CONNECTION_STRING ||
-    process.env.POSTGRES_URI ||
-    process.env.SUDA_DATABASE_URL;
-  if (dbUrl) {
-    process.env.DATABASE_URL = process.env.DATABASE_URL || dbUrl;
-    process.env.SUDA_DATABASE_URL = process.env.SUDA_DATABASE_URL || dbUrl;
-  }
-  if (!process.env.FORCE_AUTHN_INNERAPI_DOMAIN) {
-    process.env.FORCE_AUTHN_INNERAPI_DOMAIN = 'https://127.0.0.1:1';
-  }
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     abortOnError: process.env.NODE_ENV !== 'development',
@@ -525,97 +508,40 @@ async function bootstrap() {
   // feeds the per-IP login rate limit and every `audit_logs.ip_address` row; if it
   // can be forged, brute-force protection is bypassed and intrusions cannot be
   // attributed.
+  //
+  // Until this migration the platform's `configureApp()` ended with
+  // `app.set('trust proxy', true)` and this assignment had to come AFTER it or be
+  // silently discarded. There is no longer anything to override: this is the only
+  // place the setting is written, and it is written before the router exists.
   const trustProxy = resolveTrustProxySetting();
-
-  // ---------------------------------------------------------------------------
-  // 根路径跳转到 /app/ —— 独立部署必需
-  // ---------------------------------------------------------------------------
-  // 平台把 React Router 的 basename 写死成 "/app/"：它注入到 index.html 里的脚本
-  // 包含 `window.__BASENAME__ = "/app/"` 与 `__platform__.basename = "/app/"`。
-  //
-  // 因此在独立部署直接访问 `/` 时，路由用 basename=/app/ 去匹配路径 "/"，匹配不到
-  // 任何路由，React 什么都不渲染 —— 页面白屏。
-  //
-  // 危险之处在于它「看起来完全正常」：`/` 与 `/app/` 返回的是同一份 HTML（都是 200、
-  // 同样字节数），资源请求也全部 200、Content-Type 正确。状态码、日志、健康检查
-  // 全绿，只有真正用一个浏览器渲染才能发现。实测：远程渲染 / 得到空 #root，
-  // 渲染 /app/ 得到完整登录页。
-  //
-  // 这里把根路径（以及任何未带 /app 前缀的页面路径）302 跳到 /app/ 下，让独立部署
-  // 与平台行为一致，也避免每个访问根域名的人以为部署挂了。
-  //
-  // 注册在 configureApp() 之前，以便先于平台的视图回退执行；静态资源、API 与平台
-  // 自身前缀全部放行不做跳转。
-  {
-    const expressApp = app.getHttpAdapter().getInstance() as {
-      use: (fn: (req: { path: string; url: string }, res: {
-        redirect: (code: number, url: string) => void;
-      }, next: () => void) => void) => void;
-    };
-    const PASSTHROUGH = [
-      '/app',
-      '/api',
-      '/bundle',
-      '/assets',
-      '/static',
-      '/openapi',
-      '/__innerapi__',
-      '/__runtime__',
-      '/dev',
-      '/polyfills.js',
-      '/favicon.ico',
-      '/favicon.svg',
-      '/routes.json',
-      '/spark',
-    ];
-    expressApp.use((req, res, next) => {
-      const path = req.path || '/';
-      if (PASSTHROUGH.some((p) => path === p || path.startsWith(`${p}/`))) {
-        return next();
-      }
-      const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-      if (path === '/') {
-        return res.redirect(302, `/app/${query}`);
-      }
-      // 任何其它页面路径（如 /login）同样带上前缀，而不是白屏。
-      return res.redirect(302, `/app${path}${query}`);
-    });
-  }
-
-  await configureApp(app, {
-    disableSwagger: true,
-  });
-
-  // ---------------------------------------------------------------------------
-  // Trust proxy — MUST be set AFTER configureApp()
-  // ---------------------------------------------------------------------------
-  // `configureApp()` from @lark-apaas/fullstack-nestjs-core ends with
-  //     app.set('trust proxy', true)
-  // (verified in the installed package, dist/index.js). Setting the value before
-  // calling it is therefore silently discarded, and Express then believes EVERY
-  // hop of the client-supplied `X-Forwarded-For` chain.
-  //
-  // Observed live before this fix: a request sending
-  //     X-Forwarded-For: 203.0.113.99, 10.0.0.1
-  // was recorded in `audit_logs.ip_address` as 203.0.113.99 — an attacker-chosen
-  // value. That makes the per-IP login rate limit bypassable by rotating the
-  // header and makes every audit row unattributable (audit finding D-10).
-  //
-  // On the 妙搭 platform this default is presumably harmless because their ingress
-  // overwrites the header. It is NOT safe for a standalone / VPS deployment, which
-  // is why the application must own this setting explicitly.
-  //
-  // Default (TRUST_PROXY unset -> false) is the safe one: Express ignores the
-  // header and `req.ip` is the unforgeable socket address.
   app.set('trust proxy', trustProxy);
+
+  // ---------------------------------------------------------------------------
+  // Request parsing — same three parsers, same limit, same order as the platform
+  // ---------------------------------------------------------------------------
+  // `cookie-parser` is what makes `req.cookies` exist, which both the CSRF check
+  // and the session lookup read. The parsers are registered here, after
+  // `NestFactory.create()` and before `listen()`, so they run ahead of Nest's own
+  // built-in body parser — which skips a body another parser already consumed.
+  // That ordering is why the observed effective limit is 1mb and not Nest's 100kb
+  // default; measured on the platform build: a 900KB body was accepted and a
+  // 1.5MB body was refused.
+  const bodyLimit = process.env.BODY_SIZE_LIMIT || DEFAULT_BODY_LIMIT;
+  app.use(express.json({ limit: bodyLimit }));
+  app.use(express.urlencoded({ limit: bodyLimit, extended: true }));
+  app.use(cookieParser());
 
   // ---------------------------------------------------------------------------
   // Security response headers (audit finding Q-6)
   // ---------------------------------------------------------------------------
-  // `configureApp()` does NOT install `helmet`, and neither this project's
+  // Installed FIRST of the application's own middleware so that every response it
+  // can influence carries them — including the ones produced by the parsers above
+  // (a 413 from an oversized body) and by the SPA fallback.
+  //
+  // `configureApp()` did NOT install `helmet`, and neither this project's
   // `package.json` nor the platform package depends on it (verified). Before this
   // middleware the application sent NO security headers at all: no nosniff, no
-  // frame protection, no referrer policy, no HSTS, no CSP - and it advertised
+  // frame protection, no referrer policy, no HSTS, no CSP — and it advertised
   // itself via `X-Powered-By`.
   //
   // Deliberately dependency-free; see security-headers.middleware.ts for why
@@ -626,12 +552,31 @@ async function bootstrap() {
   // routes.
   app.use(securityHeaders);
 
+  // ---------------------------------------------------------------------------
+  // CSRF token issuance (page routes only)
+  // ---------------------------------------------------------------------------
+  // Must run before the router, because the value it puts on `res.locals` is read
+  // by the view render several steps later. See csrf-token.middleware.ts.
+  app.use(csrfTokenMiddleware);
+
+  // ---------------------------------------------------------------------------
+  // Legacy platform URLs, then the built client's assets
+  // ---------------------------------------------------------------------------
+  app.use(legacyPlatformPathRedirect);
+  const clientDir = join(process.cwd(), 'dist/client');
+  app.use(clientAssetMiddleware(clientDir));
+
   const host = process.env.SERVER_HOST || '0.0.0.0';
   const parsedPort = Number(process.env.PORT || process.env.SERVER_PORT || '3000');
   const port = Number.isFinite(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 3000;
 
-  // 注册视图引擎, 渲染 client 目录下的 html 文件
-  app.setBaseViewsDir(join(process.cwd(), 'dist/client'));
+  // The SPA fallback renders `client/index.html` (with the CSRF token merged in
+  // from `res.locals`). The directory is `dist/client` relative to the process
+  // working directory, and the app starts with cwd = `dist/` — the Dockerfile sets
+  // that working directory explicitly, and `tests/cover-asset-root.test.mjs` boots
+  // the compiled server from a scratch directory to prove the resolution is
+  // cwd-relative rather than module-relative.
+  app.setBaseViewsDir(clientDir);
   app.setViewEngine('html');
   app.engine('html', hbsExpressEngine);
 
@@ -683,6 +628,7 @@ async function bootstrap() {
   logger.log(`trust proxy: ${describeTrustProxy(trustProxy)}`);
   logger.log(describeSecurityHeaders());
   logger.log(shutdownTimeout.description);
+  logger.log(`request body limit: ${bodyLimit}`);
   logger.log(
     `environment: NODE_ENV=${process.env.NODE_ENV ?? 'undefined'} ` +
       `HTTPS_ENABLED=${process.env.HTTPS_ENABLED ?? 'unset'}`,

@@ -56,9 +56,9 @@
  * too, and this check degrades to "the client claims the file starts with PDF
  * magic". Making it authoritative requires the bytes to be read server-side —
  * either by uploading through the server or by re-reading the stored object after
- * upload. That requires the platform object-store integration
- * (`@lark-apaas/file-service` / dataloom), which is not reachable in this
- * environment; see `registerFile()` in resources.service.ts.
+ * upload. That requires an object-storage backend that can read the stored bytes
+ * (see `server/modules/files/object-storage.ts`), and this deployment has none;
+ * see `registerFile()` in resources.service.ts.
  */
 
 /** Maximum length of a sanitised file name, extension included. */

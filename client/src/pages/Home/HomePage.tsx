@@ -9,7 +9,7 @@ import {
   Calendar,
   BookOpen,
 } from 'lucide-react';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@client/src/lib/logger';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@client/src/components/ui/card';
 import { Skeleton } from '@client/src/components/ui/skeleton';

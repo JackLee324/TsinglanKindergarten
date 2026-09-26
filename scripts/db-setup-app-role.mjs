@@ -21,7 +21,7 @@
  *
  * 角色名怎么来的（已实测确认）
  * ---------------------------
- * `@lark-apaas/nestjs-datapaas` 的 SqlExecutionContextMiddleware 按连接串的
+ * 角色开关（现在由本仓库自己的 server/database/database-role.middleware.ts 提供）按连接串的
  * `schema` 查询参数拼角色名：`anon_${roleSchema}`、`authenticated_${roleSchema}`、
  * `service_role_${roleSchema}`（dist/index.js:692-702 与 790-798）。
  * 连接串**不带** `?schema=` 时 roleSchema 为空字符串 ⇒ 空后缀角色，

@@ -1,7 +1,7 @@
 import React from 'react';
 import { AlertTriangle, RefreshCw, Home, LogIn } from 'lucide-react';
 import { ErrorBoundary } from 'react-error-boundary';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@client/src/lib/logger';
 import { useNavigate } from 'react-router-dom';
 
 interface AppErrorFallbackProps {

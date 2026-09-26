@@ -39,12 +39,13 @@
 #
 # POLICY WAIVER TABLE (the ONLY WARNs that do not block READY)
 # ------------------------------------------------------------
-#   STORAGE   Object storage is reached through a per-request platform context
-#             (dataloom, via @lark-apaas/file-service). A standalone/CI box has
-#             no such context BY CONSTRUCTION, so this check can never observe it
-#             here. The application refuses to invent a URL (503
-#             STORAGE_NOT_CONFIGURED / STORAGE_UNAVAILABLE), so the failure mode
-#             is a visible 503 rather than a fake link. Waived and named.
+#   STORAGE   No object-storage backend is registered in this deployment
+#             (server/modules/files/object-storage.ts binds the honest
+#             UnconfiguredObjectStorage by default). The application refuses to
+#             invent a URL (503 STORAGE_NOT_CONFIGURED / STORAGE_UNAVAILABLE), so
+#             the failure mode is a visible 503 rather than a fake link. Wiring a
+#             real backend (S3 / R2 / MinIO) is a deployment task, not a code gap,
+#             so this is waived and named.
 #             If storage is a HARD launch requirement for your deployment, set
 #             PREDEPLOY_REQUIRE_STORAGE=1 to promote this WARN to a FAIL.
 #   NPM AUDIT `npm audit` needs the registry. An air-gapped or slow box cannot run
@@ -370,10 +371,13 @@ fi
 note ""
 note "Required variables (names and presence only — no value is ever printed):"
 
-# The name the platform runtime actually reads is SUDA_DATABASE_URL
-# (@lark-apaas/fullstack-nestjs-core/dist/index.js:36435
-#  -> connectionString: process.env.SUDA_DATABASE_URL ?? "").
-# DATABASE_URL / MIGRATION_DATABASE_URL are the migration + tooling names.
+# The application resolves the connection string from, in this order:
+# DATABASE_URL, POSTGRES_CONNECTION_STRING, POSTGRESQL_CONNECTION_STRING,
+# POSTGRES_URI, SUDA_DATABASE_URL
+# (server/database/database.module.ts, resolveDatabaseUrl()).
+# SUDA_DATABASE_URL is the platform-era name the container entrypoint still
+# exports, so it keeps working; DATABASE_URL is the preferred one.
+# MIGRATION_DATABASE_URL is the migration tooling override.
 DB_URL_CHOSEN=""
 for candidate in MIGRATION_DATABASE_URL DATABASE_URL SUDA_DATABASE_URL AUTHZ_TEST_DB; do
   if [ -n "$(env_value "$candidate")" ]; then
@@ -619,7 +623,7 @@ fi
 # =============================================================================
 # 6. storage configuration
 # =============================================================================
-section "6. Object storage (@lark-apaas/file-service / dataloom)"
+section "6. Object storage (ObjectStorage backend / STORAGE_NOT_CONFIGURED)"
 
 if helper_json storage; then
   case "$HELPER_STATUS" in
@@ -872,16 +876,15 @@ else
     else
       pass "dist/client has $BUILD_ENTRY_COUNT client artifact(s)"
     fi
-    # NOTE: the SPA shell is rendered by the view engine through the platform
-    # package, not read from a fixed path on disk, and the platform's public-asset
-    # middleware deliberately skips the `assets/` prefix because hashed bundles are
-    # served from the platform CDN
-    # (@lark-apaas/fullstack-nestjs-core/dist/index.js, PLATFORM_PREFIXES).
-    # A request for /assets/* therefore returns the HTML shell by design, both in
-    # production and in local verification, so the shell is checked over HTTP below
-    # rather than by looking for dist/client/index.html.
-    note "SPA shell is verified over HTTP in check 9 (the platform renders it; it is"
-    note "not a fixed file on disk, and /assets/* is served from the platform CDN)"
+    # NOTE: the SPA shell is rendered by the HBS view engine from the built
+    # client/index.html, which the build publishes to dist/dist/client/ — that is
+    # <cwd>/dist/client at run time, because the process starts with cwd = dist/.
+    # It is therefore NOT at dist/client/index.html, and looking for it there
+    # would produce a false failure. Static assets are served from the same
+    # directory by express.static (server/main.ts). The shell itself is exercised
+    # over HTTP below.
+    note "SPA shell is verified over HTTP in check 9 (dist/dist/client/index.html,"
+    note "rendered by HBS; static assets come from the same directory)"
   fi
 
   # Freshness: any source file newer than the build output means dist/ is stale.

@@ -9,11 +9,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
-import {
-  DRIZZLE_DATABASE,
-  DrizzleDatabaseManager,
-  type PostgresJsDatabase,
-} from '@lark-apaas/fullstack-nestjs-core';
+import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@server/database/database.module';
 import { scryptSync, randomBytes, timingSafeEqual } from 'crypto';
 
 import { SessionService } from './session.service';
@@ -77,17 +73,20 @@ interface RawSqlClient {
  * The raw postgres.js client behind a drizzle instance.
  *
  * Drizzle's postgres-js driver attaches it as `$client` (a documented drizzle
- * accessor). The platform's drizzle monkey patch hooks
+ * accessor). This application's own per-request role preamble hooks
  * `PostgresJsPreparedQuery.prototype.execute` — drizzle query objects only — so
  * statements issued on this client are the only ones NOT preceded by the
- * platform's `SET LOCAL ROLE 'anon_'` preamble. That is what makes an explicit
- * role switch possible at all; see writePasswordReset.
+ * `SET LOCAL ROLE 'anon_'` preamble. That is what makes an explicit role switch
+ * possible at all; see writePasswordReset and
+ * `server/database/request-database-role.ts`.
  *
- * IMPORTANT: this must be called with `DrizzleDatabaseManager.getDatabase()` —
- * the real drizzle instance — NOT with the injected `DRIZZLE_DATABASE`, which is
- * a `Proxy` that rebinds every function-valued property
- * (`typeof sql === 'function'`, so `$client` comes back as a bound copy whose
- * `begin`/`unsafe` are gone). Verified against the running server.
+ * IMPORTANT: this must be called with the INJECTED `DRIZZLE_DATABASE`, which is
+ * now the real drizzle instance. It used to be the platform's `Proxy`, which
+ * rebound every function-valued property, so `$client` came back as a bound copy
+ * whose `begin`/`unsafe` were gone — which is why this file used to reach the
+ * instance through the platform's `DrizzleDatabaseManager`. That indirection is
+ * gone: the token resolves to the object `server/database/database.module.ts`
+ * built, so `$client` is usable directly.
  *
  * Fails loudly rather than quietly writing as the wrong role.
  */
@@ -156,11 +155,6 @@ export class AuthService implements OnModuleInit {
     private readonly mfaService: MfaService,
     private readonly authorization: AuthorizationService,
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
-    // The platform's database manager, injected for ONE purpose: it exposes the
-    // real drizzle instance, whose `$client` is the raw postgres.js client. The
-    // `DRIZZLE_DATABASE` token above is a Proxy that rebinds function-valued
-    // properties, which strips `$client` of its methods (see rawPostgresClient).
-    private readonly dbManager: DrizzleDatabaseManager,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -682,7 +676,7 @@ export class AuthService implements OnModuleInit {
     status: string;
     mustChangePassword: boolean;
   } | null> {
-    const client = rawPostgresClient(this.dbManager.getDatabase());
+    const client = rawPostgresClient(this.db);
 
     return client.begin(async (tx) => {
       await tx.unsafe("SET LOCAL ROLE 'authenticated_'");
@@ -891,10 +885,12 @@ export class AuthService implements OnModuleInit {
    * WHY RAW SQL AND AN EXPLICIT ROLE SWITCH (not an incidental choice)
    * ------------------------------------------------------------------
    * In this standalone deployment every request's database work runs under the
-   * ANONYMOUS database role. The platform's SqlExecutionContextMiddleware installs
-   * a per-request preamble (`SET LOCAL app.user_id = ''; SET LOCAL ROLE 'anon_'`),
-   * and its drizzle monkey patch re-applies that preamble before EVERY drizzle
-   * statement, each in a nested transaction. Migration 0005 then grants `anon_`
+   * ANONYMOUS database role. `server/database/database-role.middleware.ts` puts a
+   * per-request preamble (`SET LOCAL app.user_id = ''; SET LOCAL ROLE 'anon_'`) on
+   * the async context, and the drizzle patch in
+   * `server/database/request-database-role.ts` (the platform's, reproduced)
+   * re-applies it before EVERY drizzle statement, each in a nested transaction.
+   * Migration 0005 then grants `anon_`
    * UPDATE on exactly three columns of `teachers` — last_login_at,
    * failed_login_attempts, locked_until — because the login flow needs those and
    * nothing else.
@@ -943,7 +939,7 @@ export class AuthService implements OnModuleInit {
     ipAddress: string;
     userAgent?: string;
   }): Promise<void> {
-    const client = rawPostgresClient(this.dbManager.getDatabase());
+    const client = rawPostgresClient(this.db);
 
     await client.begin(async (tx) => {
       // The role NAME is the one migrations 0004/0005 create for this deployment

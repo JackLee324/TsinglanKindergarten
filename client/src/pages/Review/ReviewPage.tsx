@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 
-import { logger } from '@lark-apaas/client-toolkit/logger';
-import { Table, type TableProps } from '@lark-apaas/client-toolkit/antd-table';
+import { logger } from '@client/src/lib/logger';
+import { Table, type TableProps } from 'antd';
 import { Check, History, RotateCcw, X, Eye } from 'lucide-react';
 import { toast } from 'sonner';
 

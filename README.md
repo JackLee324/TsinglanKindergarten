@@ -1,8 +1,10 @@
 # 清澜山幼儿园教师课程资源平台
 
 Pre-K / K 双轨课程资源管理平台：资源上传、审核发布、权限控制、审计留痕，中英双语。
-部署形态为字节跳动 **妙搭（miaoda）aPaaS** 应用（NestJS 服务端 + React 前端），
-同时支持独立部署（需正确配置反向代理与环境变量）。
+部署形态是**独立的** NestJS 服务端 + React 前端，跑在自有容器里（Zeabur / Docker /
+VPS），需要自行配置反向代理与环境变量。妙搭（miaoda）aPaaS 平台依赖已**完全移除**：
+`package.json` 里没有任何 `@lark-apaas/*`，服务端与客户端的平台导入数为 0，
+证据见 `evidence/deplatforming/`。
 
 > **生产就绪状态：NOT READY。** 上线前必须完成 `PRODUCTION_RELEASE_REPORT.md`
 > 中列出的阻塞项，尤其是**生产库备份/恢复演练**——该演练从未执行过。
@@ -15,7 +17,7 @@ Pre-K / K 双轨课程资源管理平台：资源上传、审核发布、权限�
 | 后端 | NestJS 10（Express adapter）· Drizzle ORM 0.44 · postgres-js |
 | 数据库 | PostgreSQL（平台托管；本地可用内置实例） |
 | 认证 | 用户名 + 密码（scrypt N=16384,r=8,p=1,keylen=32）· HttpOnly Cookie 会话 · TOTP MFA |
-| 平台 | `@lark-apaas/*`（fullstack-nestjs-core、nestjs-datapaas、file-service、dataloom…） |
+| 平台依赖 | **无** —— `@lark-apaas/*` 已全部移除；对象存储改为可插拔的 `ObjectStorage` 接口（当前默认实现诚实返回 503 STORAGE_NOT_CONFIGURED） |
 
 ## 环境要求
 
@@ -88,9 +90,7 @@ npm run dev                  # 前端 + 后端
 | `eslint` | `eslint . --quiet` | — |
 | `stylelint` | `stylelint client/src/**/*.css --quiet` | — |
 | `predeploy` | `bash ./scripts/predeploy-check.sh` | ⚠️ **该文件当前不存在**（见「已知限制」） |
-| `gen:db-schema` | `npx -y @lark-apaas/db-schema-sync@latest …` | 从平台库**反向生成** `server/database/schema.ts`（联网） |
 | `gen:openapi` | `echo 'UNSUPPORTED, SKIP'` | 占位 |
-| `postinstall` | `node ./scripts/postinstall.mjs` | 受控的平台插件初始化（无 `capabilities/` 时跳过，绝不联网下载同名第三方包） |
 
 直接调用（无 npm 别名）：
 

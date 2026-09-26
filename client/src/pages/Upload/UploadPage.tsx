@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@client/src/lib/logger';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { useNavigate, useSearchParams } from 'react-router-dom';

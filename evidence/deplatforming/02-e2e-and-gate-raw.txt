@@ -1,0 +1,125 @@
+================================================================================
+脱平台证据 2/4 —— E2E 与门禁原始输出（逐阶段）
+生成时间: 2026-09-26 10:24:12
+================================================================================
+
+### 基线（改动前）
+--- E2E: 31/31 ---
+（基线 E2E 记录：pass=31 fail=0，/root 文本 63 字符，GET / -> 302 -> /app/）
+
+--- HTTP 门禁: 红 ---
+  npm test                 FAIL
+  typecheck server         PASS
+  typecheck client         PASS
+  npm run build            PASS
+  api-contracts             matched
+  authz-http               FAIL
+  hardening                pass=10 fail=0
+  mfa                      FAIL
+  security-headers         FAIL
+  files-http               FAIL
+  naming-http              FAIL
+  ❌ 存在失败项
+
+### Stage 1（服务端迁移完成）
+=== RESULT ===
+  pass=32 fail=0
+  npm test                 # tests 230 # pass 230 # fail 0 
+  typecheck server         PASS
+  typecheck client         PASS
+  npm run build            PASS
+  api-contracts             matched
+  authz-http               pass=74 fail=0
+  hardening                pass=10 fail=0
+  mfa                      FAIL
+  security-headers         pass=20 fail=0
+  files-http               FAIL
+  naming-http              pass=49 fail=0
+  ❌ 存在失败项
+
+  （Stage 1 门禁的 mfa 失败是环境变量缺失所致：服务端未设 MFA_ENFORCE_SUPER_ADMIN=true。
+    补上后同一份代码 mfa=55/55，见 Stage 4 的门禁输出。）
+
+### Stage 2（客户端迁移完成）
+=== RESULT ===
+  pass=32 fail=0
+  ✅ E2E 验收通过
+
+### Stage 3（构建迁移完成）
+=== RESULT ===
+  pass=36 fail=0
+  ✅ E2E 验收通过
+
+### Stage 4（平台包已从 package.json / lockfile 删除）
+=== 0. 前置 ===
+  PASS  docker 守护进程可用
+=== 1. 构建镜像（这会真正跑一遍 Dockerfile）===
+  PASS  镜像构建成功
+=== 2. 启动容器 ===
+  PASS  容器已启动
+  PASS  健康检查 200
+=== 3. 根路径直接渲染（白屏缺陷 #2 的反面）===
+  PASS  GET /         状态码 -> 200
+  PASS  GET /         没有重定向（basename 已是 /） -> 
+  PASS  GET /login    状态码 -> 200
+  PASS  GET /app/login（平台期老书签）跳转目标 -> http://127.0.0.1:3411/login
+  PASS  GET /api/health 不被跳转 -> 200
+=== 4. 静态资源（白屏缺陷 #1）===
+  PASS  首页是 HTML -> 1
+  PASS  /bundle/index-C2xKCImL.js -> application/javascript; charset=UTF-8
+  PASS  /bundle/index-CpfzE3MY.css -> text/css; charset=UTF-8
+  PASS  入口 HTML 不再注入 polyfills.js -> 0
+=== 5. 安全响应头 ===
+  PASS  nosniff
+  PASS  X-Frame-Options
+  PASS  HSTS（HTTPS_ENABLED=true 时应存在）
+  PASS  X-Powered-By 已移除
+=== 6. 浏览器渲染（唯一能发现白屏的断言）===
+  PASS  根路径直接渲染出内容（#root 文本 58 字符）
+  PASS  浏览器 document.title -> <title>TsinglanKindergarten - 清澜山幼儿园课程资源平台</title>
+=== 6b. 脱平台：HTML 里不得残留平台注入 ===
+  PASS  服务端返回的 <title> -> <title>TsinglanKindergarten - 清澜山幼儿园课程资源平台</title>
+  PASS  HTML 里没有 {{appName}} 占位符 -> 0
+  PASS  HTML 里没有 __platform__ 注入 -> 0
+  PASS  HTML 里没有 __BASENAME__ 注入（basename 不再是 /app/） -> 0
+  PASS  HTML 里没有「妙搭」字样 -> 0
+  PASS  页面不再加载任何字节/妙搭平台的外链脚本
+=== 7. 账号与权限（真实登录）===
+  PASS  super_admin 登录 -> 201
+  PASS  super_admin 未被强制 MFA
+  PASS  登录响应含 super_admin 角色
+  PASS  super_admin -> /api/teachers -> 200
+  PASS  super_admin -> /api/resources -> 200
+  PASS  principal 登录 -> 201
+  PASS  登录响应含 principal 角色
+  PASS  principal -> /api/resources -> 200
+  PASS  principal -> /api/dashboard/stats -> 200
+  --- 提权边界：principal 不得动 super_admin ---
+  PASS  principal 重置 super_admin 密码被拒（403）
+=== 8. 优雅关闭 ===
+  PASS  SIGTERM 后退出码 -> 0
+
+=== RESULT ===
+  pass=36 fail=0
+  ✅ E2E 验收通过
+
+### Stage 4 HTTP 门禁（服务端带 MFA_ENFORCE_SUPER_ADMIN=true）
+  gate lock  acquired (exclusive advisory lock on the shared environment)
+=== 自动化测试 ===
+  npm test                 # tests 230 # pass 230 # fail 0 
+=== 类型检查 ===
+  typecheck server         PASS
+  typecheck client         PASS
+=== 构建 ===
+  npm run build            PASS
+=== 前后端 API 契约（静态检查，无需运行服务） ===
+  api-contracts             matched
+=== HTTP 验证套件（需要运行中的服务） ===
+  authz-http               pass=74 fail=0
+  hardening                pass=10 fail=0
+  mfa                      pass=55 fail=0
+  security-headers         pass=20 fail=0
+  files-http               pass=74 fail=0
+  naming-http              pass=49 fail=0
+
+  ✅ 全部通过

@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useEffect, useMemo, useState } from 'react';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { logger } from '@client/src/lib/logger';
 
 import type { AuthUser, RoleCode } from '@shared/api.interface';
 import * as api from '@client/src/api/auth';

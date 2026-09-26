@@ -95,14 +95,19 @@ for _ in $(seq 1 45); do
 done
 [ "$UP" = "1" ] && ok "健康检查 200" || { bad "健康检查未就绪"; "$DOCKER" logs --tail 30 "$NAME" 2>&1 | sed 's/^/       /'; exit 1; }
 
-echo "=== 3. 根路径跳转（白屏缺陷 #2）==="
-chk "GET /         状态码" "$(curl -sS -o /dev/null -w '%{http_code}' "$B/")" "302"
-chk "GET /         跳转目标" "$(curl -sS -o /dev/null -w '%{redirect_url}' "$B/")" "$B/app/"
-chk "GET /app/     状态码" "$(curl -sS -o /dev/null -w '%{http_code}' "$B/app/")" "200"
+echo "=== 3. 根路径直接渲染（白屏缺陷 #2 的反面）==="
+# 以前这里断言的是 302 -> /app/。那个跳转是妙搭平台把 React Router 的 basename
+# 写死成 /app/ 造成的白屏绕行；basename 现在是 /，跳转已删除，因此正确的断言变成
+# 「/ 直接 200 且没有任何重定向」。断言从 302 改成 200 不是放宽 —— 它是同一个缺陷
+# 修复后的正确形态，而且新增了「不重定向」与「老书签 /app/* 仍可达」两条。
+chk "GET /         状态码" "$(curl -sS -o /dev/null -w '%{http_code}' "$B/")" "200"
+chk "GET /         没有重定向（basename 已是 /）" "$(curl -sS -o /dev/null -w '%{redirect_url}' "$B/")" ""
+chk "GET /login    状态码" "$(curl -sS -o /dev/null -w '%{http_code}' "$B/login")" "200"
+chk "GET /app/login（平台期老书签）跳转目标" "$(curl -sS -o /dev/null -w '%{redirect_url}' "$B/app/login")" "$B/login"
 chk "GET /api/health 不被跳转" "$(curl -sS -o /dev/null -w '%{http_code}' "$B/api/health")" "200"
 
 echo "=== 4. 静态资源（白屏缺陷 #1）==="
-HTML="$(curl -sS "$B/app/")"
+HTML="$(curl -sS "$B/")"
 chk "首页是 HTML" "$(printf '%s' "$HTML" | grep -c '<div id="root">')" "1"
 for ref in $(printf '%s' "$HTML" | grep -oE '(src|href)="/[^"]+\.(js|css)"' | sed -E 's/.*="\/([^"]+)"/\1/' | sort -u); do
   CT="$(curl -sS -o /dev/null -w '%{content_type}' "$B/$ref")"
@@ -111,8 +116,14 @@ for ref in $(printf '%s' "$HTML" | grep -oE '(src|href)="/[^"]+\.(js|css)"' | se
     *.css) case "$CT" in *css*) ok "/$ref -> $CT" ;; *) bad "/$ref -> $CT (期望 css)" ;; esac ;;
   esac
 done
-# polyfills 是 document.write 动态插进来的，不在上面正则里，单独测
-chk "GET /polyfills.js 类型" "$(curl -sS -o /dev/null -w '%{content_type}' "$B/polyfills.js")" "application/javascript"
+# 平台遗留：妙搭的 Vite 预设会往 HTML 注入一段 document.write('/polyfills.js')，
+# 而 polyfills.js 又落在平台中间件跳过列表里的 assets/ 下 —— 独立部署时它 404，
+# 浏览器把 SPA 首页当脚本执行。那是白屏缺陷 #1 的另一个面。
+#
+# 现在这条断言反过来写：**产物里不应再有这个注入**。plain Vite 不产 polyfills.js，
+# 也不产这段 document.write，所以「文件不存在」+「HTML 不引用它」才是正确状态，
+# 而且比原来那条「文件类型对」更严格 —— 它同时盯住了注入本身。
+chk "入口 HTML 不再注入 polyfills.js" "$(printf '%s' "$HTML" | grep -c 'polyfills.js')" "0"
 
 echo "=== 5. 安全响应头 ==="
 HDR="$(curl -sS -D - -o /dev/null "$B/api/health" | tr -d '\r')"
@@ -143,18 +154,39 @@ t=re.sub(r'<script[\s\S]*?</script>','',seg); t=re.sub(r'<[^>]+>',' ',t)
 print(len(re.sub(r'\s+',' ',t).strip()))
 " 2>/dev/null || echo 0)
   if [ "$ROOT_LEN" -gt 20 ]; then
-    ok "根路径经跳转后渲染出内容（#root 文本 ${ROOT_LEN} 字符）"
+    ok "根路径直接渲染出内容（#root 文本 ${ROOT_LEN} 字符）"
   else
     bad "根路径渲染为空 —— 白屏。所有状态码可能仍全绿，这就是本断言的用途"
   fi
+  # 浏览器实际的 document.title。线上曾经是「妙搭应用」：平台把正确的 <title>
+  # 换成 HBS 占位符，再用一个默认值兜底。断言它现在是产品名 —— 而且是**渲染之后**
+  # 的值，所以任何在运行时改写标题的代码都会在这里露出来。
+  chk "浏览器 document.title" "$(grep -o '<title>[^<]*</title>' /tmp/qls-e2e-dom.html | head -1)" \
+    "<title>TsinglanKindergarten - 清澜山幼儿园课程资源平台</title>"
 fi
+
+echo "=== 6b. 脱平台：HTML 里不得残留平台注入 ==="
+# 「彻底移除妙搭依赖」在**用户可见层面**的验收。标题那一条之所以放在上一节，是因为
+# 它必须由浏览器渲染后取值（见那里的注释）。
+TITLE="$(printf '%s' "$HTML" | grep -o '<title>[^<]*</title>' | head -1)"
+chk "服务端返回的 <title>" "$TITLE" "<title>TsinglanKindergarten - 清澜山幼儿园课程资源平台</title>"
+chk "HTML 里没有 {{appName}} 占位符" "$(printf '%s' "$HTML" | grep -c '{{appName}}')" "0"
+chk "HTML 里没有 __platform__ 注入" "$(printf '%s' "$HTML" | grep -c '__platform__')" "0"
+chk "HTML 里没有 __BASENAME__ 注入（basename 不再是 /app/）" "$(printf '%s' "$HTML" | grep -c '__BASENAME__')" "0"
+chk "HTML 里没有「妙搭」字样" "$(printf '%s' "$HTML" | grep -c '妙搭')" "0"
+if printf '%s' "$HTML" | grep -qE 'slardar|ibytedapm|feishucdn|bytescm|bytednsdoc'; then
+  bad "页面仍在加载字节/妙搭平台的外链脚本（Slardar / Tea / performance SDK）"
+else
+  ok "页面不再加载任何字节/妙搭平台的外链脚本"
+fi
+
 
 if [ -n "$DB_URL" ]; then
   echo "=== 7. 账号与权限（真实登录）==="
   csrf_of() { grep -i 'suda-csrf-token' "$1" | awk '{print $7}' | tail -1; }
   login() {
     rm -f "$3"
-    curl -sSL -c "$3" -o /dev/null "$B/app/" 2>/dev/null
+    curl -sSL -c "$3" -o /dev/null "$B/" 2>/dev/null
     curl -sS -b "$3" -c "$3" -X POST "$B/api/auth/login" \
       -H 'Content-Type: application/json' -H "Origin: $B" \
       -H "x-suda-csrf-token: $(csrf_of "$3")" \

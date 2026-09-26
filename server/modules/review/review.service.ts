@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
-import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@lark-apaas/fullstack-nestjs-core';
+import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@server/database/database.module';
 import { resources, reviewRecords, teachers } from '@server/database/schema';
 import { eq, and, desc, count, inArray, isNull } from 'drizzle-orm';
 import type { Resource, ReviewRecord, ResourceListResponse, FolderType, ResourceStatus, ProgramCode } from '@shared/api.interface';

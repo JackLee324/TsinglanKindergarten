@@ -11,7 +11,7 @@ import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import {
   DRIZZLE_DATABASE,
   type PostgresJsDatabase,
-} from '@lark-apaas/fullstack-nestjs-core';
+} from '@server/database/database.module';
 
 import {
   teachersTable,

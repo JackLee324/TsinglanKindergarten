@@ -1,18 +1,53 @@
 {
-  "extends": "@lark-apaas/fullstack-presets/lib/simple/tsconfig/tsconfig.node.json",
+  /*
+   * The server's TypeScript settings, inlined.
+   *
+   * These values used to be inherited from
+   * `@lark-apaas/fullstack-presets/lib/simple/tsconfig/tsconfig.node.json`; they are
+   * reproduced here verbatim because the platform package that carried them is gone.
+   * `npm run type:check:server` is NOT redundant with `npm run build`: `nest build` is
+   * SWC-based and emits JavaScript for a tree that may not typecheck at all, so this
+   * is the only thing that reads the types.
+   *
+   * `experimentalDecorators` + `emitDecoratorMetadata` are required by Nest's DI, and
+   * `composite`/`declaration` are what allow this project to be referenced from
+   * tsconfig.json.
+   */
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+
+    /* Decorators — Nest's DI reads the emitted metadata. */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "importHelpers": true,
+    "incremental": true,
+    "noEmit": false,
+
+    /* Linting (unchanged from the preset — see the header) */
+    "strict": false,
+    "composite": true,
+    "declaration": true,
+    "removeComments": false,
+
+    "types": ["node"],
+
     "baseUrl": "./",
     "outDir": "./dist",
     "preserveWatchOutput": true,
     "paths": {
       "@server/*": ["server/*"],
-      "@shared/*": ["shared/*"],
+      "@shared/*": ["shared/*"]
     }
   },
+  "ts-node": { "require": ["tsconfig-paths/register"] },
   "watchOptions": {
     "excludeDirectories": ["node_modules/**"]
   },
   "include": ["server/**/*", "shared/**/*.ts"],
   // MCP UI 是独立浏览器工程，不使用服务端的 TypeScript 配置。
-  "exclude": ["server/mcp/ui", "node_modules", "dist", "client", "source_package", "**/*.spec.ts", "**/*.e2e-spec.ts"],
+  "exclude": ["server/mcp/ui", "node_modules", "dist", "client", "source_package", "**/*.spec.ts", "**/*.e2e-spec.ts"]
 }

@@ -1,0 +1,48 @@
+================================================================================
+脱平台证据 4/4 —— 数据与数据库级安全控制未变
+生成时间: 2026-09-26 10:25:39
+================================================================================
+
+=== 1. 迁移文件未被改动（0001-0008 校验和约束）===
+$ git diff --stat server/database/migrations/
+(空 = 一个字节都没改)
+
+=== 2. 数据完整性 ===
+  resources 总数                       347
+  schema_migrations 已应用              8
+  teachers 总数                        28
+  audit_logs 行数                      1501
+  super_admin 账号数                    5
+  __rbac_keeper 仍在                   1
+
+  说明：teachers 从 27 变成 28，新增的是 __qt_naming_admin_* —— 它来自**改动前那次门禁运行**
+  （naming-http 因 / 的 302 跳转 ABORTED，夹具没来得及清理）。本次改动没有新建或删除任何账号。
+  E2E 自建的 E2EAdmin / E2EPrincipal 是脚本的既定行为（每次跑都会确保存在）。
+
+=== 3. 每请求数据库角色（anon_）仍然生效 ===
+探针：对**不存在**的 teacher 发 PATCH。权限检查发生在 WHERE 之前，因此：
+  以 anon_ 执行 -> 42501 权限拒绝 -> HTTP 500；以属主/超级用户执行 -> 0 行更新 -> HTTP 404
+
+改动前（平台构建，容器 qls-test:3400）：
+  $ curl -X PATCH .../api/teachers/00000000-0000-4000-8000-000000000000 -d '{"name":"probe"}'
+  HTTP 500  {"error":{"code":"INTERNAL_ERROR",...}}
+
+改动后（本仓库构建，127.0.0.1:3211）：
+  $ curl -X PATCH .../api/teachers/00000000-0000-4000-8000-000000000000 -d '{"name":"probe"}'
+  HTTP 500  {"error":{"code":"INTERNAL_ERROR",...}}
+  服务端日志：更新教师失败 id=...: {"query":"update \"teachers\" set \"name\" = $1 ...", ... "code":"42501"}
+  grep 实测：日志段内含 \"code\":\"42501\"，即 drizzle 语句确实跑在 anon_ 角色上。
+
+  => 两个构建对同一请求给出同一状态码、同一底层错误码，说明
+     server/database/request-database-role.ts 复刻的「每请求 SET LOCAL ROLE 'anon_'」语义一致。
+
+=== 4. 其余安全控制（来自 Stage 4 门禁，全部绿）===
+  authz-http       74/74   RBAC / 越权拒绝 / 自改密码
+  hardening        10/10   审计 IP 不可伪造（D-10）+ 错误体不泄露（G-11）
+  mfa              55/55   TOTP 绑定、挑战、恢复码、强制策略
+  security-headers 20/20   nosniff / XFO / HSTS / CSP / 去 X-Powered-By
+  files-http       74/74   下载令牌、跨账号重放拒绝、存储未配置时 503 不伪造
+  naming-http      49/49   双语命名解析与非法取值拒绝
+
+=== 5. 优雅关闭契约（scripts/verify-shutdown.sh）===
+  pass=24 fail=0（退出码 0 干净 / 1 不干净、先排空再关库、双信号只跑一次）

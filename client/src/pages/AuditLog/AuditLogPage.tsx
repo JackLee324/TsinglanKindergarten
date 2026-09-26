@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Table, type TableProps } from '@lark-apaas/client-toolkit/antd-table';
-import { logger } from '@lark-apaas/client-toolkit/logger';
+import { Table, type TableProps } from 'antd';
+import { logger } from '@client/src/lib/logger';
 import { toast } from 'sonner';
 import { Search, Download, Check, X } from 'lucide-react';
 
