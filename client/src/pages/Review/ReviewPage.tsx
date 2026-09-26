@@ -23,6 +23,7 @@ import { useTranslation } from '@client/src/i18n/useTranslation';
 import { getResources } from '@client/src/api/resources';
 import { getReviewHistory, reviewResource } from '@client/src/api/review';
 import type { Resource, ResourceStatus, ReviewRecord } from '@shared/api.interface';
+import { readListResponse } from '@client/src/api/client';
 
 type TabKey = 'pending' | 'published' | 'rejected';
 
@@ -59,8 +60,9 @@ const ReviewPage: React.FC = () => {
     try {
       const status = TAB_MAP[activeTab];
       const resp = await getResources({ status, page, pageSize });
-      setData(resp.items);
-      setTotal(resp.total);
+      const listResult = readListResponse<Resource>(resp, 'resources.list(review)');
+      setData(listResult.items);
+      setTotal(listResult.total);
     } catch (error) {
       logger.error('[Review] fetch failed', String(error));
       toast.error(t('common.failed'));

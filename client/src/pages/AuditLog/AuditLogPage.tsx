@@ -17,6 +17,7 @@ import {
 import { Badge } from '@client/src/components/ui/badge';
 import { PageHeader } from '@client/src/components/ui/page-header';
 import { useTranslation } from '@client/src/i18n/useTranslation';
+import { readListResponse } from '@client/src/api/client';
 import * as auditApi from '@client/src/api/audit';
 
 import type {
@@ -127,8 +128,9 @@ const AuditLogPage: React.FC = () => {
       if (endDate) params.endDate = endDate;
 
       const resp = await auditApi.getAuditLogs(params);
-      setItems(resp.items);
-      setTotal(resp.total);
+      const listResult = readListResponse<AuditLog>(resp, 'audit.list');
+      setItems(listResult.items);
+      setTotal(listResult.total);
     } catch (err) {
       logger.error('[AuditLog] Failed to fetch logs', String(err));
       toast.error(t('common.error'));

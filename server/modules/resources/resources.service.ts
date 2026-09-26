@@ -61,6 +61,7 @@ import {
   normalizeTheme,
   themeDbValue,
 } from '@shared/curriculum';
+import { isPlatformAdmin } from '@shared/rbac';
 import {
   describeCoverAssetsResolution,
   describeMissingCoverAsset,
@@ -68,7 +69,6 @@ import {
   type CoverAssetsFound,
 } from '@server/modules/health/cover-assets';
 
-const ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
 
 /**
  * A request's curriculum address, resolved to canonical tokens.
@@ -253,25 +253,26 @@ export class ResourcesService {
   private async isAdminTeacher(teacherId: string): Promise<boolean> {
     const teacher = await this.getTeacherById(teacherId);
     if (!teacher) return false;
-    return ADMIN_ROLES.some((r: string) => teacher.roles.includes(r));
+    return isPlatformAdmin((teacher.roles ?? []) as RoleCode[]);
   }
 
   /**
-   * Recycle-bin administration: business admins (园长/教学主任) plus super_admin.
+   * Recycle-bin administration: the same platform administrators.
    *
-   * `isAdminTeacher()` intentionally stays business-only, so the EXISTING
-   * delete/update checks are unchanged. super_admin is accepted here because
-   * listing and restoring from the recycle bin are recovery operations: refusing
-   * the platform's highest-privilege account the ability to undo a mistaken
-   * deletion would be a safety regression, not a security gain.
+   * This used to be a separate expression that accepted `super_admin` while
+   * `isAdminTeacher()` did not, on the reasoning that super_admin is a technical
+   * account rather than a "business" one. That split is what made the platform
+   * unusable for a super_admin: it could empty the recycle bin but not open a
+   * subject page. Recovery operations are just one instance of the general rule
+   * in `PLATFORM_ADMIN_ROLES` above — an account that holds every permission at
+   * scope ALL must not be refused the ability to act on the whole curriculum.
+   *
+   * Kept as a named function (rather than folded away) because the call sites read
+   * better for it, and because a future product decision to narrow super_admin
+   * back to a technical role has exactly one place to land.
    */
   private async isRecycleBinAdmin(teacherId: string): Promise<boolean> {
-    const teacher = await this.getTeacherById(teacherId);
-    if (!teacher) return false;
-    return (
-      ADMIN_ROLES.some((r: string) => teacher.roles.includes(r)) ||
-      teacher.roles.includes('super_admin')
-    );
+    return this.isAdminTeacher(teacherId);
   }
 
   /**
@@ -398,8 +399,8 @@ export class ResourcesService {
     if (teacherRows.length === 0) return null;
     const roles: string[] = teacherRows[0].roles ?? [];
 
-    // 园长 / 教学主任：全部通过
-    if (ADMIN_ROLES.some((r: string) => roles.includes(r))) {
+    // 园长 / 教学主任 / 超级管理员：全部通过
+    if (isPlatformAdmin(roles as RoleCode[])) {
       return sql`true`;
     }
 
@@ -579,8 +580,8 @@ export class ResourcesService {
 
       const roles: string[] = teacherRows[0].roles ?? [];
 
-      // 园长 / 教学主任：全部通过
-      if (ADMIN_ROLES.some((r: string) => roles.includes(r))) {
+      // 园长 / 教学主任 / 超级管理员：全部通过
+      if (isPlatformAdmin(roles as RoleCode[])) {
         return true;
       }
 

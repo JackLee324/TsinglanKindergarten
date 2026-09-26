@@ -38,6 +38,7 @@ import TeacherFormDialog from './TeacherFormDialog';
 import { ROLE_CODES } from '@shared/api.interface';
 
 import type { RoleCode, Teacher } from '@shared/api.interface';
+import { readListResponse } from '@client/src/api/client';
 
 const ROLE_BADGE_COLORS: Record<RoleCode, string> = {
   super_admin: 'bg-rose-100 text-rose-700 border-rose-300',
@@ -104,8 +105,9 @@ const TeacherAdminPage: React.FC = () => {
         params.status = statusFilter as 'active' | 'inactive';
 
       const resp = await teachersApi.getTeachers(params);
-      setItems(resp.items);
-      setTotal(resp.total);
+      const listResult = readListResponse<Teacher>(resp, 'teachers.list');
+      setItems(listResult.items);
+      setTotal(listResult.total);
     } catch (err) {
       logger.error('[TeacherAdmin] Failed to fetch teachers', String(err));
       toast.error(t('common.error'));

@@ -47,7 +47,6 @@ import axios, { type AxiosError, type AxiosInstance } from 'axios';
  */
 
 export const AUTH_UNAUTHORIZED_EVENT = 'qls:auth:unauthorized';
-
 /** The token travels in the same cookie/header names the server issues and checks. */
 export const CSRF_COOKIE_NAME = 'suda-csrf-token';
 export const CSRF_HEADER_NAME = 'x-suda-csrf-token';
@@ -106,6 +105,53 @@ function createHttpClient(): AxiosInstance {
 }
 
 export const axiosForBackend = createHttpClient();
+
+/**
+ * Was this "response" actually the server refusing the request?
+ *
+ * Needed because of the deliberate 403 behaviour documented above: a 403 arrives
+ * at the call site as a RESOLVED axios response, not as a rejection. Every caller
+ * that writes `const { items } = await api.list()` therefore reads `undefined`
+ * the moment the server says no, and the ordinary `try/catch` around it never
+ * runs — the failure is invisible until something downstream touches it.
+ *
+ * That is not theoretical. On the deployed instance the subject pages did exactly
+ * this and died with
+ *   TypeError: Cannot read properties of undefined (reading 'length')
+ * at `pages/Subject/SubjectPage.tsx:252` (`resources.length === 0`), rendering the
+ * full-page 「页面出现错误」 instead of an empty or "no permission" state.
+ */
+export function isForbiddenResponse(resp: unknown): boolean {
+  return (
+    !!resp &&
+    typeof resp === 'object' &&
+    (resp as { status?: unknown }).status === 403
+  );
+}
+
+/**
+ * Read `{ items, total }` out of a list response, tolerating the resolved-403 case.
+ *
+ * Use this instead of destructuring `resp.items` directly. A 403 becomes an empty
+ * list plus an explicit `forbidden: true`, so a page can say "no permission"
+ * rather than crash — and, critically, so the failure is never silent: it is
+ * logged here even if the caller ignores the flag.
+ */
+export function readListResponse<T>(
+  resp: unknown,
+  context: string,
+): { items: T[]; total: number; forbidden: boolean } {
+  if (isForbiddenResponse(resp)) {
+    logger.warn(`[API] ${context}: forbidden (403) — list treated as empty`);
+    return { items: [], total: 0, forbidden: true };
+  }
+  const body = (resp ?? {}) as { items?: unknown; total?: unknown };
+  return {
+    items: Array.isArray(body.items) ? (body.items as T[]) : [],
+    total: typeof body.total === 'number' ? body.total : 0,
+    forbidden: false,
+  };
+}
 
 export const handleApiError = (error: unknown, context: string): never => {
   const err = error as AxiosError;

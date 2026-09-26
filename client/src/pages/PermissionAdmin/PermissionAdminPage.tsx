@@ -11,6 +11,7 @@ import { Badge } from '@client/src/components/ui/badge';
 import { PageHeader } from '@client/src/components/ui/page-header';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import * as teachersApi from '@client/src/api/teachers';
+import { readListResponse } from '@client/src/api/client';
 import PermissionMatrix from './PermissionMatrix';
 
 import type {
@@ -146,7 +147,7 @@ const PermissionAdminPage: React.FC = () => {
           pageSize: 100,
           status: 'active',
         });
-        setTeachers(resp.items);
+        setTeachers(readListResponse<Teacher>(resp, 'teachers.list(permissions)').items);
       } catch (err) {
         logger.error('[PermissionAdmin] Failed to load teachers', String(err));
       } finally {

@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@client/src/components
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import { deleteResource, getMyResources, submitReview } from '@client/src/api/resources';
 import type { Resource, ResourceStatus } from '@shared/api.interface';
+import { readListResponse } from '@client/src/api/client';
 
 const STATUS_TABS: { key: ResourceStatus | 'all'; zh: string; en: string }[] = [
   { key: 'all', zh: '全部', en: 'All' },
@@ -68,8 +69,9 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
         page,
         pageSize,
       });
-      setData(resp.items);
-      setTotal(resp.total);
+      const listResult = readListResponse<Resource>(resp, 'resources.list(mine)');
+      setData(listResult.items);
+      setTotal(listResult.total);
     } catch (error) {
       logger.error('[MyResources] fetch failed', String(error));
       toast.error(t('common.failed'));

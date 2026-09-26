@@ -120,6 +120,47 @@ export function hasAnyRole(
 }
 
 /**
+ * Roles that see and manage the WHOLE curriculum, at every program and subject.
+ *
+ * `super_admin` is included because the product already declares, in two places,
+ * that it holds every permission at every scope:
+ *
+ *   * this file — super_admin "always holds every permission at scope ALL";
+ *   * `server/modules/authz/authorization.service.ts` — returns `true` before any
+ *     scope check, which is what lets `@RequirePermission()` admit it.
+ *
+ * `server/modules/resources/resources.service.ts` used to answer the same question
+ * with its own narrower `ADMIN_ROLES = ['principal','curriculum_director']` that
+ * simply omitted super_admin. That was a live outage, not a theoretical one: the
+ * platform's highest-privilege account — and the ONLY account a fresh deployment
+ * has, because `scripts/provision-super-admin.mjs` defaults to `--role super_admin`
+ * and `entrypoint.sh` creates the initial admin through that same default — was
+ * treated as an ordinary teacher with no `subject_permissions` rows, so EVERY
+ * subject page answered
+ *
+ *     403 {"error":{"message":"无该科目查看权限"}}
+ *
+ * The client resolved that 403 (see the interceptor note in
+ * `client/src/api/client.ts`), read `resp.items` as `undefined`, and crashed at
+ * `client/src/pages/Subject/SubjectPage.tsx:252` with
+ * "Cannot read properties of undefined (reading 'length')" — the full-page
+ * 「页面出现错误」 the deployment owner reported. Verified against the running
+ * deployment before the fix.
+ *
+ * It lives HERE rather than in the service so there is exactly one answer to
+ * "is this account a curriculum administrator". Three independent role models in
+ * one repository (the client gates, authorization.service.ts, and
+ * resources.service.ts) is precisely how this defect happened.
+ */
+export const PLATFORM_ADMIN_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
+
+/** Does this role set contain a platform-wide curriculum administrator? */
+export function isPlatformAdmin(roles: readonly RoleCode[]): boolean {
+  if (roles.includes(SUPER_ADMIN_ROLE)) return true;
+  return PLATFORM_ADMIN_ROLES.some((r) => roles.includes(r));
+}
+
+/**
  * Rank is used ONLY for the "an administrator may not grant a role at or above
  * their own level" rule. It is deliberately NOT used to decide whether a
  * permission is allowed — that is what the permission catalog is for. Hard-coding

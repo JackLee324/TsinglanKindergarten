@@ -17,6 +17,7 @@ import { ResourceCard } from '@client/src/components/resource-card';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import { resources as resourcesApi } from '@client/src/api';
 import type { FolderType, Resource } from '@shared/api.interface';
+import { readListResponse } from '@client/src/api/client';
 import {
   FOLDER_TYPES,
   findNode,
@@ -39,6 +40,8 @@ const SubjectPage: React.FC = () => {
   const [semester, setSemester] = useState<string>('');
   const [weekNumber, setWeekNumber] = useState<string>('');
   const [resources, setResources] = useState<Resource[]>([]);
+  // 服务端拒绝时（403）不能说成「暂无资源」—— 那是在撒谎。单独记一个状态。
+  const [forbidden, setForbidden] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
 
   // Parse program and subject from pathname (routes use literal segments, not params)
@@ -161,7 +164,11 @@ const SubjectPage: React.FC = () => {
         if (weekNumber) paramsObj.weekNumber = Number(weekNumber);
 
         const resp = await resourcesApi.getResources(paramsObj);
-        if (mounted) setResources(resp.items);
+        if (mounted) {
+          const page = readListResponse<Resource>(resp, 'resources.list(subject)');
+          setResources(page.items);
+          setForbidden(page.forbidden);
+        }
       } catch (err) {
         logger.error('Failed to load resources', String(err));
         if (mounted) setResources([]);
@@ -255,10 +262,10 @@ const SubjectPage: React.FC = () => {
                       <PackageOpen className="size-6 text-muted-foreground" />
                     </div>
                     <p className="text-base font-medium text-foreground">
-                      {t('resource.noResources')}
+                      {forbidden ? t('unauthorized.title') : t('resource.noResources')}
                     </p>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      {t('resource.noResourcesDesc')}
+                      {forbidden ? t('unauthorized.subtitle') : t('resource.noResourcesDesc')}
                     </p>
                   </div>
                 ) : (
