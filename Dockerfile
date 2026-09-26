@@ -76,7 +76,7 @@ COPY package.json package-lock.json .npmrc ./
 COPY scripts ./scripts
 
 RUN npm config set registry "$NPM_REGISTRY" \
- && npm ci --no-audit --no-fund --registry="$NPM_REGISTRY"
+ && npm ci --include=dev --no-audit --no-fund --registry="$NPM_REGISTRY"
 
 # Sources. Ordered so the most frequently edited trees come last.
 COPY tsconfig.json tsconfig.node.json tsconfig.app.json nest-cli.json ./
