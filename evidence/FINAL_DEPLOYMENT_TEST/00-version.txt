@@ -1,0 +1,17 @@
+=== 00-version.txt ===
+generated: 2026-09-26T01:06:18Z
+--- git remote -v ---
+origin	https://github.com/JackLee324/TsinglanKindergarten.git (fetch)
+origin	https://github.com/JackLee324/TsinglanKindergarten.git (push)
+--- git branch --show-current ---
+main
+--- git rev-parse HEAD ---
+ee59a05ee43298a6a39bb3dba90dab84d0c9fb18
+--- git status --short ---
+?? evidence/FINAL_DEPLOYMENT_TEST/
+--- HEAD log ---
+ee59a05 feat(deploy): optional principal account + full E2E deployment verification
+1378262 feat(auth): make super_admin MFA enforcement configurable, default OFF (owner decision)
+98a7bd0 fix(deploy): redirect / to /app/ so the root URL stops rendering blank
+
+CURRENT_COMMIT=ee59a05ee43298a6a39bb3dba90dab84d0c9fb18

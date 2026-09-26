@@ -145,6 +145,19 @@ if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
     echo "[entrypoint] ⚠️ 若上面显示没有可登录的 super_admin，请在浏览器完成 MFA 绑定；"
     echo "[entrypoint]    或设置 INITIAL_ADMIN_USER / INITIAL_ADMIN_PASSWORD 后重新部署。"
     echo "[entrypoint]    严格验收请运行：npm run predeploy（期望不再出现 FAIL [07]/[08]）。"
+
+    # ---------------------------------------------------------------------------
+    # 硬性断言：必须存在一个能凭密码登录的 super_admin，否则拒绝启动
+    # ---------------------------------------------------------------------------
+    # 以前这里只打印一段报告然后继续启动。真实复现证明那会造成最坏的失败形态：
+    # **容器 Up、/api/health 200、站点能打开，但没有任何管理员账号，登录永远 401**
+    # —— 部署方只能判断为"部署失败"。触发条件极常见：INITIAL_ADMIN_PASSWORD
+    # 包含用户名（如 TsinglanAdmin + TsinglanAdmin2026!），被建号脚本按弱口令拒绝。
+    # 宁可明确失败，也不要启动一个没人进得去的平台。
+    if ! node /app/scripts/assert-admin-exists.mjs; then
+      echo "[entrypoint] ✗ 拒绝启动（原因见上）。" >&2
+      exit 1
+    fi
   fi
 
     # ---------------------------------------------------------------------------

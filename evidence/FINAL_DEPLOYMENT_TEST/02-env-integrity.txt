@@ -1,0 +1,41 @@
+=== 02-env-integrity.txt ===
+### 已声明的方法：代码读取的 env vs 模板中声明的 env ###
+  代码中读取的变量数: 45
+  模板中声明的变量数: 31
+  ❌ 代码读取但模板未声明的 (30):
+       AUTHZ_BASE
+       B4_BASE
+       BACKUP_SOURCE_DB
+       CSRF_STATE_TTL_SECONDS
+       DATABASE_URL
+       DOWNLOAD_TOKEN_SECRET_ENV
+       DOWNLOAD_TOKEN_TTL_ENV
+       FILES_BASE
+       KEY_ENV
+       MFA_ENFORCE_SUPER_ADMIN
+       MIGRATION_APPLIED_BY
+       MIGRATION_DATABASE_URL
+       MIGRATION_LOCK_TIMEOUT_MS
+       PGDATABASE
+       PGHOST
+       PGPASSWORD
+       PGPORT
+       PGUSER
+       PG_BIN
+       POSTGRES_CONNECTION_STRING
+       POSTGRES_URI
+       QLS_ADMIN_DB
+       QLS_KEEP_PROBE
+       QLS_PROBE_DB
+       QLS_SOFT_DELETE_FORCE_DOWN
+       QLS_STRICT_PLATFORM_CLI
+       RESOURCE_RETENTION_DAYS_ENV
+       SERVER_HOST
+       SHUTDOWN_TIMEOUT_ENV
+       UPLOAD_MAX_BYTES_ENV
+
+### 同名重复定义检查 ###
+  --- .env.example ---
+    (无输出 = 无重复)
+  --- .env.deploy.example ---
+    (无输出 = 无重复)

@@ -1,0 +1,57 @@
+=== 01-repository-integrity.txt ===
+commit: 1790384787
+CURRENT_COMMIT=ee59a05ee43298a6a39bb3dba90dab84d0c9fb18
+
+### 1. package.json 引用的脚本文件是否存在 ###
+  ✅ 全部存在
+
+### 2. Dockerfile COPY 源路径 ###
+  COPY package.json package-lock.json .npmrc ./
+  COPY scripts ./scripts
+  COPY tsconfig.json tsconfig.node.json tsconfig.app.json nest-cli.json ./
+  COPY vite.config.ts postcss.config.js tailwind.config.ts components.json eslint.config.js ./
+  COPY server ./server
+  COPY shared ./shared
+  COPY client ./client
+  COPY scripts ./scripts
+  COPY --chown=qls:qls package.json ./package.json
+  COPY --chown=qls:qls --from=build /build/dist ./dist
+  COPY --chown=qls:qls --from=build /build/node_modules ./node_modules
+  COPY --chown=qls:qls --from=build /build/server/database ./server/database
+  COPY --chown=qls:qls --from=build /build/scripts ./scripts
+  --- 逐项检查 ---
+  ✅ Dockerfile 引用的上下文文件全部存在
+
+### 3. entrypoint.sh 执行的脚本 ###
+  ✅ /app/scripts/bootstrap-super-admin.mjs
+  ✅ /app/scripts/db-bootstrap.mjs
+  ✅ /app/scripts/migrate.mjs
+  ✅ /app/scripts/provision-super-admin.mjs
+
+### 4. compose env_file 是否存在 ###
+  10:#   cp .env.deploy.example .env.deploy   &&  chmod 600 .env.deploy
+  12:#   docker compose --env-file .env.deploy up -d --build
+  40:      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须在 .env.deploy 里设置 POSTGRES_PASSWORD}
+  69:    env_file:
+  70:      - .env.deploy
+  72:      # 这两条在这里显式钉住，而不是只写在 .env.deploy 里：
+  94:          const p=Number(process.env.SERVER_PORT||3000);
+  不存在: .env.deploy
+  不存在: .env
+  存在: .env.deploy.example
+
+### 5. CI 引用的脚本 ###
+  ✅ scripts/db-bootstrap.mjs
+  ✅ scripts/verify-all.sh
+
+### 6. migrations 清单 ###
+  server/database/migrations/0001_schema_baseline_alignment.sql
+  server/database/migrations/0002_backfill_legacy_usernames.sql
+  server/database/migrations/0003_rbac_database_layer.sql
+  server/database/migrations/0004_rls_role_alignment.sql
+  server/database/migrations/0005_tighten_rls_writes.sql
+  server/database/migrations/0006_mfa.sql
+  server/database/migrations/0007_resource_soft_delete.sql
+  server/database/migrations/0008_resource_file_presence.sql
+  down 配对:
+           8
