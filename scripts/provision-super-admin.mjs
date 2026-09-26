@@ -114,6 +114,29 @@ const name = String(args.name ?? '').trim();
 if (!name) die('缺少 --name（teachers.name 是 NOT NULL 且无默认值，必填）');
 
 const resetPassword = args['reset-password'] === true;
+// ---------------------------------------------------------------------------
+// --role：创建哪个角色（默认 super_admin）
+// ---------------------------------------------------------------------------
+// 必须与 shared/rbac.ts 的 ROLE_CODES 一致。**刻意在此重复一份**而不是 import：
+// 运行镜像里只复制了 server/database 与 scripts，没有 shared/，import 会失败。
+// 若 shared/rbac.ts 增删角色，这里必须同步 —— tests/auth-reset-password.test.mjs
+// 与 scripts/verify-e2e-deploy.sh 都会校验二者一致。
+const KNOWN_ROLES = [
+  'super_admin',
+  'principal',
+  'curriculum_director',
+  'prek_head',
+  'k_head',
+  'pe_specialist',
+  'prek_assistant',
+  'k_assistant',
+  'visitor',
+];
+const ROLE = typeof args['role'] === 'string' ? args['role'] : 'super_admin';
+if (!KNOWN_ROLES.includes(ROLE)) {
+  die(`--role 不是已知角色: "${ROLE}"（可选：${KNOWN_ROLES.join(', ')}）`);
+}
+
 const grantRole = args['grant-role'] === true;
 
 // 密码来源：只支持文件（避免进程列表与 shell 历史泄露）
@@ -259,7 +282,7 @@ try {
       }
       const rows = await tx`
         insert into teachers (username, name, roles, status, password_hash)
-        values (${username}, ${name}, array['super_admin']::varchar[], 'active', ${hash})
+        values (${username}, ${name}, array[${ROLE}]::varchar[], 'active', ${hash})
         returning id`;
       targetId = rows[0].id;
       action = 'created';
@@ -269,7 +292,7 @@ try {
       // password_hash 仅在提供密码时更新。name 仅在显式给出时更新。
       const rows = await tx`
         update teachers
-           set roles         = array['super_admin']::varchar[],
+           set roles         = array[${ROLE}]::varchar[],
                status        = 'active',
                name          = ${name},
                password_hash = case when ${password === ''} then password_hash else ${hash} end,

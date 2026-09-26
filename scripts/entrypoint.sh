@@ -146,6 +146,34 @@ if [ -n "${DATABASE_URL:-}" ] || [ -n "${SUDA_DATABASE_URL:-}" ]; then
     echo "[entrypoint]    或设置 INITIAL_ADMIN_USER / INITIAL_ADMIN_PASSWORD 后重新部署。"
     echo "[entrypoint]    严格验收请运行：npm run predeploy（期望不再出现 FAIL [07]/[08]）。"
   fi
+
+    # ---------------------------------------------------------------------------
+    # 可选：额外创建一个 principal（园长/平台管理员）账号
+    # ---------------------------------------------------------------------------
+    # 用途：日常办公不该用 super_admin。principal 已能审核发布、查看全部课程、
+    # 按权限模型重置下级角色密码、管理教师，而且**本就不要求 MFA**。
+    # 仅在设置了 INITIAL_PRINCIPAL_PASSWORD 时才创建。
+    if [ -n "${INITIAL_PRINCIPAL_PASSWORD:-}" ]; then
+      PRINCIPAL_USER="${INITIAL_PRINCIPAL_USER:-TsinglanPrincipal}"
+      echo "[entrypoint] 正在初始化园长账号: ${PRINCIPAL_USER}（角色 principal）..."
+      PW_FILE="$(mktemp)"
+      chmod 600 "$PW_FILE"
+      printf '%s' "$INITIAL_PRINCIPAL_PASSWORD" > "$PW_FILE"
+      node /app/scripts/provision-super-admin.mjs \
+        --username "${PRINCIPAL_USER}" \
+        --password-file "$PW_FILE" \
+        --name '园长/平台管理员' \
+        --role principal \
+        --yes-create-account
+      PRINCIPAL_RC=$?
+      rm -f "$PW_FILE"
+      if [ "$PRINCIPAL_RC" -eq 0 ]; then
+        echo "[entrypoint] ✓ 园长账号就绪: ${PRINCIPAL_USER}"
+      else
+        echo "[entrypoint] ✗ 园长账号创建失败（退出码 $PRINCIPAL_RC），拒绝启动。" >&2
+        exit 1
+      fi
+    fi
 fi
 
 # 3. 启动主服务
