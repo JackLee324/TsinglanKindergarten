@@ -527,6 +527,61 @@ async function bootstrap() {
   // attributed.
   const trustProxy = resolveTrustProxySetting();
 
+  // ---------------------------------------------------------------------------
+  // 根路径跳转到 /app/ —— 独立部署必需
+  // ---------------------------------------------------------------------------
+  // 平台把 React Router 的 basename 写死成 "/app/"：它注入到 index.html 里的脚本
+  // 包含 `window.__BASENAME__ = "/app/"` 与 `__platform__.basename = "/app/"`。
+  //
+  // 因此在独立部署直接访问 `/` 时，路由用 basename=/app/ 去匹配路径 "/"，匹配不到
+  // 任何路由，React 什么都不渲染 —— 页面白屏。
+  //
+  // 危险之处在于它「看起来完全正常」：`/` 与 `/app/` 返回的是同一份 HTML（都是 200、
+  // 同样字节数），资源请求也全部 200、Content-Type 正确。状态码、日志、健康检查
+  // 全绿，只有真正用一个浏览器渲染才能发现。实测：远程渲染 / 得到空 #root，
+  // 渲染 /app/ 得到完整登录页。
+  //
+  // 这里把根路径（以及任何未带 /app 前缀的页面路径）302 跳到 /app/ 下，让独立部署
+  // 与平台行为一致，也避免每个访问根域名的人以为部署挂了。
+  //
+  // 注册在 configureApp() 之前，以便先于平台的视图回退执行；静态资源、API 与平台
+  // 自身前缀全部放行不做跳转。
+  {
+    const expressApp = app.getHttpAdapter().getInstance() as {
+      use: (fn: (req: { path: string; url: string }, res: {
+        redirect: (code: number, url: string) => void;
+      }, next: () => void) => void) => void;
+    };
+    const PASSTHROUGH = [
+      '/app',
+      '/api',
+      '/bundle',
+      '/assets',
+      '/static',
+      '/openapi',
+      '/__innerapi__',
+      '/__runtime__',
+      '/dev',
+      '/polyfills.js',
+      '/favicon.ico',
+      '/favicon.svg',
+      '/routes.json',
+      '/spark',
+    ];
+    expressApp.use((req, res, next) => {
+      const path = req.path || '/';
+      if (PASSTHROUGH.some((p) => path === p || path.startsWith(`${p}/`))) {
+        return next();
+      }
+      const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+      if (path === '/') {
+        return res.redirect(302, `/app/${query}`);
+      }
+      // 任何其它页面路径（如 /login）同样带上前缀，而不是白屏。
+      return res.redirect(302, `/app${path}${query}`);
+    });
+  }
+
   await configureApp(app, {
     disableSwagger: true,
   });
