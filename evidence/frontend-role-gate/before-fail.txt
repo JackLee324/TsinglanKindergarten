@@ -1,0 +1,31 @@
+修复前：镜像 qls-e2e:prefix（路由守卫与 HomePage 两处缺陷都在）
+命令：E2E_SKIP_BUILD=1 E2E_IMAGE=qls-e2e:prefix E2E_PORT=3491 E2E_NAME=qls-e2e-prefix2 \
+      E2E_DB_URL=... bash scripts/verify-e2e-deploy.sh
+产物指纹：grep -c 'roles\.some(' bundle/index-*.js => 2   （修复后为 0）
+
+================================================================
+=== 6c. 登录之后的授权判定（真实登录 → 真实渲染）===
+  --- 准备阴性对照账号 visitor ---
+  PASS  visitor 对照账号已创建（--role visitor）
+  PASS  principal：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  principal：渲染出首页（探针机制自检） -> 1
+  PASS  principal：看不到「无权访问」 -> 0
+  PASS  principal：首页出现平台级统计（Pre-K 资源） -> 1
+  PASS  super_admin：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  FAIL  super_admin：看不到「无权访问」 -> 1 (期望 0)
+  FAIL  super_admin：渲染出首页而非登录页或错误页 -> 0 (期望 1)
+  FAIL  super_admin：首页出现平台级统计（HomePage 的角色判定不得漏掉它） -> 0 (期望 1)
+  FAIL  super_admin：平台统计第三张卡也在（本周绘本封面） -> 0 (期望 1)
+  PASS  visitor：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  visitor：仍被拒（阴性对照，防止把门开大） -> 1
+  PASS  visitor：没有渲染出首页 -> 0
+  --- probe[principal] 渲染文本（前 300 字符）---
+      TsinglanKindergarten - 清澜山幼儿园课程资源平台 above. (`scripts/verify-e2e-deploy.sh` asserts that no platform placeholder survives in the served document.) --> TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 早上好，园长/平台管理员 今天是 2026年9月26日 星期六 Pre-K 资源 303 K 资源 44
+  --- probe[superadmin] 渲染文本（前 300 字符）---
+      TsinglanKindergarten - 清澜山幼儿园课程资源平台 above. (`scripts/verify-e2e-deploy.sh` asserts that no platform placeholder survives in the served document.) --> English 无权访问 您没有权限访问此页面，请联系管理员。 返回首页
+  --- probe[visitor] 渲染文本（前 300 字符）---
+      TsinglanKindergarten - 清澜山幼儿园课程资源平台 above. (`scripts/verify-e2e-deploy.sh` asserts that no platform placeholder survives in the served document.) --> English 无权访问 您没有权限访问此页面，请联系管理员。 返回首页
+=== 7. 账号与权限（真实登录）===
+================================================================
+  pass=45 fail=4
+  ❌ E2E 验收失败

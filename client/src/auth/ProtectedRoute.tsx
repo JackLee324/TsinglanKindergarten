@@ -3,6 +3,7 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
 
 import type { RoleCode } from '@shared/api.interface';
+import { hasAnyRole } from '@shared/rbac';
 import { Spinner } from '@client/src/components/ui/spinner';
 import { useAuth } from './useAuth';
 
@@ -30,7 +31,12 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
-  if (requiredRoles.length > 0 && !user.roles.some((r: RoleCode) => requiredRoles.includes(r))) {
+  // One role model, shared with the server. A super_admin holds every
+  // permission at scope ALL server-side, so it must not be refused here either:
+  // doing a bare intersection made a super_admin-only account — the account a
+  // fresh deployment gets — land on 「无权访问」 for every route, while the API
+  // returned 200 for the same user. See `hasAnyRole` in shared/rbac.ts.
+  if (!hasAnyRole(user.roles, requiredRoles)) {
     return <Navigate to="/unauthorized" replace />;
   }
 

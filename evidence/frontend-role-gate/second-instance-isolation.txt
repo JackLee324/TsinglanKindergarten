@@ -1,0 +1,47 @@
+第二个实例的隔离证明：中间镜像 qls-e2e:homepage-bug
+======================================================================
+目的：证明 6c 里那两条新的平台级统计断言**不是空洞的** ——
+      即它们真的能发现路由守卫已修好、但 HomePage 的角色判定仍漏掉 super_admin这个状态。
+
+做法：只回退 client/src/pages/Home/HomePage.tsx 的角色判定，保留
+      ProtectedRoute / auth-context 的修复，构建镜像 qls-e2e:homepage-bug。
+      这是只有第二个缺陷的镜像（bundle 里 '.roles.some(' 计数 = 0，说明路由守卫已修）。
+
+命令：E2E_SKIP_BUILD=1 E2E_IMAGE=qls-e2e:homepage-bug E2E_PORT=3481 \
+      E2E_NAME=qls-e2e-hpbug E2E_DB_URL=... bash scripts/verify-e2e-deploy.sh
+
+================================================================
+=== 6c. 登录之后的授权判定（真实登录 → 真实渲染）===
+  --- 准备阴性对照账号 visitor ---
+  PASS  visitor 对照账号已创建（--role visitor）
+  PASS  principal：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  principal：渲染出首页（探针机制自检） -> 1
+  PASS  principal：看不到「无权访问」 -> 0
+  PASS  principal：首页出现平台级统计（Pre-K 资源） -> 1
+  PASS  super_admin：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  super_admin：看不到「无权访问」 -> 0
+  PASS  super_admin：渲染出首页而非登录页或错误页 -> 1
+  FAIL  super_admin：首页出现平台级统计（HomePage 的角色判定不得漏掉它） -> 0 (期望 1)
+  FAIL  super_admin：平台统计第三张卡也在（本周绘本封面） -> 0 (期望 1)
+  PASS  visitor：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  visitor：仍被拒（阴性对照，防止把门开大） -> 1
+  PASS  visitor：没有渲染出首页 -> 0
+  --- probe[principal] 渲染文本（前 300 字符）---
+      TsinglanKindergarten - 清澜山幼儿园课程资源平台 above. (`scripts/verify-e2e-deploy.sh` asserts that no platform placeholder survives in the served document.) --> TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 园长/平台管理员 早上好，园长/平台管理员 今天是 2026年9月26日 星期六 Pre-K 资源 303 K 资源 44
+  --- probe[superadmin] 渲染文本（前 300 字符）---
+      TsinglanKindergarten - 清澜山幼儿园课程资源平台 above. (`scripts/verify-e2e-deploy.sh` asserts that no platform placeholder survives in the served document.) --> TsinglanKindergarten 首页 Pre-K K 资源上传 我的资源 审核工作台 管理后台 © 2024 TsinglanKindergarten English 系统超级管理员 早上好，系统超级管理员 今天是 2026年9月26日 星期六 我的资源总数 0 待审核数量 0 本月上传数
+  --- probe[visitor] 渲染文本（前 300 字符）---
+      TsinglanKindergarten - 清澜山幼儿园课程资源平台 above. (`scripts/verify-e2e-deploy.sh` asserts that no platform placeholder survives in the served document.) --> English 无权访问 您没有权限访问此页面，请联系管理员。 返回首页
+=== 7. 账号与权限（真实登录）===
+================================================================
+  pass=47 fail=2
+  ❌ E2E 验收失败
+
+结论：
+  * super_admin 能进首页（路由守卫已修） —— 但首页只有教师那一排统计
+    （'我的资源总数 0 待审核数量 0 本月上传数 …'），没有平台级那三张卡；
+  * 恰好只有针对第二个缺陷的两条断言 FAIL（47 pass / 2 fail），其余全绿。
+    => 这两条断言确实在测它们声称要测的东西。
+
+对照：principal 在同一镜像里正常显示 'Pre-K 资源 303 K 资源 44' ——
+      说明差异确实来自 HomePage 的角色判定，而不是统计数据本身取不到。

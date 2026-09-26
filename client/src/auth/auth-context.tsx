@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useEffect, useMemo, useState } from 
 import { logger } from '@client/src/lib/logger';
 
 import type { AuthUser, RoleCode } from '@shared/api.interface';
+import { hasAnyRole } from '@shared/rbac';
 import * as api from '@client/src/api/auth';
 import { AUTH_UNAUTHORIZED_EVENT } from '@client/src/api/client';
 
@@ -70,10 +71,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setUser(null);
   }, []);
 
+  // Delegates to the shared rule so the sidebar's role gating cannot disagree
+  // with `ProtectedRoute` or with the server (see `hasAnyRole` in
+  // shared/rbac.ts). Before this, `hasRole(['principal'])` was false for a
+  // super_admin, so the administration menu was hidden from the one account
+  // that holds every permission.
   const hasRole = useCallback(
     (roles: RoleCode[]): boolean => {
       if (!user) return false;
-      return user.roles.some((r: RoleCode) => roles.includes(r));
+      return hasAnyRole(user.roles, roles);
     },
     [user],
   );

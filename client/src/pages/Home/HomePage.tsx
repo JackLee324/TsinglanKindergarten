@@ -44,7 +44,7 @@ interface RecentItem {
 
 const HomePage: React.FC = () => {
   const { t, language } = useTranslation();
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
   const navigate = useNavigate();
 
   const [statsLoading, setStatsLoading] = useState<boolean>(true);
@@ -125,7 +125,16 @@ const HomePage: React.FC = () => {
     navigate(path);
   };
 
-  const isAdmin = user?.roles?.includes('principal') || user?.roles?.includes('curriculum_director');
+  // 平台级统计（资源总数 / Pre-K / K）对谁可见。
+  //
+  // 与 `ProtectedRoute`、侧边栏走同一套规则。这里原来是手写的
+  // `user?.roles?.includes('principal') || user?.roles?.includes('curriculum_director')`，
+  // 它把**只持 `super_admin`** 的账号漏掉了 —— 与本次修复的"登录后无权访问"是
+  // 同一类缺陷（前端各写一遍角色判定、与后端不一致），只是后果轻一些：
+  // 少显示三张卡片，而不是整站进不去。后端对该账号持有全部权限，所以这里
+  // 也必须显示。`hasRole` 经由 shared/rbac.ts 的 `hasAnyRole`，
+  // `super_admin` 作为通配命中。
+  const isAdmin = hasRole(['principal', 'curriculum_director']);
 
   return (
     <div className="space-y-6">

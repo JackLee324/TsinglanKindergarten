@@ -1,0 +1,21 @@
+tests/client-role-gate.test.mjs 的非空洞性证明（变异测试）
+命令：node --test tests/client-role-gate.test.mjs
+目的：证明 16 条断言不是空洞的 —— 把每一条被保护的性质破坏掉，测试必须失败。
+
+--- 基线（修复后）---
+  # pass 16 # fail 0 
+
+--- 变异 1：删掉 shared/rbac.ts 中 hasAnyRole 的 super_admin 通配 ---
+  剩余通配行数=0  结果：# pass 11 # fail 5 
+
+--- 变异 2：把 ProtectedRoute.tsx 改回手写交集（故障原形态）---
+  结果：# pass 15 # fail 1 
+
+--- 变异 3：抹掉后端 authorization.service.ts 的 super_admin 无条件放行 ---
+  结果：# pass 15 # fail 1 
+
+--- 全部还原后复跑 ---
+  # pass 16 # fail 0 
+
+三个变异全部被抓；还原后回到 16/16。
+（第 3 条是源码断言，比前两条弱 —— 文件内已明确标注，并指向 verify-e2e-deploy.sh 第 6c 节的端到端证据。）

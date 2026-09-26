@@ -915,3 +915,90 @@ MFA_ENFORCE_SUPER_ADMIN=true
 
 > 这一条与本次加固需求第 ⑤ 条（"后端强制鉴权 + MFA + Session + CSRF + 限流生产化"）的原始设计相冲突，
 > 属于**业主在知情下接受的取舍**，不是实现缺陷。恢复方式见上。
+
+---
+
+## 附录 G：上线首日故障 —— super_admin 登录成功后「无权访问」
+
+**严重级别：阻断上线（P0）。** 现象：部署成功、登录成功，然后每个页面都是
+「无权访问」，点「返回首页」又回到同一页面。整站对唯一的账号不可用。
+
+**完整分析、修复与行为级证据：`evidence/frontend-role-gate/README.md`。** 此处只留摘要。
+
+### 根因
+
+前后端对同一个问题给了**两个不同答案**：
+
+| 位置 | 对 `super_admin` 的结论 |
+| --- | --- |
+| `server/modules/authz/authorization.service.ts:207-208` `if (authz.roles.includes(SUPER_ADMIN_ROLE)) return true;` | **放行** |
+| `client/src/auth/ProtectedRoute.tsx` / `auth-context.tsx` 手写 `roles ∩ requiredRoles` | **拒绝** |
+
+`client/src/app.tsx:30` 的 `TEACHER_ROLES` 白名单**不含 `super_admin`**，而 `:65` 用包住了整块
+受保护路由。`/unauthorized` 的「返回首页」指向 `/`，`/` 也在同一守卫里 → 表现为"按钮没反应"。
+两个症状同一个根因。
+
+`scripts/provision-super-admin.mjs:135` 的 `--role` **默认就是 `super_admin`**，`entrypoint.sh`
+创建初始管理员走的正是这条默认路径 —— 所以**每次全新部署拿到的初始账号都是这个形态**。
+
+### 为什么此前 282 条 HTTP 断言与 36 条部署断言全绿
+
+后端对 `super_admin` **本来就放行**（`/api/teachers` 200），因此所有只看状态码的套件都是绿的；
+部署 E2E 第 6 节渲染的是**未登录**的 `/`（登录页），第 7 节只 curl 登录不渲染页面。
+**这是一条纯前端缺陷，必须"真登录 + 真渲染"才能发现。**
+
+### 归因（重要）
+
+```
+$ git diff --stat baseline-v1.3.0 -- client/src/app.tsx client/src/auth/ProtectedRoute.tsx
+（空 —— 两个文件与 v1.3.0 基线逐字节一致）
+```
+
+**这是原项目自带的问题，不是迁移引入的。** 原版没暴露是因为它的初始账号同时持有 `principal`。
+
+> 方法论结论：**"保持 UI 不变"不等于"保持行为不变"**。同一份字节相同的 UI 代码，
+> 在账号角色构成变化后表现出完全不同的行为。
+
+### 修复
+
+`shared/rbac.ts` 新增 `hasAnyRole(held, required)`（`super_admin` 作为通配，镜像后端），
+`ProtectedRoute.tsx`、`auth-context.tsx`、`HomePage.tsx` 三处改用共享规则。
+**后端授权逻辑一行未改**（它本来就是对的）；未改动任何 UI 文案与样式；`visitor` 依旧被拒。
+
+### 同一缺陷形态的第二个实例（本次一并修掉）
+
+`client/src/pages/Home/HomePage.tsx:128` 原文：
+
+```ts
+const isAdmin = user?.roles?.includes('principal') || user?.roles?.includes('curriculum_director');
+```
+
+`super_admin` 同样被漏掉 → 首页**少显示三张平台统计卡片**（只显示"我的资源总数 0"）。
+第一次排查时被漏掉，因为搜的是 `roles.includes` 而它写的是 `roles?.includes`。
+
+因此新增了一条**泛化**守卫（`tests/client-role-gate.test.mjs`）：扫描整个 `client/src`，
+任何 `user(.?)?.roles(.?)?.includes|some|indexOf(` 都必须改为 `hasRole(...)`；
+注释先剥离，白名单只有一处且写明理由。变异验证：
+把真实缺陷改回去 → 被抓；在一个**从未有过该缺陷**的文件里植入同类写法 → 也被抓。
+
+### 证据
+
+| 项 | 修复前（镜像 `qls-e2e:prefix`） | 修复后 |
+| --- | --- | --- |
+| 部署 E2E | **pass=44 fail=2**（2 条全是 `super_admin`） | **pass=46 fail=0** |
+| `super_admin` 登录后 `/` 实际渲染 | `English 无权访问 您没有权限访问此页面，请联系管理员。 返回首页`（与用户截图逐字一致） | `… 审核工作台 管理后台 … 早上好，系统超级管理员 … Pre-K 资源 303 K 资源 44 …` |
+| `principal`（阳性对照） | 正常渲染首页 | 正常渲染首页 |
+| `visitor`（阴性对照） | 被拒（正确） | 被拒（正确） |
+| `tests/client-role-gate.test.mjs` | —— | 17/17，且 3 处变异全部被抓 |
+
+### 上线动作
+
+**必须重新部署**（重新构建镜像）—— 修复在客户端产物里。
+
+### 顺带发现（未改动，记录在案）
+
+`scripts/provision-super-admin.mjs --grant-role` 的**实现是整体替换**
+（`set roles = array[${ROLE}]`），不是名字暗示的"追加"。对 `super_admin` 账号执行
+`--grant-role --role principal` 会把账号**降级**。文件头把它描述为"只恢复角色"，
+因此属**命名误导**而非实现缺陷；本次刻意不改，避免在故障处置期移动工具语义。
+

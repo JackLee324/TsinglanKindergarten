@@ -1,0 +1,23 @@
+修复后：镜像 qls-e2e:test（两处都修好）
+命令：E2E_DB_URL=... bash scripts/verify-e2e-deploy.sh
+
+================================================================
+=== 6c. 登录之后的授权判定（真实登录 → 真实渲染）===
+  --- 准备阴性对照账号 visitor ---
+  PASS  visitor 对照账号已创建（--role visitor）
+  PASS  principal：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  principal：渲染出首页（探针机制自检） -> 1
+  PASS  principal：看不到「无权访问」 -> 0
+  PASS  principal：首页出现平台级统计（Pre-K 资源） -> 1
+  PASS  super_admin：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  super_admin：看不到「无权访问」 -> 0
+  PASS  super_admin：渲染出首页而非登录页或错误页 -> 1
+  PASS  super_admin：首页出现平台级统计（HomePage 的角色判定不得漏掉它） -> 1
+  PASS  super_admin：平台统计第三张卡也在（本周绘本封面） -> 1
+  PASS  visitor：探针跑通（DOM 里不留 PROBE- 标记） -> 0
+  PASS  visitor：仍被拒（阴性对照，防止把门开大） -> 1
+  PASS  visitor：没有渲染出首页 -> 0
+=== 7. 账号与权限（真实登录）===
+================================================================
+  pass=49 fail=0
+  ✅ E2E 验收通过

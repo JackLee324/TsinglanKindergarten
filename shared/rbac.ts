@@ -87,6 +87,39 @@ export function isPrivilegedAccount(roles: readonly RoleCode[]): boolean {
 }
 
 /**
+ * Does the set of roles the caller HOLDS satisfy a list of REQUIRED roles?
+ *
+ * This exists because the product must have exactly ONE role model.
+ * `server/modules/authz/authorization.service.ts` grants a super_admin every
+ * permission and skips the scope check entirely
+ * (`if (authz.roles.includes(SUPER_ADMIN_ROLE)) return true;`). The client used
+ * to answer the same question with a bare set intersection, so a super_admin was
+ * refused by every client-side gate while the API happily answered 200.
+ *
+ * That divergence was a real, user-visible outage, not a theoretical one: an
+ * account whose only role is `super_admin` — what
+ * `scripts/provision-super-admin.mjs` creates by default, and therefore what a
+ * fresh deployment gets — could log in successfully and then see 「无权访问」 on
+ * every page. The page's 「返回首页」 link points at `/`, and `/` sits inside the
+ * same gate, so the link appeared to do nothing at all: the deployment looked
+ * completely broken while every HTTP status code stayed green.
+ *
+ * NOT A SECURITY BOUNDARY. This decides what to RENDER, never what is ALLOWED —
+ * the server re-checks every request. Getting it wrong can show a control whose
+ * action then fails; it can never grant an action. It still lives in `shared/`
+ * so both sides can be held to one rule (see
+ * `tests/client-role-gate.test.mjs`, which pins the two together).
+ */
+export function hasAnyRole(
+  held: readonly RoleCode[],
+  required: readonly RoleCode[],
+): boolean {
+  if (required.length === 0) return true;
+  if (held.includes(SUPER_ADMIN_ROLE)) return true;
+  return held.some((r) => required.includes(r));
+}
+
+/**
  * Rank is used ONLY for the "an administrator may not grant a role at or above
  * their own level" rule. It is deliberately NOT used to decide whether a
  * permission is allowed — that is what the permission catalog is for. Hard-coding
