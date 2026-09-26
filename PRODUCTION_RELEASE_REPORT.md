@@ -877,3 +877,41 @@ naming-http              pass=49 fail=0
    已改为传播退出码。
 2. `verify-live.sh` 中 `curl -w '%{http_code}' || echo 000` 在连接失败时会拼出 `000000`。
    已改为专用 `http_code()` helper。
+
+---
+
+## 附录 F：已接受风险 —— super_admin 的 MFA 强制已关闭
+
+**业主决定（明确选择）。** `MfaService.requiresMfa()` 改为可配置，默认关闭：
+
+```ts
+requiresMfa(roles) {
+  if (!isMfaEnforcementEnabled()) return false;   // MFA_ENFORCE_SUPER_ADMIN 默认未设 = 关闭
+  return roles.includes(SUPER_ADMIN_ROLE);
+}
+```
+
+**恢复强制只需一个环境变量**（不建议省略）：
+
+```
+MFA_ENFORCE_SUPER_ADMIN=true
+```
+
+### 这次变更接受了什么风险
+
+| 项 | 说明 |
+|----|------|
+| 受影响范围 | **仅 `super_admin`** 的"强制绑定"这一层。其余 8 个角色本来就不要求 MFA |
+| 已绑定账号 | **不受影响**。主动绑定过 MFA 的账号，登录时仍走第二因素挑战 —— 关闭强制 ≠ 削弱已启用的保护 |
+| 接受的风险 | 最高权限账号（可重置**任何人**的密码、改任何账号权限）在公网上**仅凭单一口令**保护。这是本平台价值最高的攻击目标；口令一旦泄露或被撞库，即整站完全控制 |
+| 实测证据 | 容器内未绑定 MFA 的 super_admin：`GET /api/teachers`、`/api/resources`、`/api/dashboard/stats` 均返回 **200**（改动前为 403）；`mfa/status` 返回 `required:false` |
+
+### 建议的补偿措施（任一即可显著降低风险）
+
+1. **日常不用 super_admin**：建一个 `principal` 账号用于日常工作（审核发布、课程查看、按权限模型重置下级密码、教师管理）。super_admin 只在确需改动管理员账号时登录。
+2. **限制访问来源**：在 Zeabur 前置反向代理上对 `/app/` 与 `/api/auth/*` 加 IP 白名单或速率限制。
+3. **强口令 + 不得复用**：该账号的口令只用于此平台，并使用密码管理器生成。
+4. **启用访问审计复核**：定期查 `audit_logs` 中该账号的 `login` / `resource_download` / 权限变更记录。
+
+> 这一条与本次加固需求第 ⑤ 条（"后端强制鉴权 + MFA + Session + CSRF + 限流生产化"）的原始设计相冲突，
+> 属于**业主在知情下接受的取舍**，不是实现缺陷。恢复方式见上。

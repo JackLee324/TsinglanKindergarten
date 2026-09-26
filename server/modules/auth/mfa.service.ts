@@ -85,6 +85,24 @@ export interface MfaStatus {
  *     generating a secret does not enable it (otherwise a failed enrolment could
  *     lock the user out).
  */
+/**
+ * 是否强制 super_admin 绑定 MFA。
+ *
+ * 默认【关闭】—— 这是业主明确决定，见 PRODUCTION_RELEASE_REPORT.md 的「已接受风险」。
+ *
+ * ⚠️ 关闭它意味着：最高权限账号（可重置任何人的密码、改任何账号的权限）在公网上
+ * 只靠单一口令保护。这是本平台价值最高的攻击目标。
+ * 恢复强制只需把环境变量设为 true：
+ *     MFA_ENFORCE_SUPER_ADMIN=true
+ *
+ * 注意：这里只控制「强制」这一层。已经**主动绑定**过 MFA 的账号，登录时仍会走
+ * 第二因素挑战 —— 关闭强制不等于削弱已启用的保护。
+ */
+function isMfaEnforcementEnabled(): boolean {
+  const raw = (process.env.MFA_ENFORCE_SUPER_ADMIN ?? '').trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
 @Injectable()
 export class MfaService {
   private readonly logger = new Logger(MfaService.name);
@@ -95,6 +113,7 @@ export class MfaService {
 
   /** Roles whose holders MUST use MFA. super_admin is the specification's requirement. */
   requiresMfa(roles: readonly RoleCode[]): boolean {
+    if (!isMfaEnforcementEnabled()) return false;
     return roles.includes(SUPER_ADMIN_ROLE);
   }
 
