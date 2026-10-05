@@ -19,13 +19,40 @@ export interface RoleDefinitionResponse {
   description: string;
 }
 
+/**
+ * Deep copy before handing curriculum data to a caller.
+ *
+ * WHY THIS EXISTS (verified defect, not a precaution)
+ * ---------------------------------------------------
+ * `getStructure()` used to `return PROGRAM_STRUCTURES` — the module-level array
+ * itself — and, on the non-admin path, to `result.push(prekProgram)`, i.e. the
+ * SAME object rather than a copy. The `hasPeSpecialist` branch then did
+ * `existing.subjects.push(peSubject)` on that shared object. Net effect:
+ *
+ *   one request from an account holding `prek_head` + `pe_specialist` would
+ *   permanently append Physical Education to the GLOBAL Pre-K subject list,
+ *   and every later request from every other account (including a plain
+ *   `prek_assistant`, or a `visitor`) would see it.
+ *
+ * That is "user A changes what user B sees", and it survives the request because
+ * the array lives in module scope. Returning copies removes the mechanism
+ * entirely; the transformations below then only ever touch their own copy.
+ */
+function cloneForResponse<T>(value: T): T {
+  return structuredClone(value);
+}
+
 @Injectable()
 export class CurriculumService {
   private readonly logger = new Logger(CurriculumService.name);
 
   getStructure(roles: RoleCode[] = []): ProgramStructure[] {
+    // 一开始就拷贝：后面的 find/push 全部作用在这份拷贝上，任何分支都不可能
+    // 再碰到模块级常量（见 cloneForResponse 的注释）。
+    const source = cloneForResponse(PROGRAM_STRUCTURES);
+
     if (roles.length === 0 || isPlatformAdmin(roles)) {
-      return PROGRAM_STRUCTURES;
+      return source;
     }
     const hasPrekHead = roles.includes('prek_head');
     const hasKHead = roles.includes('k_head');
@@ -35,8 +62,8 @@ export class CurriculumService {
 
     const result: ProgramStructure[] = [];
 
-    const prekProgram = PROGRAM_STRUCTURES.find((p) => p.program === 'prek');
-    const kProgram = PROGRAM_STRUCTURES.find((p) => p.program === 'k');
+    const prekProgram = source.find((p) => p.program === 'prek');
+    const kProgram = source.find((p) => p.program === 'k');
 
     if (hasPrekHead || hasPrekAssistant) {
       if (prekProgram) result.push(prekProgram);
@@ -95,10 +122,10 @@ export class CurriculumService {
   }
 
   getFolders(): FolderDefinitionResponse[] {
-    return FOLDER_DEFINITIONS;
+    return cloneForResponse(FOLDER_DEFINITIONS) as FolderDefinitionResponse[];
   }
 
   getRoles(): RoleDefinitionResponse[] {
-    return ROLE_DEFINITIONS;
+    return cloneForResponse(ROLE_DEFINITIONS) as RoleDefinitionResponse[];
   }
 }

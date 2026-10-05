@@ -71,3 +71,31 @@ export const FOLDER_DEFINITIONS: FolderDefinition[] = CANONICAL_FOLDER_DEFINITIO
 // keep working without change.
 export type { RoleDefinition } from '@shared/rbac';
 export { ROLE_DEFINITIONS } from '@shared/rbac';
+
+// ---------------------------------------------------------------------------
+// 冻结导出的课程数据（§21 结构性防线）
+// ---------------------------------------------------------------------------
+// `CurriculumService.getStructure()` 曾经 `return PROGRAM_STRUCTURES`，并在
+// `hasPeSpecialist` 分支对**同一个共享对象**执行 `existing.subjects.push(...)`。
+// 后果：一个同时持有 prek_head + pe_specialist 的账号发一次请求，就会把「体能」
+// 永久追加进全局 Pre-K 科目表，此后所有账号（含 visitor）都看到被改过的结构 ——
+// 「用户 A 改变了用户 B 看到的数据」。
+//
+// 服务层现在返回深拷贝（`cloneForResponse`）。这里再深冻结一层，作为**结构性**保证：
+// 万一将来有人又直接对共享常量做 push/splice，会立刻 `TypeError: Cannot add property …,
+// object is not extensible` —— 在开发期就炸，而不是在生产上悄悄污染所有人的视图。
+//
+// 注意：冻结发生在**模块求值时**，且这些数组只由上面的字面量推导，之后没有任何代码
+// 依赖它们的可变性（服务层已改为先 clone 再变换）。
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Object.getOwnPropertyNames(value)) {
+      deepFreeze((value as Record<string, unknown>)[key]);
+    }
+  }
+  return value;
+}
+
+deepFreeze(PROGRAM_STRUCTURES);
+deepFreeze(FOLDER_DEFINITIONS);
