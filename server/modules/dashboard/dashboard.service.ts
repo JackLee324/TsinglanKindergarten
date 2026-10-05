@@ -26,7 +26,7 @@ import type { RoleCode } from '@shared/api.interface';
 // 这里原本自带一份 ADMIN_ROLES = ['principal','curriculum_director']，
 // 漏掉 super_admin，导致首页的「Pre-K 资源 / K 资源 / 本周绘本封面」
 // 三张卡对 super_admin 恒为 0（与 resources.service.ts 那次 403 同一缺陷形态）。
-import { isPlatformAdmin } from '@shared/rbac';
+import { roleSubjectScope } from '@shared/rbac';
 
 /**
  * The soft-delete predicate (migration 0007).
@@ -80,7 +80,10 @@ export class DashboardService {
       .limit(1);
 
     const roles: string[] = teacherRows[0]?.roles ?? [];
-    const isAdmin = isPlatformAdmin(roles as RoleCode[]);
+    // §8：数据范围规则只有一份（shared/rbac.ts）。isAdmin 也由它派生，
+    // 避免同一件事两个来源 —— 这个文件以前自己写死 prek_head/k_head/pe_specialist。
+    const scope = roleSubjectScope(roles as RoleCode[]);
+    const isAdmin = scope.all;
 
     // 我的资源总数
     const myRes = await this.db
@@ -144,37 +147,25 @@ export class DashboardService {
         .groupBy(resources.program, resources.subject);
       authorizedSubjects = distinctSubj.length;
     } else {
-      // 角色级授权科目
-      const roleSubjects = new Set<string>();
+    // 角色级授权科目 —— 规则与判定都在 shared/rbac.ts，这里只负责把规则翻译成 SQL 查询。
+    // wholePrograms：该班型下出现过的所有科目都算已授权（与旧代码对 prek_head 查
+    // program='prek' 全部 subject 的语义一致）；explicitPairs：单科目授权（pe_specialist）。
+    const roleSubjects = new Set<string>();
 
-      const hasPrekHead = roles.includes('prek_head');
-      const hasKHead = roles.includes('k_head');
-      const hasPeSpecialist = roles.includes('pe_specialist');
+    for (const program of scope.wholePrograms) {
+      const rows = await this.db
+        .select({ subject: resources.subject })
+        .from(resources)
+        .where(and(eq(resources.program, program), activeOnly()))
+        .groupBy(resources.subject);
+      for (const row of rows) roleSubjects.add(`${program}:${row.subject}`);
+    }
 
-      if (hasPrekHead) {
-        const prekSubj = await this.db
-          .select({ subject: resources.subject })
-          .from(resources)
-          .where(and(eq(resources.program, 'prek'), activeOnly()))
-          .groupBy(resources.subject);
-        for (const s of prekSubj) roleSubjects.add(`prek:${s.subject}`);
-      }
+    for (const pair of scope.explicitPairs) {
+      roleSubjects.add(`${pair.program}:${pair.subject}`);
+    }
 
-      if (hasKHead) {
-        const kSubj = await this.db
-          .select({ subject: resources.subject })
-          .from(resources)
-          .where(and(eq(resources.program, 'k'), activeOnly()))
-          .groupBy(resources.subject);
-        for (const s of kSubj) roleSubjects.add(`k:${s.subject}`);
-      }
-
-      if (hasPeSpecialist) {
-        roleSubjects.add('prek:physical_education');
-        roleSubjects.add('k:physical_education');
-      }
-
-      // subject_permissions 表中的权限
+// subject_permissions 表中的权限
       const permRows = await this.db
         .select({
           program: subjectPermissions.program,
@@ -265,7 +256,7 @@ export class DashboardService {
       .where(eq(teachers.id, teacherId))
       .limit(1);
     const roles: string[] = teacherRows[0]?.roles ?? [];
-    const isAdmin = isPlatformAdmin(roles as RoleCode[]);
+    const isAdmin = roleSubjectScope(roles as RoleCode[]).all;
 
     // Soft delete first: it applies to BOTH branches. An administrator's "recent
     // updates" list must not advertise a resource that has been deleted, and a
