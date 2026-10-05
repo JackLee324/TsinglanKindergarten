@@ -270,7 +270,21 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test 275/275`（**不带** `AUTHZ_TEST_DB` 时是 270 —— 差 5 条是数据库相关用例的条件注册，不是被删掉的测试）、`verify-all` 见本轮结果、双 typecheck PASS、build PASS、api-contracts matched。
+门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18**）、双 typecheck PASS、build PASS、api-contracts matched。
+
+> 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
+> 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
+> 已在 `verify-all.sh` 里显式补 `export DATABASE_URL="${DATABASE_URL:-$AUTHZ_TEST_DB}"` 修掉。
+
+#### 生产环境（Zeabur）实测证据
+
+| 项 | 结果 |
+| --- | --- |
+| `GET /api/directories/tree`（生产、super_admin 登录） | 200；**69 节点**、16 个可自建叶节、0 隐藏科目；`prek:virtue` = 10 条；`prek:english` / `k:chinese:arts` / `growth:l1..l3` 均存在 |
+| migration 0009 是否在生产应用 | **是** —— entrypoint 启动时会 `migrate.mjs up`，无需人工执行 |
+| 浏览器 E2E 打生产（真 Chrome + CDP） | **18/18、0 失败、0 跳过** |
+| §16 分页（生产数据） | 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** |
+| §1 目录页（生产数据） | 两个根、Pre-K 4 科目（含 PDF 新增「英文」）、4 类资料夹、「可自建文件夹」标记、教师成长 L1/L2/L3 + 4 个分支 |
 
 #### §1/§2 目录树 API 的实测证据（`scripts/verify-directories.mjs`，55/55）
 
