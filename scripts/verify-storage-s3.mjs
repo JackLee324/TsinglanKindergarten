@@ -169,12 +169,30 @@ if (!modulePath) {
   const s3rverMod = await import(pathToFileURL(entry).href);
   const S3rver = s3rverMod.default ?? s3rverMod.S3rver;
   const dataDir = `${process.env.TMPDIR || '/tmp'}/qls-s3rver-${Date.now()}`;
-  const server = new S3rver({
-    port: 9200, address: '127.0.0.1', silent: true,
-    directory: dataDir,
-    configureBuckets: [{ name: CFG.bucket }],
-  });
-  await server.run();
+  // 端口不能写死：写完就撞上一次"上一轮留下的 s3rver 还占着 9200"，
+  // 表现为 EADDRINUSE 的门禁失败 —— 那是环境问题，却长得像代码问题。
+  // 依次尝试若干端口，第一个能起来的就用它，并让 CFG.endpoint 跟着走。
+  let started = null;
+  let lastErr = null;
+  for (const port of [9200, 9201, 9202, 9203, 9204]) {
+    const tryServer = new S3rver({
+      port, address: '127.0.0.1', silent: true,
+      directory: dataDir,
+      configureBuckets: [{ name: CFG.bucket }],
+    });
+    try {
+      await tryServer.run();
+      started = tryServer;
+      CFG.endpoint = `http://127.0.0.1:${port}`;
+      break;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (!started) {
+    throw new Error(`无法在 9200-9204 起本地 S3 模拟服务：${lastErr?.message}`);
+  }
+  const server = started;
   console.log(`        （本地 s3rver 已起：${CFG.endpoint}，bucket=${CFG.bucket}；数据目录 ${dataDir}）`);
 
   try {
