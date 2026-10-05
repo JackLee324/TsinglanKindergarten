@@ -374,3 +374,34 @@ npm install --no-save --no-audit --no-fund \
     page=1  total=245  items=50      page=2  total=245  items=50      page=5  total=245  items=45
 
 **未验证**：「加载更多」按钮的交互只经过 typecheck + build，没有浏览器级证据（§32 未建立）。
+
+### 追加（第 29 轮）：§32 的第一条垂直切片 —— 真实浏览器 E2E
+
+新增 `scripts/verify-browser-e2e.mjs`（自起 Chrome + CDP；真登录表单填写与点击、真读 DOM）。
+**尚未接入 `verify-all.sh`**（见下"已知问题"），因此门禁基线不变。
+
+本轮实测（本地 3200 服务 + seq_principal）：
+
+    PASS  未登录访问 / 显示登录页（ProtectedRoute 生效）
+    PASS  登录表单可提交 -> SUBMITTED
+    PASS  登录后进入工作台
+    PASS  §19 「导出 CSV」按钮可点击（不再 disabled）
+    PASS  §5 「我的资源」渲染正常并列出资源/空态 -> 共 2 条
+    FAIL  §16 分页入口（断言待调准，见下）
+    FAIL  §16 加载更多生效（同上）
+
+**顺带拿到的浏览器级证据**（比断言本身更有价值）：`/my-resources` 列出两条真实资源 ——
+
+    §6 状态机验证   PREK virtue 课程大纲  草稿      ← §6 recall 生效（published → draft）
+    §5 序列验证资源 PREK virtue 课程大纲  待审核    ← §5 提交审核生效
+
+也就是说 §5 与 §6 的"最后一公里"现在有了**浏览器证据**，不再只是 typecheck。
+§19 的按钮也在浏览器里确认从 disabled 变成可点击。
+
+**已知问题（不得读成产品缺陷，但也不能当作已通过）**：
+1. §16 的两条断言走错了页面 —— `/prek/montessori` 渲染的是子科目录（日常生活/感官/…），
+   资料夹（课程大纲/课件与示范/…）要在选定子科之后才出现，所以找不到「课件与示范」标签。
+   **很可能是我断言写错页面，不是产品缺陷**；但我**没有用正确路径复验过**，
+   所以 §16 仍只算 **API 级已验证**。TODO：改到 `/prek/montessori/practical-life`。
+2. §5 的断言原本找行内按钮文案（实际是图标+tooltip）而误判失败 —— 已修正。
+   **这提醒：E2E 断言本身也要被怀疑。** 本轮两条失败里至少一条确认是我的断言错。
