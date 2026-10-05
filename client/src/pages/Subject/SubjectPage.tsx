@@ -1,3 +1,5 @@
+const PAGE_SIZE = 50;
+
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { logger } from '@client/src/lib/logger';
@@ -12,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@client/src/components/ui/select';
+import { Button } from '@client/src/components/ui/button';
 import { PageHeader } from '@client/src/components/ui/page-header';
 import { ResourceCard } from '@client/src/components/resource-card';
 import { useTranslation } from '@client/src/i18n/useTranslation';
@@ -42,6 +45,12 @@ const SubjectPage: React.FC = () => {
   const [resources, setResources] = useState<Resource[]>([]);
   // 服务端拒绝时（403）不能说成「暂无资源」—— 那是在撒谎。单独记一个状态。
   const [forbidden, setForbidden] = useState<boolean>(false);
+
+  // §16：真实分页。以前写死 `pageSize: 50` 且没有任何翻页入口 —— 第 51 条起的资源
+  // **在界面上永远看不到**（数据在对齐，只是被人为截断）。后端本来就支持
+  // page/pageSize 并返回 total，这里把它的能力用起来。
+  const [page, setPage] = useState<number>(1);
+  const [total, setTotal] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
 
   // Parse program and subject from pathname (routes use literal segments, not params)
@@ -148,10 +157,12 @@ const SubjectPage: React.FC = () => {
     const fetchResources = async (): Promise<void> => {
       setLoading(true);
       try {
+        const targetPage = page;
         const paramsObj: Record<string, string | number> = {
           folderType: activeFolder,
           status: 'published',
-          pageSize: 50,
+          pageSize: PAGE_SIZE,
+        page: targetPage,
         };
         if (program) paramsObj.program = program;
         if (subject) paramsObj.subject = subject;
@@ -165,9 +176,16 @@ const SubjectPage: React.FC = () => {
 
         const resp = await resourcesApi.getResources(paramsObj);
         if (mounted) {
-          const page = readListResponse<Resource>(resp, 'resources.list(subject)');
-          setResources(page.items);
-          setForbidden(page.forbidden);
+
+          const listResult = readListResponse<Resource>(resp, 'resources.list(subject)');
+
+          setTotal(listResult.total);
+
+          setForbidden(listResult.forbidden);
+
+          // 第 1 页替换，后续页追加（'加载更多'）
+
+          setResources((prev) => (targetPage === 1 ? listResult.items : [...prev, ...listResult.items]));
         }
       } catch (err) {
         logger.error('Failed to load resources', String(err));
@@ -180,6 +198,11 @@ const SubjectPage: React.FC = () => {
     return () => {
       mounted = false;
     };
+  }, [activeFolder, program, subject, subSubject, themeFilterValue, semester, weekNumber, page]);
+
+  // 筛选条件变化时回到第 1 页，否则"加载更多"会把上一组筛选的第 N 页接在新结果后面。
+  useEffect(() => {
+    setPage(1);
   }, [activeFolder, program, subject, subSubject, themeFilterValue, semester, weekNumber]);
 
   return (
@@ -280,6 +303,20 @@ const SubjectPage: React.FC = () => {
                         showStorybooksDefault={activeFolder === 'weekly_plans'}
                       />
                     ))}
+                  </div>
+                )}
+
+                {/* §16：让第 51 条之后的资源可达，并如实显示总数。 */}
+                {!loading && !forbidden && total > resources.length && (
+                  <div className="mt-4 flex flex-col items-center gap-2">
+                    <Button variant="outline" onClick={() => setPage((prev) => prev + 1)}>
+                      {language === 'zh-CN' ? '加载更多' : 'Load more'}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      {language === 'zh-CN'
+                        ? `已显示 ${resources.length} / 共 ${total} 条`
+                        : `Showing ${resources.length} of ${total}`}
+                    </p>
                   </div>
                 )}
               </TabsContent>

@@ -356,3 +356,21 @@ npm install --no-save --no-audit --no-fund \
     阴性对照（只授 audit.view）:     查看列表 200 ／ 导出 403 缺少权限：audit.export
 
 **未验证**：按钮的下载行为只经过 typecheck + build，没有浏览器级证据（§32 未建立）。
+
+### 追加（第 28 轮）：§16 分页
+
+`SubjectPage.tsx:154` 写死 `pageSize: 50` 且**没有任何翻页入口** —— 第 51 条起的资源在界面上
+**永远看不到**。实测该科目的规模：`prek/montessori/courseware` 共 **245** 条，
+也就是说修复前 **195 条内容对用户不可达**（数据都在，只是被人为截断）。
+
+后端本来就支持 `page`/`pageSize` 并返回 `total`，是前端没用起来。
+
+**实现**：`PAGE_SIZE` 常量 + `page`/`total` 状态；请求带 `page`；第 1 页替换、后续页追加；
+筛选条件变化时回到第 1 页（否则"加载更多"会把上一组筛选的第 N 页接到新结果后面）；
+列表下方显示「已显示 X / 共 Y 条」与「加载更多」（仅在还有剩余时出现）。
+
+**实测**（UI 现在正是这样取数据）：
+
+    page=1  total=245  items=50      page=2  total=245  items=50      page=5  total=245  items=45
+
+**未验证**：「加载更多」按钮的交互只经过 typecheck + build，没有浏览器级证据（§32 未建立）。
