@@ -3,6 +3,7 @@ import type {
   Resource,
   ResourceListParams,
   ResourceListResponse,
+  ResourceVersion,
   UpdateResourceRequest,
 } from '@shared/api.interface';
 
@@ -14,6 +15,16 @@ export async function getResources(params: ResourceListParams = {}): Promise<Res
     return resp.data;
   } catch (error) {
     return handleApiError(error, 'getResources');
+  }
+}
+
+/** 版本历史（§15）。新的在前。 */
+export async function getResourceVersions(id: string): Promise<ResourceVersion[]> {
+  try {
+    const resp = await axiosForBackend.get(`/api/resources/${id}/versions`);
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'getResourceVersions');
   }
 }
 

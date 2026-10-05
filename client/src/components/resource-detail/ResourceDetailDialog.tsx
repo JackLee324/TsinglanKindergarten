@@ -4,7 +4,7 @@ import { AlertCircle, Loader2, X } from 'lucide-react';
 import { resources as resourcesApi } from '../../api';
 import { useTranslation } from '../../i18n/useTranslation';
 import type { TranslationKey } from '../../i18n/translations';
-import type { Resource, ResourceStatus } from '@shared/api.interface';
+import type { Resource, ResourceStatus, ResourceVersion } from '@shared/api.interface';
 
 /**
  * 资源详情（§14）。
@@ -25,6 +25,9 @@ export function ResourceDetailDialog({
 }) {
   const { t, language } = useTranslation();
   const [resource, setResource] = useState<Resource | null>(null);
+  // §15 版本历史。与详情分开取：历史取不到不应该让详情也打不开。
+  const [versions, setVersions] = useState<ResourceVersion[] | null>(null);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,6 +41,14 @@ export function ResourceDetailDialog({
     setLoading(true);
     setError(null);
     setResource(null);
+    setVersions(null);
+    setVersionsError(null);
+    resourcesApi
+      .getResourceVersions(resourceId)
+      .then((list) => { if (!cancelled) setVersions(list); })
+      .catch((e: unknown) => {
+        if (!cancelled) setVersionsError(e instanceof Error ? e.message : String(e));
+      });
     resourcesApi
       .getResource(resourceId)
       .then((data) => {
@@ -160,6 +171,44 @@ export function ResourceDetailDialog({
                 <p className="mt-1 text-xs text-muted-foreground">
                   {t('detail.reviewedAt')}: {formatTime(resource.reviewedAt)}
                 </p>
+              )}
+            </div>
+
+            {/* §15 版本历史。以前界面上那个"版本 v1"是个从不变化的装饰 ——
+                现在它对应的是真实历史，所以把它列出来。 */}
+            <div className="mt-5" data-testid="resource-version-history">
+              <p className="mb-2 text-sm text-[#6B6878]">{t('detail.versionHistory')}</p>
+              {versionsError && (
+                <p className="text-sm text-[#D98B8B]">
+                  {t('detail.versionHistoryFailed')}: {versionsError}
+                </p>
+              )}
+              {!versionsError && versions === null && (
+                <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+              )}
+              {!versionsError && versions !== null && (
+                <ul className="space-y-2">
+                  {versions.map((v) => (
+                    <li
+                      key={v.id}
+                      className="rounded-lg border border-[#E8E4F0] px-3 py-2 text-sm"
+                      data-version={v.version}
+                    >
+                      <span className="font-medium text-[#2D2A3E]">v{v.version}</span>
+                      <span className="ml-2 text-[#6B6878]">
+                        {t(`detail.changeKind.${v.changeKind}` as TranslationKey)}
+                      </span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {formatTime(v.changedAt)}
+                      </span>
+                      {v.version === 1 && v.changeKind === 'backfilled' && (
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          · {t('detail.backfilled')}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           </>

@@ -422,6 +422,37 @@ export interface DirectoryNode {
   children: DirectoryNode[];
 }
 
+// === 资源版本历史（§15，migration 0011）===
+export type ResourceVersionChangeKind =
+  | 'backfilled'
+  | 'created'
+  | 'metadata_edited'
+  | 'file_attached'
+  | 'status_changed';
+
+export interface ResourceVersion {
+  id: string;
+  resourceId: string;
+  version: number;
+  title: string;
+  titleEn?: string;
+  description?: string;
+  folderType: FolderType;
+  semester?: string;
+  weekNumber?: number;
+  theme?: string;
+  fileName?: string;
+  fileSize?: number;
+  fileType?: string;
+  /** 该版本是否有真实文件（与 resources.has_file 同一判据，由快照列算出）。 */
+  hasFile: boolean;
+  status: ResourceStatus;
+  /** 这一版**因为什么**产生。没有它，历史只是一串时间戳。 */
+  changeKind: ResourceVersionChangeKind;
+  changedBy: string;
+  changedAt: string;
+}
+
 export interface DirectoryTreeResponse {
   /** 固定两根：教育教学、教师成长。调用方无权限的那一支不会出现在数组里。 */
   roots: DirectoryNode[];

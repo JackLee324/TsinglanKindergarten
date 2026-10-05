@@ -116,6 +116,14 @@ export const translations = {
     'detail.reviewedAt': '审核时间',
     'detail.notProvided': '未填写',
     'detail.noFile': '未上传文件',
+    'detail.versionHistory': '版本历史',
+    'detail.versionHistoryFailed': '版本历史加载失败',
+    'detail.backfilled': '迁移前的既有数据',
+    'detail.changeKind.backfilled': '迁移回填',
+    'detail.changeKind.created': '创建',
+    'detail.changeKind.metadata_edited': '修改信息',
+    'detail.changeKind.file_attached': '附加文件',
+    'detail.changeKind.status_changed': '状态变更',
     'upload.storageNote':
       '资源信息会正常保存；文件字节只有在服务端配置了对象存储后才能真正上传，否则提交时会明确告诉你原因。',
     'upload.storageNotConfigured':
@@ -541,6 +549,14 @@ export const translations = {
     'detail.reviewedAt': 'Reviewed at',
     'detail.notProvided': 'Not filled in source',
     'detail.noFile': 'No file uploaded',
+    'detail.versionHistory': 'Version history',
+    'detail.versionHistoryFailed': 'Could not load the version history',
+    'detail.backfilled': 'pre-existing data from the migration',
+    'detail.changeKind.backfilled': 'Backfilled by migration',
+    'detail.changeKind.created': 'Created',
+    'detail.changeKind.metadata_edited': 'Metadata edited',
+    'detail.changeKind.file_attached': 'File attached',
+    'detail.changeKind.status_changed': 'Status changed',
     'upload.storageNote':
       'Resource details are saved normally. The file bytes can only be uploaded once the server has object storage configured; otherwise the reason is shown on submit.',
     'upload.storageNotConfigured':

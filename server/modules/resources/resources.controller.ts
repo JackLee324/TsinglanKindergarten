@@ -227,6 +227,21 @@ export class ResourcesController {
     return this.resourcesService.submitReview(params.id, teacher.id, ip);
   }
 
+  /**
+   * 版本历史（§15）。新的在前。
+   *
+   * 权限与"能不能看这个资源"完全一致（服务层复用同一套判定）——
+   * 否则会出现"看不到资源、却能看到它的历史"这种边界。
+   */
+  @Get(':id/versions')
+  @RequirePermission('resource.view')
+  async getVersions(
+    @Param() params: ResourceIdParamDto,
+    @CurrentTeacher() teacher: AuthUser,
+  ) {
+    return this.resourcesService.listVersions(params.id, teacher.id);
+  }
+
   @Get(':id/download')
   @RequirePermission('resource.download')
   async downloadResource(

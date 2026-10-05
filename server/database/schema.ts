@@ -542,7 +542,51 @@ export const directories = pgTable("directories", {
   }).onDelete("restrict"),
 ]);
 
+// =============================================================================
+// resource_versions — added by migration 0011 (§15), NOT emitted by the schema
+// generator. Re-add this if you regenerate this file.
+//
+// An immutable snapshot of a resource at each content change. `resources.version`
+// points at the latest one. Before 0011 that column existed and was rendered in
+// the UI ("版本 v1") but nothing ever wrote it — verified: all 348 rows were 1.
+//
+// The snapshot stores whole rows rather than diffs on purpose: replaying a diff
+// requires both sides to be correct, and the payload is a few hundred bytes.
+// `changeKind` records WHY this revision exists, which is what makes the history
+// readable instead of just a list of timestamps.
+// =============================================================================
+export const resourceVersions = pgTable("resource_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  resourceId: uuid("resource_id").notNull(),
+  version: integer("version").notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  titleEn: varchar("title_en", { length: 255 }),
+  description: text("description"),
+  folderType: varchar("folder_type", { length: 30 }).notNull(),
+  semester: varchar("semester", { length: 10 }),
+  weekNumber: integer("week_number"),
+  theme: varchar("theme", { length: 100 }),
+  fileBucketId: varchar("file_bucket_id", { length: 100 }),
+  filePath: varchar("file_path", { length: 500 }),
+  fileName: varchar("file_name", { length: 255 }),
+  fileSize: bigint("file_size", { mode: 'number' }),
+  fileType: varchar("file_type", { length: 50 }),
+  status: varchar("status", { length: 20 }).notNull(),
+  changeKind: varchar("change_kind", { length: 24 }).notNull(),
+  changedBy: uuid("changed_by").notNull(),
+  changedAt: customTimestamptz("changed_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("resource_versions_unique").on(table.resourceId, table.version),
+  index("resource_versions_resource_idx").on(table.resourceId, table.version),
+  foreignKey({
+    columns: [table.resourceId],
+    foreignColumns: [resources.id],
+    name: "resource_versions_resource_id_fkey",
+  }).onDelete("cascade"),
+]);
+
 // table aliases
+export const resourceVersionsTable = resourceVersions;
 export const directoriesTable = directories;
 export const auditLogsTable = auditLogs;
 export const resourcesTable = resources;

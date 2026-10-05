@@ -150,6 +150,9 @@ run "directories"         node scripts/verify-directories.mjs
 # 目录**写路径**（§24/§25/§26）：自建文件夹的增/改/删，以及"拦得住"的否定用例
 # —— 系统节点不可改删、PDF 未标自建的地方不可新建、非空不可删、无 manage 权限 403。
 run "directories-write"   node scripts/verify-directories-write.mjs
+# 资源版本生命周期（§15）：新建/编辑是否真的产生版本、无实质变化是否**不**产生版本、
+# 以及迁移回填是否覆盖了每一个既有资源。
+run "resource-versions"   node scripts/verify-resource-versions.mjs
 
 # 真实浏览器 E2E（§32）。它不是"再跑一次接口" —— 它验证的是**浏览器里真的点得动、
 # 页面真的渲染出了数据库里的东西**（§16 那条卡了三轮的 SKIP 已用可判定断言替代）。

@@ -41,9 +41,11 @@ import type {
   AuditAction,
   RoleCode,
   ProgramCode,
+  ResourceVersion,
 } from '@shared/api.interface';
 import {
   resources,
+  resourceVersions,
   teachers,
   subjectPermissions,
   auditLogs,
@@ -1388,6 +1390,13 @@ export class ResourcesService {
 
       const newResource = inserted[0];
 
+      // §15：创建也是一次版本 —— 它的第 1 版。没有这一行，历史里就只有"改过之后"
+      // 的版本，第 1 版永远缺席（回填那次是给迁移前既有数据补的，不适用于新资源）。
+      await this.insertVersionSnapshot(newResource, {
+        changeKind: 'created',
+        changedBy: currentTeacherId,
+      });
+
       await this.logAudit({
         action: 'resource_upload',
         teacherId: currentTeacherId,
@@ -1430,6 +1439,94 @@ export class ResourcesService {
   }
 
   // ========== 更新资源 ==========
+
+  /**
+   * 写入一条版本快照（§15）。
+   *
+   * 由「行本身」生成快照，而不是由调用方拼字段：这样快照与 resources 行永远同构，
+   * 新增一个可编辑列时不需要在多个地方记得同步 —— 忘记同步正是"字段悄悄不记录"的成因。
+   */
+  private async insertVersionSnapshot(
+    row: typeof resources.$inferSelect,
+    opts: { changeKind: string; changedBy: string },
+  ): Promise<void> {
+    await this.db.insert(resourceVersions).values({
+      resourceId: row.id,
+      version: row.version,
+      title: row.title,
+      titleEn: row.titleEn,
+      description: row.description,
+      folderType: row.folderType,
+      semester: row.semester,
+      weekNumber: row.weekNumber,
+      theme: row.theme,
+      fileBucketId: row.fileBucketId,
+      filePath: row.filePath,
+      fileName: row.fileName,
+      fileSize: row.fileSize,
+      fileType: row.fileType,
+      status: row.status,
+      changeKind: opts.changeKind,
+      changedBy: opts.changedBy,
+    });
+  }
+
+  /** 某个资源的版本历史，新的在前（§15）。 */
+  async listVersions(resourceId: string, currentTeacherId: string): Promise<ResourceVersion[]> {
+    const rows = await this.db
+      .select()
+      .from(resources)
+      // 与其它读取一致：回收站里的资源先恢复再谈历史
+      .where(and(eq(resources.id, resourceId), this.activeOnly()))
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new NotFoundException('资源不存在');
+    }
+
+    // 历史能看到的人 == 能看到这个资源的人：同一套判定，避免"看不到资源却能看到它的历史"
+    const isAdmin = await this.isAdminTeacher(currentTeacherId);
+    const isUploader = rows[0].uploaderId === currentTeacherId;
+    if (!isAdmin && !isUploader) {
+      const allowed = await this.checkSubjectPermission(
+        currentTeacherId,
+        rows[0].program as never,
+        rows[0].subject,
+        rows[0].subSubject ?? undefined,
+        'view',
+      );
+      if (!allowed) {
+        throw new ForbiddenException('无权查看该资源的版本历史');
+      }
+    }
+
+    const versions = await this.db
+      .select()
+      .from(resourceVersions)
+      .where(eq(resourceVersions.resourceId, resourceId))
+      .orderBy(desc(resourceVersions.version));
+
+    return versions.map((v) => ({
+      id: v.id,
+      resourceId: v.resourceId,
+      version: v.version,
+      title: v.title,
+      titleEn: v.titleEn ?? undefined,
+      description: v.description ?? undefined,
+      folderType: v.folderType as never,
+      semester: v.semester ?? undefined,
+      weekNumber: v.weekNumber ?? undefined,
+      theme: v.theme ?? undefined,
+      fileName: v.fileName ?? undefined,
+      fileSize: v.fileSize ?? undefined,
+      fileType: v.fileType ?? undefined,
+      hasFile: Boolean(v.fileBucketId?.trim() && v.filePath?.trim()),
+      status: v.status as never,
+      changeKind: v.changeKind as never,
+      changedBy: v.changedBy,
+      changedAt: v.changedAt instanceof Date ? v.changedAt.toISOString() : String(v.changedAt),
+    }));
+  }
 
   async updateResource(
     id: string,
@@ -1493,13 +1590,39 @@ export class ResourcesService {
     }
 
     try {
+      // 内容变化才产生新版本（§15）。
+      //
+      // 判据是"patch 里有没有真的改到东西"，而不是"有没有发这个请求" ——
+      // 后者会让每次无意义的保存都凭空造出一个版本，历史会被噪声淹没。
+      // 比较用的是**存库后的形态**（例如 theme 已解析成 `主题1：我自己`），
+      // 所以 `theme=myself` 与库里已有的值相等时不会算作变化。
+      const contentKeys = Object.keys(patch) as Array<keyof typeof resources.$inferInsert>;
+      const changedKeys = contentKeys.filter((k) => {
+        const before = (resource as Record<string, unknown>)[k as string] ?? null;
+        const after = (patch as Record<string, unknown>)[k as string] ?? null;
+        return before !== after;
+      });
+      const fileKeys = ['fileBucketId', 'filePath', 'fileName', 'fileSize', 'fileType'];
+      const touchesFile = changedKeys.some((k) => fileKeys.includes(k as string));
+      const shouldVersion = changedKeys.length > 0;
+
       const updated = await this.db
         .update(resources)
-        .set(patch)
+        .set(shouldVersion ? { ...patch, version: resource.version + 1 } : patch)
         .where(eq(resources.id, id))
         .returning();
 
       const updatedResource = updated[0];
+
+      if (shouldVersion) {
+        // 快照写入失败会让整个编辑回滚（与审计同一策略）：宁可让编辑失败，
+        // 也不要出现"版本号动了、却没有对应历史"的账。
+        await this.insertVersionSnapshot(updatedResource, {
+          changeKind: touchesFile ? 'file_attached' : 'metadata_edited',
+          changedBy: currentTeacherId,
+        });
+      }
+
       const teacherInfo = await this.getTeacherById(currentTeacherId);
 
       await this.logAudit({
@@ -2065,6 +2188,27 @@ export class ResourcesService {
         `文件登记通过：name=${validation.fileName} type=${validation.mimeType} ` +
         `detected=${validation.kind} size=${validation.sizeBytes} bucket=${input.fileBucketId}`,
     });
+
+    // §15：附加/替换文件是一次内容变化，理应产生新版本。
+    // 这里再查一次行，是为了让快照来自**库里真实的样子**，而不是我拼的 patch。
+    const afterFile = await this.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.id, resourceId), this.activeOnly()))
+      .limit(1);
+    if (afterFile.length > 0) {
+      const bumped = await this.db
+        .update(resources)
+        .set({ version: afterFile[0].version + 1 })
+        .where(eq(resources.id, resourceId))
+        .returning();
+      if (bumped.length > 0) {
+        await this.insertVersionSnapshot(bumped[0], {
+          changeKind: 'file_attached',
+          changedBy: currentTeacherId,
+        });
+      }
+    }
 
     return {
       resourceId: resource.id,
