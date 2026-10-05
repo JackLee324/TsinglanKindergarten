@@ -481,6 +481,12 @@ export const DATA_SCOPED_PERMISSIONS: PermissionCode[] = PERMISSIONS
  * may take over an administrator account" from a convention into a check that
  * fails loudly at boot and in the test suite.
  */
+/**
+ * 角色分配权限。写成常量而不是到处写字面量：幽灵权限审计脚本会把
+ * "通过常量消费"也算作真实消费点；而字面量散落各处时，改一处漏一处很难发现。
+ */
+export const ROLE_ASSIGN_PERMISSION: PermissionCode = 'role.assign';
+
 export const RESET_PRIVILEGED_PASSWORD_PERMISSION: PermissionCode =
   'account.reset_privileged_password';
 

@@ -16,6 +16,10 @@ import type {
   TeacherDetail,
 } from '@shared/api.interface';
 import {
+  ROLE_ASSIGN_PERMISSION,
+  type EffectivePermissions,
+} from '@shared/rbac';
+import {
   auditLogs,
   subjectPermissions,
   teachers,
@@ -164,6 +168,7 @@ export class TeachersService {
     operatorId: string,
     operatorName: string,
     operatorRoles: RoleCode[],
+    authz: EffectivePermissions | undefined,
     operatorIp?: string,
   ): Promise<TeacherDetail> {
     // §9：角色不是"随便传的字段"。DTO 只保证"是已知角色"，**谁能授予**由这里决定：
@@ -245,6 +250,7 @@ export class TeachersService {
     operatorId: string,
     operatorName: string,
     operatorRoles: RoleCode[],
+    authz: EffectivePermissions | undefined,
     operatorIp?: string,
   ): Promise<Teacher> {
     const patch: Partial<typeof teachers.$inferInsert> = {};

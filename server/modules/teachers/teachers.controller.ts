@@ -26,7 +26,8 @@ import type {
   TeacherDetail,
 } from '@shared/api.interface';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
-import { RequirePermission } from '@server/modules/authz/permission.decorator';
+import { CurrentAuthz, RequirePermission } from '@server/modules/authz/permission.decorator';
+import type { EffectivePermissions } from '@shared/rbac';
 import { getClientIp as resolveClientIp } from '@server/common/http/client-ip';
 
 interface TeacherListResponse {
@@ -86,6 +87,7 @@ export class TeachersController {
       name: string;
       roles: RoleCode[];
     },
+    @CurrentAuthz() authz: EffectivePermissions,
     @Body() dto: CreateTeacherDto,
     @Req() req: Request,
   ): Promise<TeacherDetail> {
@@ -96,6 +98,7 @@ export class TeachersController {
       teacher.id,
       teacher.name,
       teacher.roles,
+      authz,
       ip,
     );
   }
@@ -108,6 +111,7 @@ export class TeachersController {
       name: string;
       roles: RoleCode[];
     },
+    @CurrentAuthz() authz: EffectivePermissions,
     @Param('id') id: string,
     @Body() dto: UpdateTeacherDto,
     @Req() req: Request,
@@ -120,6 +124,7 @@ export class TeachersController {
       teacher.id,
       teacher.name,
       teacher.roles,
+      authz,
       ip,
     );
   }
