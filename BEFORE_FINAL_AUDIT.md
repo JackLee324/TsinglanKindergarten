@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、**account-permissions 27**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` **276**。
+门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、**account-permissions 27**、browser-e2e **37/37、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` **276**。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -500,6 +500,23 @@ RBAC.md §5 的模型（角色默认 ∪ 追加 − 禁止，禁止优先）此�
 
 **教训**：诊断用的写操作也要留清理，否则会像这次一样在"收尾检查"里冒出来 ——
 而一个带无效权限码的覆盖行留在库里，本身就是下一轮排查的噪声来源。
+
+
+### §11 管理界面（commit `948955c`）
+
+加在既有的「权限管理」页里（不新开页面、不动既有布局）：选中账号后出现「生效权限」面板 ——
+摘要（生效 N / 追加 M / 禁止 K）、单独覆盖项各自一条「恢复为角色默认」、
+以及按分组列出的**全部 46 条**权限（含当前没有的；看不见"缺什么"就谈不上追加），
+每行两个动作（追加授权 / 显式禁止）与命中徽章。
+
+**浏览器端到端（browser-e2e 32 → 37、0 跳过）**：进入页 → 选中账号 → 面板加载 46 条 →
+点追加 → 该项出现「追加」徽章（服务端 `sources` 真的变了）→ 点恢复 → 徽章消失、
+覆盖行清零。**用例自清理，不留残留。**
+
+过程中三个"假失败"都是我的用例写错，不是产品问题：
+1. 直接找 `[data-perm-row]`，但账号列表是 `<button>` 不是 `<table>`，且面板只在选中后才渲染；
+2. 改成等"面板容器"→ 容器先到、数据后到，读到的是"加载中"（**异步渲染必须等目标内容出现**）；
+3. 选中列表第一项 = 当前登录账号，而"管理自己"被等级规则正确拒绝（**这条 403 是对的，我没有去修它**）。
 
 ### 未完成
 
