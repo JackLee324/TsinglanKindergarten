@@ -192,9 +192,20 @@ try {
     return { clicked: true, text: res.text, effect: r.ok ? 'OK' : 'NO_EFFECT' };
   };
 
-  const goto = async (path, waitMs = 4500) => {
+  /**
+   * 导航并**等到应用真的渲染出来**，然后返回可见文本。
+   *
+   * 为什么不再用固定 sleep：本机跑 4.5 秒绰绰有余，但对着**生产**跑时，
+   * SPA 的 bundle 要过网络下载、容器可能正在冷启动 —— 固定等待会让
+   * 「还没渲染完」看起来像「功能坏了」：登录页断言失败、表单找不到、
+   * 后面每一条都跟着失败（我第一次对生产跑就是 0/7 全红，其实什么都没坏）。
+   * 所以改成轮询页面出现内容（或调用方给的条件），超时再报错。
+   */
+  const goto = async (path, _waitMs = 4500, until = null) => {
     await send('Page.navigate', { url: `${BASE}${path}` });
-    await sleep(waitMs);
+    const cond = until || '(document.getElementById("root")?.innerText || "").trim().length > 10';
+    await waitFor(cond, 45000);
+    await sleep(600); // 让首屏数据请求落定
     return (await evalIn("(document.getElementById('root')?.innerText || '').replace(/\\s+/g, ' ')")) || '';
   };
 
@@ -211,6 +222,8 @@ try {
   }
 
   // ---- 2. 用真实登录表单登录 ----
+  // 先等表单真的出现再填：对着生产跑时 JS bundle 还没下载完就到了这一步。
+  await waitFor('document.querySelectorAll("input").length >= 2', 45000);
   const submitted = await evalIn(`(async () => {
     const set = (el, v) => {
       const d = Object.getOwnPropertyDescriptor(el.constructor.prototype, 'value').set;
@@ -228,7 +241,10 @@ try {
   })()`, true);
   if (submitted !== 'SUBMITTED') { bad('登录表单可提交', String(submitted)); }
   else ok('登录表单可提交', submitted);
-  await sleep(6000);
+  await waitFor(
+    '/首页|Dashboard/.test(document.getElementById("root")?.innerText || "")',
+    45000,
+  );
   const home = await evalIn("(document.getElementById('root')?.innerText || '').replace(/\\s+/g, ' ')") || '';
   if (home.includes('首页') && !home.includes('无权访问')) ok('登录后进入工作台', home.slice(0, 40));
   else bad('登录后进入工作台', home.slice(0, 90));
@@ -312,7 +328,16 @@ try {
   const treeText = () => evalIn(
     `(document.querySelector('[data-testid="directory-tree"]')?.innerText || '').replace(/\\s+/g, ' ')`);
 
-  await goto('/directory', 6000);
+  // 等到「树出现」**或**「明确报加载失败」为止：
+  // 只等"页面有文字"是不够的 —— 布局与导航先渲染，目录还在「加载中...」，
+  // 于是断言读到加载态而误判成"目录页坏了"（第一次对生产跑就是这样，7 条全红）。
+  // 但也不能无限等：真失败时要快速落到失败分支，由页面自己的报错文案给出原因。
+  await goto(
+    '/directory',
+    6000,
+    "!!document.querySelector('[data-testid=\"directory-tree\"]')" +
+      " || /目录加载失败|Failed to load/.test(document.getElementById('root')?.innerText || '')",
+  );
   const containerExists = await evalIn(
     "!!document.querySelector('[data-testid=\"directory-tree\"]')");
   if (!containerExists) {

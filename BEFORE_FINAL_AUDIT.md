@@ -266,6 +266,9 @@ npm install --no-save --no-audit --no-fund \
 | §8 (3/3) | `resources.service.ts` 6→0 处（机械等价替换，SQL 结构未动）；`checkSubjectPermission` 三处字面量合并为一次 `roleScopeCovers` | 权限矩阵 7 项实测全部符合预期（见下） | 本轮 |
 | §1 §2（数据层） | migration `0009_directories`：PDF《教师平台》权威目录树落库，**69 节点**，内嵌自检断言（不满足即回滚）；刻意**纯加法**，一行 `resources` 不动 | up 通过；down `0009` 通过（表消失、resources 仍 348 行）；up 重放后内容指纹与回滚前**逐字节一致**（`211433d5a830f5be02bee909487a60f6`）；孤儿 parent_id=0、重复 code=0 | `298579e` |
 | §1 §2 §20（接口层） | 目录树 API：`GET /api/directories/tree`、`GET /api/directories/node?code=…`，逐节点按角色剪枝；`curriculum.view` 声明式守门 | `scripts/verify-directories.mjs` **55 项实测全绿**（见下），并已接入 `verify-all.sh` | 本轮 |
+| §1 §2 §20 §24 §25 §26（前端） | 新增 `/directory` 目录页 + 导航项：渲染数据库里的 PDF 目录树（两个根、PDF 新增科目、可自建文件夹标记、教师成长 L1/L2/L3）；**无任何硬编码结构兜底**，接口失败就报错重试；把「因权限未显示的科目数」显式写出来 | **浏览器 E2E 18/18**（真 Chrome + CDP），含展开 Pre-K 后 4 个科目齐全、4 类资料夹、可自建标记、教师成长树 | `bfb48ca` |
+| §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
+| §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
 门禁基线（每轮实跑）：`npm test 275/275`（**不带** `AUTHZ_TEST_DB` 时是 270 —— 差 5 条是数据库相关用例的条件注册，不是被删掉的测试）、`verify-all` 见本轮结果、双 typecheck PASS、build PASS、api-contracts matched。
 
@@ -305,7 +308,7 @@ npm install --no-save --no-audit --no-fund \
 
 | § | 内容 | 卡在哪 |
 | --- | --- | --- |
-| §1 §2 §20 §24 §25 §26 | Directory **Renderer**（前端页面）、目录的**增删改**（自建文件夹写入）、教师成长页 | 数据层+接口层已就绪；前端待做。⚠️ 自建文件夹的**写**入需要先定资料夹映射 |
+| §24 §25 §26（写入） | 目录的**增删改**：自建文件夹的创建/重命名/删除 | 读路径已完成；写路径需要先定资料夹映射，且需要一个 `is_system` 列来保护 69 个种子节点不被误删（否则"可编辑"等于"可把 PDF 权威结构删掉"）|
 | §4 §23 | 真实文件上传/下载、S3 兼容存储 | **等测试 bucket**，或业主同意用本地 MinIO 做等价验证（会明确标注非生产 bucket） |
 | §15 §16 §17 §18 §19 | 版本生命周期 / 分页 / 回收站文案 / 自动清理调度器 / 审计导出 | 不依赖决策，可先做 |
 | §32 | 真实浏览器 E2E（9 条流程） | 尚未建立。当前所有 UI 改动只经过 typecheck+build，**没有浏览器级证据** |
@@ -323,6 +326,15 @@ npm install --no-save --no-audit --no-fund \
 2. `npm install` 会裁掉 darwin-arm64 平台二进制；必须**一条命令装齐**且之后不再跑 npm install（见 §6）。
 3. 门禁服务需手动起：`SERVER_PORT=3200 MFA_ENFORCE_SUPER_ADMIN=true DOWNLOAD_TOKEN_TTL_SECONDS=10 LOGIN_IP_RATE_LIMIT_MAX=100000 npm run start`。
 4. 改了服务端代码后**先 `npm run build` 再重启服务**，否则套件测的是旧 `dist/`（我曾因此误判过一次）。
+5. **必须用 `npm run build`，不能用 `npm run build:client`**：视图目录是 `<cwd>/dist/client`，
+   而进程跑在 `dist/` 下，所以真正的发布目录是 `dist/dist/client`——只有 `scripts/build.sh`
+   会做这一步搬运。只跑 `build:client` 会得到 `dist/client/client/index.html`，
+   表现为 `GET /` 500「Failed to lookup view "index"」。
+6. **重启服务要按端口杀，不要按进程名**：`npm run start` 实际执行 `cd dist && node server/main.js`，
+   所以 `pkill -f "dist/server/main.js"` **匹配不到**，旧进程会继续占着 3200，
+   而新进程在日志里以 `EADDRINUSE` 失败。更隐蔽的是：旧进程会继续用它**缓存**的
+   `index.html` 引用已经被 `rm -rf dist` 删掉的 bundle 文件名 → 浏览器白屏、
+   所有浏览器断言失败。正确做法：`lsof -ti tcp:3200 | xargs -r kill`。
 5. 未跟踪文件可能不可读（文件提供程序驱逐），会让 `tsc` 随机报 `File not found`；删前核对 `git ls-files` 与原始 zip。
 
 ### §8 3/3 的等价性证据（/api/resources 权限矩阵，7 项实测）
@@ -412,7 +424,7 @@ npm install --no-save --no-audit --no-fund \
 ### 追加（第 29 轮）：§32 的第一条垂直切片 —— 真实浏览器 E2E
 
 新增 `scripts/verify-browser-e2e.mjs`（自起 Chrome + CDP；真登录表单填写与点击、真读 DOM）。
-**尚未接入 `verify-all.sh`**（见下"已知问题"），因此门禁基线不变。
+**已接入 `verify-all.sh`**；当前为 18/18、0 SKIP（下面这段是本轮首次建立时的历史记录）。
 
 本轮实测（本地 3200 服务 + seq_principal）：
 
@@ -458,5 +470,7 @@ npm install --no-save --no-audit --no-fund \
 浏览器级验证仍缺失，不得声称完成。下次改用 CDP 真实鼠标事件
 （`Input.dispatchMouseEvent`）而不是 DOM `.click()`，Cookie/React 合成事件都可能让后者失效。
 
-**仍未接入 `verify-all.sh`**：Chrome 是环境依赖（不是每台机器都有），且尚有 1 条跳过项。
-接入前应先解决 tab 交互并明确 skip 策略。
+**已接入 `verify-all.sh`**（`bfb48ca`）。当时的两个前置都已解决：
+① tab 交互 —— 根因是 Radix Tabs 在 `onMouseDown` 切换、不看 `click`（详见 `bfb48ca` 提交信息）；
+② skip 策略 —— §16 的 SKIP 已换成可判定断言，现在 **18/18、0 SKIP**。
+Chrome 仍是环境依赖，所以门禁在未配置账号时**明确打印"未运行、不算通过"**，而不是打印 PASS。
