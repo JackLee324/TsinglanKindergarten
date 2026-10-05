@@ -264,14 +264,48 @@ npm install --no-save --no-audit --no-fund \
 | §5 | `UploadPage` 的「提交审核」以前只调 `createResource`（服务端恒 draft），却提示「已提交审核」→ 新建后按需调用 `submitReview(created.id)`，并在提交失败时**如实**提示「草稿已保存，但提交审核失败」 | API 序列实测：create=201(draft) → submit-review=201 → 库中 `pending_review` ✅ | 本轮 |
 | §7 | 审核动作权限拆分：`POST resources/:id/review` 原挂 `review.view`（"能看待审核队列"=="能发布"）→ 改为按 `dto.action` 要求 `review.approve` / `review.reject` | 判别性测试：只授 `review.view` 的账号得到 `403 缺少权限：review.approve`／`review.reject`；补授 `review.approve` 后放行到业务层（400 只有待审核状态…） | 本轮 |
 | §8 (3/3) | `resources.service.ts` 6→0 处（机械等价替换，SQL 结构未动）；`checkSubjectPermission` 三处字面量合并为一次 `roleScopeCovers` | 权限矩阵 7 项实测全部符合预期（见下） | 本轮 |
+| §1 §2（数据层） | migration `0009_directories`：PDF《教师平台》权威目录树落库，**69 节点**，内嵌自检断言（不满足即回滚）；刻意**纯加法**，一行 `resources` 不动 | up 通过；down `0009` 通过（表消失、resources 仍 348 行）；up 重放后内容指纹与回滚前**逐字节一致**（`211433d5a830f5be02bee909487a60f6`）；孤儿 parent_id=0、重复 code=0 | `298579e` |
+| §1 §2 §20（接口层） | 目录树 API：`GET /api/directories/tree`、`GET /api/directories/node?code=…`，逐节点按角色剪枝；`curriculum.view` 声明式守门 | `scripts/verify-directories.mjs` **55 项实测全绿**（见下），并已接入 `verify-all.sh` | 本轮 |
 
-门禁基线（每轮实跑）：`npm test 275/275`、`verify-all` **283/283**、双 typecheck PASS、build PASS、api-contracts matched。
+门禁基线（每轮实跑）：`npm test 275/275`（**不带** `AUTHZ_TEST_DB` 时是 270 —— 差 5 条是数据库相关用例的条件注册，不是被删掉的测试）、`verify-all` 见本轮结果、双 typecheck PASS、build PASS、api-contracts matched。
+
+#### §1/§2 目录树 API 的实测证据（`scripts/verify-directories.mjs`，55/55）
+
+| 账号 | 期望 | 实测 |
+| --- | --- | --- |
+| 未登录 | 401 | 401 |
+| `seq_principal`（principal） | 2 个根、69 节点、16 个可自建叶节、0 隐藏科目 | 全部一致；`prek:virtue`→10 条、`k:chinese`→0 条（K 中文确实没有种子数据，与 `DIRECTORY_SPEC` §2.2 一致） |
+| `scope_prek_head` | 只有 Pre-K，K 科目被隐藏 | 一致（含 PDF 新增的 `prek:english`） |
+| `scope_k_head` | 只有 K | 一致（含 `k:chinese:arts`/`reading`） |
+| `scope_pe_specialist` | 跨班型只有体能，各 4 个资料夹 | 一致；`prek:pe_lesson` 可自建=true、`prek:pe_outline`=false |
+| `scope_prek_assistant` | 看得到 Pre-K 结构 | 一致 |
+| 临时 visitor | 403（该角色没有 `curriculum.view`） | 403 |
+| 单节点 | principal 取 `prek:virtue`=200 / 不存在=404 / pe_specialist 取 `prek:virtue`=**404（与不存在同一个响应）** | 全部一致 |
+
+#### 本轮发现（如实记录，未擅自决定）
+
+1. **PDF 比应用多两个科目**：`prek:english`（Pre-K 英文）与 `k:chinese:arts`（K 美育）。
+   `shared/curriculum.ts` 里 Pre-K 只有 virtue/montessori/physical_education，K 中文子科是
+   ancient_poetry/picture_books/drama/stem。我**没有**擅自把它们塞进规范词汇（那会改变
+   `GET /api/curriculum/structure` 的输出与现有科目卡），也**没有**给它们编一个 token。
+   处理方式：`directory-vocabulary.ts` 里显式登记为 `null`（非规范），接口如实返回 `subject: null`，
+   可见性判定**失败关闭**（不会因为"token 认不出来"而对所有人放开）。**需业主确认**是否纳入规范词汇、
+   以及纳入后由哪些角色默认持有。
+2. **`k:chinese:arts`（美育）与规范词汇的 `drama`（戏剧）不一致**：PDF 有美育无戏剧，
+   现有产品文档（AGENTS.md）有戏剧无美育。两者并存还是替换，需业主决定。
+3. `DELETE /api/teachers/:id` 在本机测试库上返回 **500**（`42501 insufficient_privilege`，
+   `UPDATE teachers SET status`）。**与本次改动无关**（未触碰 teachers 模块），但这是真实缺陷，
+   已记入待办；验证脚本因此对清理失败做了 SQL 回退，避免留下脏账号。
+4. 资料夹级的 `resourceCount` 目前**恒为 0**，子科级也是 0 —— 因为 `resources` 还没有
+   `directory_id`，而 `resources.sub_subject` 用规范 token、目录 code 用 PDF 树路径词，两者今天
+   不是一一对应。**刻意返回 0 而不是"整个科目的总数"**：后者是个看起来精确、其实是另一个数的数字。
+   等 6→4 映射定了、`directory_id` 迁移落地后再改成精确统计。
 
 ### 未完成
 
 | § | 内容 | 卡在哪 |
 | --- | --- | --- |
-| §1 §2 §20 §24 §25 §26 | PDF 目录树、`directories` 表、Directory API/Renderer、目录权限、自建文件夹、教师成长 | **等业主决策**：资料夹 4 种 vs 6 种（见 `docs/DIRECTORY_SPEC.md` §2.1） |
+| §1 §2 §20 §24 §25 §26 | Directory **Renderer**（前端页面）、目录的**增删改**（自建文件夹写入）、教师成长页 | 数据层+接口层已就绪；前端待做。⚠️ 自建文件夹的**写**入需要先定资料夹映射 |
 | §4 §23 | 真实文件上传/下载、S3 兼容存储 | **等测试 bucket**，或业主同意用本地 MinIO 做等价验证（会明确标注非生产 bucket） |
 | §15 §16 §17 §18 §19 | 版本生命周期 / 分页 / 回收站文案 / 自动清理调度器 / 审计导出 | 不依赖决策，可先做 |
 | §32 | 真实浏览器 E2E（9 条流程） | 尚未建立。当前所有 UI 改动只经过 typecheck+build，**没有浏览器级证据** |

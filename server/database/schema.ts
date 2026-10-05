@@ -492,7 +492,51 @@ export const mfaChallenges = pgTable("mfa_challenges", {
   }).onDelete("cascade"),
 ]);
 
+// =============================================================================
+// directories — added by migration 0009, NOT emitted by the schema generator that
+// produced the rest of this file. Re-add this if you regenerate it.
+//
+// This is the PDF《教师平台》tree (教育教学 → Pre-K/K → 科目 → 资料夹, plus
+// 教师成长 → L1/L2/L3 → …), moved out of hand-written constants in the client and
+// into the database, so the curriculum structure can change without a code release.
+//
+// `type` mirrors the DB CHECK `directories_type_check`. `allowCustomFolders` is
+// true only on the specific 教学详案/教学资源 leaves the PDF marks 自建 — the DB
+// CHECK `directories_custom_folders_leaf_only` rejects it anywhere else.
+//
+// `program`/`subject` are denormalised copies of the ancestors, so `resources` rows
+// can later be matched to a directory by (program, subject) without a recursive query.
+// =============================================================================
+export const directories = pgTable("directories", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  parentId: uuid("parent_id"),
+  code: varchar("code", { length: 120 }).notNull(),
+  name: varchar("name", { length: 120 }).notNull(),
+  nameEn: varchar("name_en", { length: 160 }).notNull(),
+  type: varchar("type", { length: 32 }).notNull(),
+  program: varchar("program", { length: 16 }),
+  subject: varchar("subject", { length: 64 }),
+  sortOrder: integer("sort_order").notNull().default(0),
+  enabled: boolean("enabled").notNull().default(true),
+  allowCustomFolders: boolean("allow_custom_folders").notNull().default(false),
+  description: text("description"),
+  // The DB columns really are `_created_at` / `_updated_at` (see 0009) — the
+  // underscore prefix is this project's convention for platform-managed columns.
+  createdAt: customTimestamptz("_created_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: customTimestamptz("_updated_at", { precision: 3 }).notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("directories_code_key").on(table.code),
+  index("directories_parent_idx").on(table.parentId, table.sortOrder),
+  index("directories_lookup_idx").on(table.program, table.subject),
+  foreignKey({
+    columns: [table.parentId],
+    foreignColumns: [table.id],
+    name: "directories_parent_id_fkey",
+  }).onDelete("restrict"),
+]);
+
 // table aliases
+export const directoriesTable = directories;
 export const auditLogsTable = auditLogs;
 export const resourcesTable = resources;
 export const reviewRecordsTable = reviewRecords;

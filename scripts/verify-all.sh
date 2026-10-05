@@ -127,6 +127,9 @@ run "mfa"              node scripts/verify-mfa.mjs
 run "security-headers"    node scripts/verify-security-headers.mjs
 run "files-http"          node scripts/verify-files-http.mjs
 run "naming-http"         node scripts/verify-naming-http.mjs
+# 目录树接口（§1/§2/§20）：断言 PDF 权威目录的精确节点数、各角色的可见分支，
+# 以及「无权限的科目返回 404 而不是空树」。需要 migration 0009 已应用。
+run "directories"         node scripts/verify-directories.mjs
 
 echo
 if [ "$FAILED" -eq 0 ]; then

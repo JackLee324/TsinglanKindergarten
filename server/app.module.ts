@@ -14,6 +14,7 @@ import { FilesModule } from './modules/files/files.module';
 import { ReviewModule } from './modules/review/review.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
+import { DirectoriesModule } from './modules/directories/directories.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { HealthModule } from './modules/health/health.module';
 
@@ -78,6 +79,9 @@ import { HealthModule } from './modules/health/health.module';
     ReviewModule,
     AuditModule,
     CurriculumModule,
+    // PDF《教师平台》目录树（migration 0009 落库，§1/§2）。
+    // 与 CurriculumModule 并存：后者供既有页面渲染课程卡，前者是管理员可编辑的权威目录。
+    DirectoriesModule,
     DashboardModule,
     // HealthModule must be listed BEFORE ViewModule: ViewModule registers the
     // catch-all `@Get(['/', '*'])` route, and a catch-all placed earlier would

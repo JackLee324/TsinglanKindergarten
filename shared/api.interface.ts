@@ -362,3 +362,65 @@ export interface UploadPreSignResponse {
   fileId: string;
   bucketId: string;
 }
+
+// =============================================================================
+// 目录树（PDF《教师平台》权威结构）—— 由 `directories` 表驱动（migration 0009）
+// =============================================================================
+//
+// 与上面的 `ProgramStructure` 刻意分开，两者不是同一种东西：
+//   * `ProgramStructure` / `SubjectNode` —— 应用既有页面（Pre-K/K 首页、资料夹页）
+//     用的课程卡片树，来自 `shared/curriculum.ts` 里的常量。
+//   * `DirectoryNode` —— PDF 那一棵**完整目录树**（含两个根：教育教学 / 教师成长，
+//     含 PDF 新增的科目，含「允许自建文件夹」标记），来自数据库。
+//
+// 后者是「管理员可编辑」的那一份；前者暂时保留以维持现有页面不变（§1「不重做现有 UI」）。
+
+export type DirectoryNodeType =
+  | 'root'
+  | 'section'
+  | 'program'
+  | 'subject'
+  | 'sub_subject'
+  | 'folder'
+  | 'growth_level'
+  | 'growth_node';
+
+export interface DirectoryNode {
+  id: string;
+  /** 树路径式稳定标识，如 `prek:pe_lesson`、`k:chinese:reading`。全局唯一。 */
+  code: string;
+  name: string;
+  nameEn: string;
+  type: DirectoryNodeType;
+  /** 所属班型；根/教师成长分支下为 null。 */
+  program: ProgramCode | null;
+  /**
+   * 规范 subject token（`physical_education` 等），仅科目类节点有值。
+   * PDF 新增、规范词汇中没有的科目为 null —— 见 directory-vocabulary.ts。
+   */
+  subject: string | null;
+  sortOrder: number;
+  /**
+   * PDF 里标注「允许自建文件夹」的叶节点。
+   * 仅 `type = 'folder'` 且限特定科目，由数据库 CHECK 约束保证。
+   */
+  allowCustomFolders: boolean;
+  /** 该节点（含子树）下的资源条数，供 UI 显示徽标；无权限时为 0 而非猜测值。 */
+  resourceCount: number;
+  children: DirectoryNode[];
+}
+
+export interface DirectoryTreeResponse {
+  /** 固定两根：教育教学、教师成长。调用方无权限的那一支不会出现在数组里。 */
+  roots: DirectoryNode[];
+  /**
+   * 服务端统计的「允许自建文件夹」叶节点数量。
+   * 前端**不要**用它做权限判断，它只是给「目录管理」页显示的计数。
+   */
+  customFolderLeafCount: number;
+  /**
+   * 本次响应里被权限过滤掉的科目 code —— 便于前端区分「这个科目没有资源」
+   * 与「你没有这个科目的权限」，避免把 403 渲染成「暂无数据」。
+   */
+  hiddenSubjectCodes: string[];
+}
