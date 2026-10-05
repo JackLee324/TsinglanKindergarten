@@ -1,0 +1,35 @@
+import type { DirectoryNode, DirectoryTreeResponse } from '@shared/api.interface';
+
+import { axiosForBackend, handleApiError } from './client';
+
+/**
+ * 目录树接口（PDF《教师平台》权威结构，migration 0009 落库）。
+ *
+ * 与 `./curriculum` 的区别：`curriculum.getCurriculumStructure()` 返回的是
+ * 既有页面用的课程卡片树（来自 `shared/curriculum.ts` 常量），而这里返回的是
+ * **数据库里那棵完整的目录树**（含两个根、教师成长分支、以及「允许自建文件夹」
+ * 标记）。管理员改目录改的是后者。
+ */
+export async function getDirectoryTree(): Promise<DirectoryTreeResponse> {
+  try {
+    const resp = await axiosForBackend.get('/api/directories/tree');
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'getDirectoryTree');
+  }
+}
+
+/**
+ * 单个节点及子树。
+ *
+ * 无权限与不存在都返回 404（服务端刻意不区分，避免泄露目录结构），
+ * 所以调用方无法据此判断"到底是没有还是没权限"——这是有意的。
+ */
+export async function getDirectoryNode(code: string): Promise<DirectoryNode> {
+  try {
+    const resp = await axiosForBackend.get('/api/directories/node', { params: { code } });
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'getDirectoryNode');
+  }
+}

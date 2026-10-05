@@ -20,6 +20,7 @@ import AuditLogPage from './pages/AuditLog/AuditLogPage';
 import LoginPage from './pages/Login/LoginPage';
 import UnauthorizedPage from './pages/Unauthorized/UnauthorizedPage';
 import ChangePasswordPage from './pages/ChangePassword/ChangePasswordPage';
+import DirectoryPage from './pages/Directory/DirectoryPage';
 
 import { LanguageProvider } from './i18n/i18n-context';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
@@ -94,6 +95,9 @@ const RoutesComponent = () => {
                 }
               />
               <Route path="my-resources" element={<MyResourcesPage />} />
+
+              {/* 课程目录（PDF《教师平台》权威目录树，来自数据库） */}
+              <Route path="directory" element={<DirectoryPage />} />
 
               {/* Review */}
               <Route

@@ -292,7 +292,12 @@ const SubjectPage: React.FC = () => {
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  // data-testid：浏览器 E2E 用子元素个数来判定「第 51 条之后是否可达」。
+                  // 只读「已显示 X / 共 Y 条」不够 —— 全部加载完那一行会（正确地）
+                  // 消失，于是断言会读到 null 而把成功误判成失败。数卡片个数才是直接证据。
+                  // 这里必须是 `//` 行注释而不是 `{/* */}`：三元表达式的分支位置是
+                  // 表达式上下文，JSX 注释对象在这里是语法错误（我第一版就写错了）。
+                  <div className="space-y-3" data-testid="resource-list">
                     {resources.map((r: Resource) => (
                       <ResourceCard
                         key={r.id}

@@ -6,5 +6,6 @@ export * as resources from './resources';
 export * as review from './review';
 export * as audit from './audit';
 export * as curriculum from './curriculum';
+export * as directories from './directories';
 
 export { axiosForBackend, handleApiError };

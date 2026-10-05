@@ -13,8 +13,7 @@ import {
   Settings,
   LogOut,
   KeyRound,
-  User,
-} from 'lucide-react';
+  User, FolderTree } from 'lucide-react';
 import { logger } from '@client/src/lib/logger';
 
 import { Button } from '@client/src/components/ui/button';
@@ -156,6 +155,13 @@ const Layout: React.FC = () => {
       path: '/my-resources',
       labelKey: 'nav.myResources',
       icon: <FolderOpen className="size-5" />,
+    },
+    {
+      // 目录页对**所有**教师角色开放：服务端按角色剪枝，
+      // 用户只会看到自己范围内的分支（visitor 会被 curriculum.view 挡住）。
+      path: '/directory',
+      labelKey: 'nav.directory',
+      icon: <FolderTree className="size-5" />,
     },
     {
       path: '/review',

@@ -24,6 +24,7 @@ export const translations = {
     'nav.english': '英文',
     'nav.upload': '资源上传',
     'nav.myResources': '我的资源',
+    'nav.directory': '课程目录',
     'nav.review': '审核工作台',
     'nav.admin': '管理后台',
     'nav.admin.teachers': '教师管理',
@@ -52,6 +53,7 @@ export const translations = {
     'btn.reset': '重置',
 
     // 公共文案
+    'common.retry': '重试',
     'common.loading': '加载中...',
     'common.error': '出错了',
     'common.noData': '暂无数据',
@@ -350,6 +352,15 @@ export const translations = {
     'filter.sortByTime': '按更新时间',
     'filter.sortByName': '按名称',
     'filter.groupByWeek': '按周次分组',
+
+    // === 课程目录页（PDF《教师平台》权威目录树）===
+    'directory.title': '课程目录',
+    'directory.subtitle': '本页目录来自数据库，可在此查看班型、科目与资料夹结构。',
+    'directory.summary': '共 {nodes} 个目录节点，其中 {custom} 个资料夹允许教师自建子文件夹。',
+    'directory.scopeNote': '有 {count} 个科目因你的权限范围未显示（并非这些科目没有内容）。',
+    'directory.allowCustomFolders': '可自建文件夹',
+    'directory.resourceCount': '{count} 条资源',
+    'directory.loadFailed': '目录加载失败',
   },
   'en-US': {
     // Navigation
@@ -374,6 +385,7 @@ export const translations = {
     'nav.english': 'English',
     'nav.upload': 'Upload Resource',
     'nav.myResources': 'My Resources',
+    'nav.directory': 'Curriculum Directory',
     'nav.review': 'Review',
     'nav.admin': 'Administration',
     'nav.admin.teachers': 'Teachers',
@@ -402,6 +414,7 @@ export const translations = {
     'btn.reset': 'Reset',
 
     // Common
+    'common.retry': 'Retry',
     'common.loading': 'Loading...',
     'common.error': 'Error',
     'common.noData': 'No data',
@@ -700,6 +713,18 @@ export const translations = {
     'filter.sortByTime': 'Updated time',
     'filter.sortByName': 'Name',
     'filter.groupByWeek': 'Group by week',
+
+    // === Curriculum directory page (PDF authoritative tree) ===
+    'directory.title': 'Curriculum Directory',
+    'directory.subtitle':
+      'This directory comes from the database. Browse programs, subjects and folders here.',
+    'directory.summary':
+      '{nodes} directory nodes in total; {custom} folders allow teachers to create subfolders.',
+    'directory.scopeNote':
+      '{count} subject(s) are not shown because they are outside your permission scope (this does not mean they are empty).',
+    'directory.allowCustomFolders': 'Custom folders allowed',
+    'directory.resourceCount': '{count} resources',
+    'directory.loadFailed': 'Failed to load the directory',
   },
 } as const;
 

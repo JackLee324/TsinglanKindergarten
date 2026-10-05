@@ -51,6 +51,12 @@ cd "$ROOT_DIR"
 
 : "${AUTHZ_TEST_DB:?请设置 AUTHZ_TEST_DB，例如 postgres://user:pass@127.0.0.1:55432/qls_test_0005}"
 
+# tests/ 里有 5 条用例只在 DATABASE_URL 存在时才注册（数据库相关）。
+# 之前门禁只设了 AUTHZ_TEST_DB，于是它跑的是 **270** 而不是 275 —— 少了 5 条，
+# 而输出里的 `# pass 270 # fail 0` 看上去完全正常。这种"静默少跑"正是
+# 这个门禁最需要避免的东西，所以这里显式补上。
+export DATABASE_URL="${DATABASE_URL:-$AUTHZ_TEST_DB}"
+
 # ---------------------------------------------------------------------------
 # 环境独占。没有它，两个门禁（或一个门禁 + 一个单独套件）会在 dist/ 上互相
 # 破坏，并产出无法归因的假失败。
@@ -130,6 +136,18 @@ run "naming-http"         node scripts/verify-naming-http.mjs
 # 目录树接口（§1/§2/§20）：断言 PDF 权威目录的精确节点数、各角色的可见分支，
 # 以及「无权限的科目返回 404 而不是空树」。需要 migration 0009 已应用。
 run "directories"         node scripts/verify-directories.mjs
+
+# 真实浏览器 E2E（§32）。它不是"再跑一次接口" —— 它验证的是**浏览器里真的点得动、
+# 页面真的渲染出了数据库里的东西**（§16 那条卡了三轮的 SKIP 已用可判定断言替代）。
+#
+# 需要账号：没有就**明确说没跑**，而不是打印 PASS ——
+# 门禁里最危险的不是失败，是一条看起来通过的检查其实什么都没检查。
+if [ -n "${BROWSER_E2E_USER:-}" ] && [ -n "${BROWSER_E2E_PASS:-}" ]; then
+  run "browser-e2e"       node scripts/verify-browser-e2e.mjs
+else
+  printf '  %-24s ' "browser-e2e"
+  echo "未运行（未设置 BROWSER_E2E_USER / BROWSER_E2E_PASS）—— 这一项**不算通过**"
+fi
 
 echo
 if [ "$FAILED" -eq 0 ]; then

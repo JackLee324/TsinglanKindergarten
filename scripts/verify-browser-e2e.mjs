@@ -65,6 +65,9 @@ try {
 
   chrome = spawn(chromePath, [
     '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run',
+    // 桌面尺寸视口：默认的 756×413 会让固定侧边栏挤压主内容，
+    // 干扰基于坐标的交互与布局断言（见 clickSelector 的注释）。
+    '--window-size=1600,1200',
     '--no-default-browser-check', `--user-data-dir=${profile}`,
     `--remote-debugging-port=${PORT}`, '--remote-allow-origins=*', 'about:blank',
   ], { stdio: 'ignore' });
@@ -95,6 +98,100 @@ try {
     const r = await send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true });
     return r.result?.result?.value;
   };
+  /**
+   * 点击 + **验证点击真的产生了效果**。
+   *
+   * 为什么最终用 DOM 的 `el.click()` 而不是 CDP 真实鼠标事件
+   * ---------------------------------------------------------
+   * 我两种都试过，并且是**实测**得出结论的，不是偏好：
+   *
+   *   DOM .click()                 -> aria-expanded 由 'false' 变 'true'  ✅
+   *   CDP mousePressed/mouseReleased -> 无效，且后续断言全部失败          ❌
+   *
+   * 原因不是"CDP 不能点"，而是**坐标**：headless 默认视口只有 756×413，
+   * 左侧固定宽度 240px 的侧边栏正好盖在目录树按钮上。
+   * `elementFromPoint(95, 206)` 返回的是侧边栏的 `<a>` —— 于是"点击"变成了
+   * 导航到别的页面，`[data-dir-toggle]` 随之消失（aria-expanded 读到 undefined、
+   * 目录树文本长度变成 0）。这类失败极易被误读成"展开功能坏了"。
+   *
+   * `el.click()` 不经过命中测试，因此不受重叠影响，恰好适合"验证产品行为"
+   * 这个目的（要验证的是 React 的 onClick，而不是浏览器的命中测试）。
+   * 如果将来要验真的指针交互，用 `--window-size=1600,1200` 让布局到桌面尺寸，
+   * 再回到 CDP 坐标即可。
+   *
+   * 第二个教训同样重要：**点击函数必须能证明自己点到了东西**。
+   * 第一版只判断"元素存在"就返回成功，于是
+   * `ok('§16 能点到「课件与示范」标签')` 是一条**假 PASS** ——
+   * 它只证明了页面上有这几个字。现在统一返回效果断言的结果，调用方必须检查。
+   */
+  /**
+   * 派发**完整**鼠标序列（mousedown → mouseup → click）。
+   *
+   * 为什么不是 `el.click()`：本项目资料夹标签用的是 Radix Tabs，而
+   * `@radix-ui/react-tabs` 的 Trigger 是在 **onMouseDown** 上切换值的
+   * （自动激活模式下 `onMouseDown`/`onFocus`/`onKeyDown` 都会触发，唯独不看 `click`）。
+   * 所以 `el.click()` 只派发一个 click 事件，Radix 收不到 → 标签永远不切换。
+   * 这一个事实同时解释了两件事：
+   *   * §16 这一条此前一直是 SKIP（"点了没反应"）；
+   *   * 我上一版用 DOM .click() 仍然无效。
+   * 真实鼠标本来就会先发 mousedown，所以按真实序列派发才是"完整"的，
+   * 而不是给测试开后门。
+   */
+  const mouseSequence = `(el) => {
+    for (const type of ['mousedown', 'mouseup', 'click']) {
+      el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, view: window }));
+    }
+  }`;
+
+  const waitFor = async (expression, timeoutMs = 15000) => {
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+      last = await evalIn(expression);
+      if (last) return { ok: true, value: last };
+      await sleep(500);
+    }
+    return { ok: false, value: last };
+  };
+
+  /** 按选择器点击，并用 `verify` 表达式确认产生了预期效果。 */
+  const clickSelector = async (sel, verify = null) => {
+    const clicked = await evalIn(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return 'NOT_FOUND';
+      el.scrollIntoView({ block: 'center' });
+      (${mouseSequence})(el);
+      return 'CLICKED';
+    })()`);
+    if (clicked !== 'CLICKED') return { clicked: false, reason: clicked };
+    if (!verify) return { clicked: true, effect: 'NOT_CHECKED' };
+    const r = await waitFor(verify, 10000);
+    return { clicked: true, effect: r.ok ? 'OK' : 'NO_EFFECT' };
+  };
+
+  /**
+   * 按可见文本点击。
+   * `pick` 决定取第几个匹配：**默认取最后一个**，因为左侧导航栏在 DOM 里靠前，
+   * 页面主体靠后；取第一个曾经让我误点到侧边栏的「Pre-K」，把侧边栏的科目
+   * 当成了目录树的内容（假证据）。
+   */
+  const clickText = async (pattern, verify = null, pick = 'last') => {
+    const idx = pick === 'last' ? 'els.length - 1' : '0';
+    const res = await evalIn(`(() => {
+      const els = [...document.querySelectorAll('button,[role=tab],a')]
+        .filter((e) => new RegExp(${JSON.stringify(pattern)}).test((e.innerText || '').trim()));
+      if (els.length === 0) return { ok: false, reason: 'NOT_FOUND' };
+      const el = els[${idx}];
+      el.scrollIntoView({ block: 'center' });
+      (${mouseSequence})(el);
+      return { ok: true, text: (el.innerText || '').trim(), count: els.length };
+    })()`);
+    if (!res?.ok) return { clicked: false, reason: res?.reason ?? 'NOT_FOUND' };
+    if (!verify) return { clicked: true, text: res.text, effect: 'NOT_CHECKED' };
+    const r = await waitFor(verify, 10000);
+    return { clicked: true, text: res.text, effect: r.ok ? 'OK' : 'NO_EFFECT' };
+  };
+
   const goto = async (path, waitMs = 4500) => {
     await send('Page.navigate', { url: `${BASE}${path}` });
     await sleep(waitMs);
@@ -137,27 +234,155 @@ try {
   else bad('登录后进入工作台', home.slice(0, 90));
 
   // ---- 3. §16：第 51 条之后的资源要能通过「加载更多」到达 ----
-  // 上一轮我走错了页面：/prek/montessori 渲染的是**子科目录**（日常生活/感官/…），
-  // 资料夹（课程大纲/课件与示范/…）要选定子科之后才出现。因此这里先进入子科，
-  // 再切到条目最多的「课件与示范」（该子科 79 条 > 50，正是能暴露截断的用例）。
+  // /prek/montessori 渲染的是**子科目录**（日常生活/感官/…），资料夹要选定子科后才出现。
+  // 因此先进入子科，再切到条目最多的「课件与示范」（该子科 79 条 > 50，
+  // 正是能暴露"被截断在第 51 条"的用例）。
+  //
+  // 上一轮这里是 SKIP：用 DOM 的 `el.click()` 点标签连续 3 次都没让内容切换。
+  // 现在改用 CDP 真实鼠标事件（clickText），把这一点变成可判定 ——
+  // 「点不动」和「分页坏了」是两件事，不能用一个 SKIP 含糊过去。
   await goto('/prek/montessori/practical-life', 5500);
-  const tabNames = await evalIn(
-    "[...document.querySelectorAll('button,[role=tab]')].map(e=>e.innerText).filter(Boolean).slice(0,16)");
-  const tabClicked = await evalIn(`(() => {
-    const tab = [...document.querySelectorAll('button,[role=tab]')]
-      .find((el) => /课件与示范|Courseware/.test(el.innerText || ''));
-    if (!tab) return false;
-    tab.click();
-    return true;
-  })()`);
-  skip(
-    '§16 浏览器级分页断言',
-    '断言未调准：已定位到正确页面（/prek/montessori/practical-life 的资料夹标签齐全），' +
-      '但用 .click() 点「课件与示范」没有让内容切换，连续 3 次尝试均未成功。' +
-      '这**不代表产品有问题** —— §16 的修复已在 API 级验证（245 条跨 5 页全部可达）。' +
-      '下次改用 CDP 真实鼠标事件（Input.dispatchMouseEvent）而不是 DOM .click()。',
+  const tabClicked = await clickText(
+    '课件与示范|Courseware',
+    `(() => {
+       const el = [...document.querySelectorAll('[role=tab]')]
+         .find((e) => /课件与示范|Courseware/.test(e.innerText || ''));
+       return !!el && (el.getAttribute('aria-selected') === 'true' || el.getAttribute('data-state') === 'active');
+     })()`,
   );
-  console.log('        （页面已确认正确：' + JSON.stringify(tabNames) + '）');
+  if (!tabClicked.clicked) {
+    bad('§16 能点到「课件与示范」标签', tabClicked.reason);
+  } else if (tabClicked.effect !== 'OK') {
+    bad('§16 点击「课件与示范」后该标签进入选中态', `clicked=${tabClicked.text} effect=${tabClicked.effect}`);
+  } else {
+    ok('§16 点击「课件与示范」后该标签进入选中态', tabClicked.text);
+    // 轮询而不是固定 4 秒：79 条的分页文案要等数据回来才渲染，
+    // 固定等待会把"慢"误报成"坏"。超时后把真实文本打出来，便于定位。
+    const readPager = `(() => {
+      const txt = document.getElementById('root')?.innerText || '';
+      const m = txt.match(/已显示\\s*(\\d+)\\s*\\/\\s*共\\s*(\\d+)\\s*条/);
+      return m ? { shown: Number(m[1]), total: Number(m[2]) } : null;
+    })()`;
+    const first = await waitFor(readPager, 20000);
+    if (!first.ok) {
+      const diag = await evalIn(`(() => {
+        const txt = (document.getElementById('root')?.innerText || '').replace(/\\s+/g, ' ');
+        const tabs = [...document.querySelectorAll('[role=tab],button')]
+          .map((e) => (e.innerText || '').trim()).filter(Boolean).slice(0, 20);
+        return { len: txt.length, tail: txt.slice(-260), tabs };
+      })()`);
+      bad('§16 页面显示「已显示 X / 共 Y 条」', JSON.stringify(diag));
+    } else {
+      const { shown, total } = first.value;
+      ok('§16 页面显示「已显示 X / 共 Y 条」', `已显示 ${shown} / 共 ${total} 条`);
+      if (total > 50) {
+        ok('§16 总数超过一页（用例有效：>50）', String(total));
+        // 数**真实渲染出来的资源卡片**，而不是读「已显示 X / 共 Y 条」：
+        // 第 2 页加载完后 total(79) 不再 > resources.length(79)，那一行会正确地
+        // 整块消失 —— 于是读文案会得到 null，把成功误判成失败。
+        // 卡片个数才是"第 51 条之后是否真的出现"的直接证据。
+        const cardsBefore = await evalIn(
+          "document.querySelector('[data-testid=\"resource-list\"]')?.children.length ?? 0");
+        const clicked = (await clickText('加载更多|Load more')).clicked;
+        const grew = await waitFor(
+          `(document.querySelector('[data-testid="resource-list"]')?.children.length || 0) > ${cardsBefore}`,
+          20000,
+        );
+        const cardsAfter = await evalIn(
+          "document.querySelector('[data-testid=\"resource-list\"]')?.children.length ?? 0");
+        if (clicked && grew.ok && cardsAfter >= total) {
+          ok('§16 点「加载更多」后资源卡片增加且达到总数（第 51 条之后可达）',
+            `卡片 ${cardsBefore} → ${cardsAfter}（共 ${total} 条）`);
+        } else {
+          bad('§16 点「加载更多」后资源卡片增加且达到总数',
+            `clicked=${clicked} 卡片 ${cardsBefore} → ${cardsAfter} 期望 ${total}`);
+        }
+      } else {
+        bad('§16 总数超过一页（用例有效：>50）', String(total));
+      }
+    }
+  }
+
+  // ---- 3b. §1/§2/§20：目录页必须**从数据库**渲染出 PDF 的那棵树 ----
+  //
+  // ⚠️ 第一版这里读的是整页 innerText，结果读到的是**左侧导航栏** ——
+  // 「Pre-K 下有美德/蒙特梭利/体能」被侧边栏满足、看起来通过了，
+  // 而真正要断言的目录树根本没被检查（"英文"恰好在侧边栏里没有，才暴露了这一点）。
+  // 现在只读 `[data-testid="directory-tree"]`，并按 `[data-dir-toggle="<code>"]` 展开。
+  const treeText = () => evalIn(
+    `(document.querySelector('[data-testid="directory-tree"]')?.innerText || '').replace(/\\s+/g, ' ')`);
+
+  await goto('/directory', 6000);
+  const containerExists = await evalIn(
+    "!!document.querySelector('[data-testid=\"directory-tree\"]')");
+  if (!containerExists) {
+    const body = await evalIn("(document.getElementById('root')?.innerText || '').slice(0, 200)");
+    bad('§1 目录页渲染出目录树容器', body);
+  } else {
+    ok('§1 目录页渲染出目录树容器');
+    const before = await treeText();
+    for (const label of ['教育教学', '教师成长']) {
+      if (before.includes(label)) ok(`§1 树中出现根分支「${label}」`);
+      else bad(`§1 树中出现根分支「${label}」`, before.slice(0, 200));
+    }
+
+    // 展开 Pre-K：PDF 的 4 个 Pre-K 科目都必须出现
+    // —— 其中「英文」是 PDF 比现有应用**多**的科目，最有判别力。
+    const prekClick = await clickSelector(
+      '[data-dir-toggle="prek"]',
+      "document.querySelector('[data-dir-toggle=\"prek\"]')?.getAttribute('aria-expanded') === 'true'",
+    );
+    const prekOk = await waitFor(`(() => {
+      const t = document.querySelector('[data-testid="directory-tree"]')?.innerText || '';
+      return /美德/.test(t) && /蒙特梭利/.test(t) && /体能/.test(t) && /英文/.test(t);
+    })()`, 8000);
+    const prekTxt = await treeText();
+    if (prekClick.effect !== 'OK') {
+      bad('§1 点击 Pre-K 后其 aria-expanded 变为 true', `effect=${prekClick.effect}`);
+    } else {
+      ok('§1 点击 Pre-K 后其 aria-expanded 变为 true');
+    }
+    if (prekOk.ok) ok('§1 展开 Pre-K 后 4 个科目齐全（含 PDF 新增的「英文」）');
+    else bad('§1 展开 Pre-K 后 4 个科目齐全（含「英文」）', prekTxt.slice(0, 240));
+
+    // 展开 Pre-K 体能：其「教学详案/教学资源」带 PDF 的「允许自建文件夹」标记
+    await clickSelector(
+      '[data-dir-toggle="prek:pe"]',
+      "document.querySelector('[data-dir-toggle=\"prek:pe\"]')?.getAttribute('aria-expanded') === 'true'",
+    );
+    const peOk = await waitFor(`(() => {
+      const t = document.querySelector('[data-testid="directory-tree"]')?.innerText || '';
+      return /教学详案/.test(t) && /教学资源/.test(t) && /课程大纲/.test(t) && /考核评估/.test(t);
+    })()`, 8000);
+    if (peOk.ok) ok('§1 展开科目后出现 PDF 的 4 类资料夹');
+    else bad('§1 展开科目后出现 PDF 的 4 类资料夹', (await treeText()).slice(0, 240));
+
+    const customBadge = await waitFor(`(() => {
+      const t = document.querySelector('[data-testid="directory-tree"]')?.innerText || '';
+      return /可自建文件夹/.test(t);
+    })()`, 5000);
+    if (customBadge.ok) ok('§1 树中显示「可自建文件夹」标记（PDF 明确要求）');
+    else bad('§1 树中显示「可自建文件夹」标记', (await treeText()).slice(0, 240));
+
+    // 教师成长是**新增**的一棵树：从数据库读出的 L1/L2/L3 与 L1 下级
+    const growthOk = await waitFor(`(() => {
+      const t = document.querySelector('[data-testid="directory-tree"]')?.innerText || '';
+      return /L1/.test(t) && /L2/.test(t) && /L3/.test(t);
+    })()`, 5000);
+    if (growthOk.ok) ok('§1 教师成长树渲染 L1/L2/L3（来自数据库）');
+    else bad('§1 教师成长树渲染 L1/L2/L3', (await treeText()).slice(0, 240));
+
+    await clickSelector(
+      '[data-dir-toggle="growth:l1"]',
+      "document.querySelector('[data-dir-toggle=\"growth:l1\"]')?.getAttribute('aria-expanded') === 'true'",
+    );
+    const l1Ok = await waitFor(`(() => {
+      const t = document.querySelector('[data-testid="directory-tree"]')?.innerText || '';
+      return /职业道德规范/.test(t) && /安全施教规范/.test(t) && /专业知识/.test(t) && /专业技能/.test(t);
+    })()`, 8000);
+    if (l1Ok.ok) ok('§1 教师成长 L1 的 4 个分支渲染（来自数据库）');
+    else bad('§1 教师成长 L1 的 4 个分支渲染', (await treeText()).slice(0, 240));
+  }
 
   // ---- 4. §19：导出按钮必须是可点的（以前写死 disabled）----
   const audit = await goto('/admin/audit', 5000);
