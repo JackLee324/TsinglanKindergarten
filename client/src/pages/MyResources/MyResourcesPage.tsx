@@ -269,7 +269,15 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
         open={!!deleteId}
         onOpenChange={(open) => !open && setDeleteId(null)}
         title={L('确认删除', 'Confirm Delete')}
-        description={L('删除后无法恢复，确定要删除该资源吗？', 'This action cannot be undone. Delete this resource?')}
+        // §17：这句话以前是错的。后端是**软删除**（resources.service.ts:1586 只写
+        // deletedAt/deletedBy/purgeAfter），资源进入回收站、可由管理员恢复。
+        // 告诉用户「无法恢复」既与事实不符，也会让人在误删之后放弃找回。
+        // 刻意**不写**「到期后会被自动永久删除」—— purgeExpiredResources() 目前没有
+        // 调度器（见 §18），写了就是在描述一件还没发生的事。
+        description={L(
+          '删除后该资源会移入回收站，可由管理员恢复。确定要删除吗？',
+          'This moves the resource to the recycle bin, where an administrator can restore it. Delete it?',
+        )}
         confirmText={t('btn.delete')}
         confirmVariant="destructive"
         onConfirm={handleDelete}
