@@ -524,7 +524,17 @@ try {
   // ---- 3d. §14：资源详情是真弹窗、显示真数据（不再是"详情功能开发中"）----
   await goto('/my-resources', 6000, "!!document.querySelector('[data-testid=\"resource-detail-open\"]')");
   const hasDetailBtn = await evalIn("!!document.querySelector('[data-testid=\"resource-detail-open\"]')");
-  if (!hasDetailBtn) {
+  const listEmpty = await evalIn("/暂无数据|No data|No resources/.test(document.getElementById('root')?.innerText || '')");
+  if (!hasDetailBtn && listEmpty) {
+    // 「查看」按钮是**按行渲染**的，所以列表为空时它本来就不该存在。
+    // 生产环境的 TsinglanAdmin 名下没有任何资源（347 条种子都记在"系统初始化"账号下），
+    // 于是这一条在生产上无法执行。这不是失败，但也**不算通过** —— 明确说清楚原因。
+    skip(
+      '§14 资源详情弹窗',
+      '本环境的账号名下没有资源，列表为空 → 没有「查看」按钮可点。' +
+        '同样的断言在本机门禁里是执行的并且通过（seq_principal 名下有 2 条）。',
+    );
+  } else if (!hasDetailBtn) {
     const body = await evalIn("(document.getElementById('root')?.innerText || '').slice(0, 160)");
     bad('§14 「查看」按钮存在', body);
   } else {
