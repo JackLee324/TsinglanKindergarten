@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、**account-permissions 27**、**storage-s3 28（+2 如实跳过）**、browser-e2e **37/37、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` **276**。
+门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、**account-permissions 27**、**storage-s3 28（+2 如实跳过）**、**storage-upload**、browser-e2e **37/37、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` **276**。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -556,6 +556,27 @@ TTL 夹到 [1, 7 天]、**bucket 不匹配拒绝签名**。`ObjectStorageModule`
 需要**严格校验 V4 的端点**（真实 bucket / MinIO / 装了 SDK 的环境）才能验证这两条。
 
 **仍未完成**：客户端接线（预签名 PUT → 传字节 → 登记）；`registerFile` 在存储未配置时仍 503。
+
+
+### §4/§23 真实上传链路（commit `8747536`）
+
+新增 `POST /api/resources/:id/upload-url`（预签名 PUT）。三条取舍各自对应一个真实失败模式：
+**对象键由服务端生成**（`uploads/<resourceId>/<时间戳>-<清洗后的名字>`；客户端能选键
+就等于能覆盖任意对象）；**没有直传能力就 503**，不退回"假装上传成功"；
+**直传拿到 URL 不等于被信任**，仍须 `registerFile` 做清洗/类型/大小/魔数校验。
+
+**配好 S3 时 20 通过 / 0 失败 / 0 跳过**：建资源 → 申请直传地址 → **PUT 3099 字节** →
+登记 201 → 第一跳 302 拿下载令牌 → 第二跳 302 拿**对象存储签名直链** → 取回字节 →
+**逐字节一致（3099/3099）**；顺带验到 §15 联动（最新版为 `file_attached`）。
+服务端**未配置** S3 时如实跳过（`pass=1 fail=0 skipped=1`）—— 那时 503 是正确行为，
+当成通过就是假成功。
+
+**三个"假失败"都是我的用例写错**：`fetch` 默认自动跟随重定向（把"重定向正确"误报成
+"没重定向"）；下载是两跳且第一跳是相对路径、第二跳还要带会话 cookie（令牌绑定账号）；
+`bucketId` 断言拿了脚本自己的 `S3_BUCKET`（那个变量只设在服务端进程上）。
+
+**顺带修**：`storage-s3` 写死端口 9200，被我自己上一轮遗留的 s3rver 顶成 EADDRINUSE
+（环境问题长得像代码问题）→ 改为自动挑选 9200-9204。
 
 ### 未完成
 
