@@ -258,6 +258,7 @@ npm install --no-save --no-audit --no-fund \
 | §21b | 修正一句不实的覆盖声明（我曾声称 HTTP 已覆盖，实际没有） | `git show HEAD:...` 回读确认措辞 | `20724f7` |
 | §8 (1/3) | `roleSubjectScope()` 单一来源；`curriculum.service.ts` 5→0 处角色字面量 | 三个角色的 `/api/curriculum/structure` 实测与旧逻辑逐字一致 | `7426375` |
 | §8 (2/3) | `dashboard.service.ts` 3→0 处；`isAdmin` 改为由 `scope.all` 派生 | `authorizedSubjects` 实测 prek_head=2/k_head=1/pe_specialist=2/prek_assistant=0（期望值先由 SQL 算出） | `2333e32` |
+| §7 | 审核动作权限拆分：`POST resources/:id/review` 原挂 `review.view`（"能看待审核队列"=="能发布"）→ 改为按 `dto.action` 要求 `review.approve` / `review.reject` | 判别性测试：只授 `review.view` 的账号得到 `403 缺少权限：review.approve`／`review.reject`；补授 `review.approve` 后放行到业务层（400 只有待审核状态…） | 本轮 |
 | §8 (3/3) | `resources.service.ts` 6→0 处（机械等价替换，SQL 结构未动）；`checkSubjectPermission` 三处字面量合并为一次 `roleScopeCovers` | 权限矩阵 7 项实测全部符合预期（见下） | 本轮 |
 
 门禁基线（每轮实跑）：`npm test 275/275`、`verify-all` **283/283**、双 typecheck PASS、build PASS、api-contracts matched。
@@ -268,9 +269,10 @@ npm install --no-save --no-audit --no-fund \
 | --- | --- | --- |
 | §1 §2 §20 §24 §25 §26 | PDF 目录树、`directories` 表、Directory API/Renderer、目录权限、自建文件夹、教师成长 | **等业主决策**：资料夹 4 种 vs 6 种（见 `docs/DIRECTORY_SPEC.md` §2.1） |
 | §4 §23 | 真实文件上传/下载、S3 兼容存储 | **等测试 bucket**，或业主同意用本地 MinIO 做等价验证（会明确标注非生产 bucket） |
-| §5 §6 §7 §30 | 资源状态机（含 recall）、审核权限拆分 | 不依赖上述决策，可先做 |
+| §5 §6 §30 | 资源状态机：`review.service.ts:88` 只接受 `pending_review`，**没有 recall 路径**（published 无法撤回）；`createResource` 仍恒为 draft | 不依赖决策，可先做。§7 已完成 |
 | §11 §12 §13 | 有效权限管理 UI、MFA 网页闭环、首次登录强制改密 | 不依赖上述决策，可先做 |
 | §14 §15 §16 §17 §18 §19 | 详情/版本/分页/回收站文案/调度器/审计导出 | 不依赖上述决策，可先做 |
+| §11 | **新发现**：`AuthorizationService.setPermissionOverride()` **全仓无任何调用者** —— 权限覆盖机制有表、有读、有写函数，但没有 API/UI 可达，属"定义了却完全无法使用"（§11/§22 的原话） | 需要先定"按账号授权"的产品形态 |
 | §22 §27 §29 | 幽灵权限审计、死代码、假成功清理 | 部分已做（见 §6）；其余待做 |
 | §31 §32 §33 §34 | 14 项命令全量、浏览器 9 条 E2E、迁移 up/down/backfill、FINAL_COMPLETION_REPORT | 收尾阶段 |
 
