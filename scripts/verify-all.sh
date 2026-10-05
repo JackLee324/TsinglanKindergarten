@@ -136,6 +136,9 @@ run "naming-http"         node scripts/verify-naming-http.mjs
 # 目录树接口（§1/§2/§20）：断言 PDF 权威目录的精确节点数、各角色的可见分支，
 # 以及「无权限的科目返回 404 而不是空树」。需要 migration 0009 已应用。
 run "directories"         node scripts/verify-directories.mjs
+# 目录**写路径**（§24/§25/§26）：自建文件夹的增/改/删，以及"拦得住"的否定用例
+# —— 系统节点不可改删、PDF 未标自建的地方不可新建、非空不可删、无 manage 权限 403。
+run "directories-write"   node scripts/verify-directories-write.mjs
 
 # 真实浏览器 E2E（§32）。它不是"再跑一次接口" —— 它验证的是**浏览器里真的点得动、
 # 页面真的渲染出了数据库里的东西**（§16 那条卡了三轮的 SKIP 已用可判定断言替代）。

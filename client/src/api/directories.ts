@@ -33,3 +33,40 @@ export async function getDirectoryNode(code: string): Promise<DirectoryNode> {
     return handleApiError(error, 'getDirectoryNode');
   }
 }
+
+/** 在允许自建的资料夹下新建子文件夹（需要 curriculum.manage）。 */
+export async function createDirectoryFolder(input: {
+  parentCode: string;
+  name: string;
+  nameEn?: string;
+  description?: string;
+}): Promise<DirectoryNode> {
+  try {
+    const resp = await axiosForBackend.post('/api/directories/folder', input);
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'createDirectoryFolder');
+  }
+}
+
+/** 重命名自建文件夹（仅自建节点；系统节点服务端会拒绝）。 */
+export async function updateDirectoryNode(
+  code: string,
+  input: { name?: string; nameEn?: string; description?: string },
+): Promise<DirectoryNode> {
+  try {
+    const resp = await axiosForBackend.patch(`/api/directories/node/${encodeURIComponent(code)}`, input);
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'updateDirectoryNode');
+  }
+}
+
+/** 删除自建文件夹（仅自建、且必须无子节点）。 */
+export async function deleteDirectoryNode(code: string): Promise<void> {
+  try {
+    await axiosForBackend.delete(`/api/directories/node/${encodeURIComponent(code)}`);
+  } catch (error) {
+    return handleApiError(error, 'deleteDirectoryNode');
+  }
+}

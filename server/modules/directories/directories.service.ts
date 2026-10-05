@@ -1,4 +1,13 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { and, count, eq, isNull } from 'drizzle-orm';
 import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@server/database/database.module';
 import { directories, resources } from '@server/database/schema';
@@ -14,6 +23,7 @@ import type {
 // 「谁能看什么」只有一份实现。
 import { isPlatformAdmin, programsVisibleForStructure, roleSubjectScope } from '@shared/rbac';
 import { canonicalSubjectOfDirectoryCode, isKnownSubjectCode } from './directory-vocabulary';
+import { AuditLoggerService } from '@server/modules/audit/audit-logger.service';
 
 /** `directories` 表的一行（只取本模块需要的列）。 */
 interface DirectoryRow {
@@ -27,6 +37,8 @@ interface DirectoryRow {
   subject: string | null;
   sortOrder: number;
   allowCustomFolders: boolean;
+  isSystem: boolean;
+  createdBy: string | null;
 }
 
 interface VisibilityContext {
@@ -53,18 +65,28 @@ interface VisibilityContext {
 export class DirectoriesService {
   private readonly logger = new Logger(DirectoriesService.name);
 
-  constructor(@Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase) {}
+  constructor(
+    @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
+    private readonly audit: AuditLoggerService,
+  ) {}
 
-  /** 整棵目录树，按调用方角色过滤。 */
-  async getTree(roles: RoleCode[] = []): Promise<DirectoryTreeResponse> {
+  /**
+   * 整棵目录树，按调用方角色过滤。
+   *
+   * `canManage` 由控制器从**生效权限**传入（不是从 roles 推），前端据此决定
+   * 是否显示"新建文件夹"入口 —— 服务端算错也不会越权，写接口另有 @RequirePermission。
+   */
+  async getTree(roles: RoleCode[] = [], canManage = false): Promise<DirectoryTreeResponse> {
     const rows = await this.loadAll();
     const childrenOf = this.indexByParent(rows);
     const counts = await this.loadResourceCounts();
     const context = this.visibilityFor(roles);
 
+    const rowsById = new Map(rows.map((r) => [r.id, r]));
+
     const roots: DirectoryNode[] = [];
     for (const row of (childrenOf.get(null) ?? []).slice().sort(bySortOrder)) {
-      const node = this.buildNode(row, childrenOf, counts, context);
+      const node = this.buildNode(row, childrenOf, rowsById, counts, context);
       if (node !== null) roots.push(node);
     }
 
@@ -79,6 +101,7 @@ export class DirectoriesService {
       roots,
       customFolderLeafCount: rows.filter((r) => r.type === 'folder' && r.allowCustomFolders).length,
       hiddenSubjectCodes: context.hiddenSubjectCodes,
+      canManage,
     };
   }
 
@@ -96,8 +119,9 @@ export class DirectoriesService {
     }
 
     const childrenOf = this.indexByParent(rows);
+    const rowsById = new Map(rows.map((r) => [r.id, r]));
     const counts = await this.loadResourceCounts();
-    const node = this.buildNode(target, childrenOf, counts, this.visibilityFor(roles));
+    const node = this.buildNode(target, childrenOf, rowsById, counts, this.visibilityFor(roles));
     if (node === null) {
       throw new NotFoundException(`目录节点不存在：${code}`);
     }
@@ -126,6 +150,8 @@ export class DirectoriesService {
         subject: directories.subject,
         sortOrder: directories.sortOrder,
         allowCustomFolders: directories.allowCustomFolders,
+        isSystem: directories.isSystem,
+        createdBy: directories.createdBy,
       })
       .from(directories)
       .where(eq(directories.enabled, true))
@@ -182,17 +208,18 @@ export class DirectoriesService {
   private buildNode(
     row: DirectoryRow,
     childrenOf: Map<string | null, DirectoryRow[]>,
+    rowsById: Map<string, DirectoryRow>,
     counts: Map<string, number>,
     context: VisibilityContext,
   ): DirectoryNode | null {
     const childRows = (childrenOf.get(row.id) ?? []).slice().sort(bySortOrder);
     const children: DirectoryNode[] = [];
     for (const child of childRows) {
-      const node = this.buildNode(child, childrenOf, counts, context);
+      const node = this.buildNode(child, childrenOf, rowsById, counts, context);
       if (node !== null) children.push(node);
     }
 
-    if (!this.isNodeVisible(row, children, context)) {
+    if (!this.isNodeVisible(row, children, rowsById, context)) {
       // 只在科目/子科层记录「因权限被剪掉」，供前端区分「无权限」与「无数据」。
       if (row.type === 'subject' || row.type === 'sub_subject') {
         context.hiddenSubjectCodes.push(row.code);
@@ -207,9 +234,10 @@ export class DirectoriesService {
       nameEn: row.nameEn,
       type: row.type as DirectoryNodeType,
       program: row.program as ProgramCode | null,
-      subject: this.canonicalSubjectFor(row),
+      subject: this.canonicalSubjectFor(row, rowsById),
       sortOrder: row.sortOrder,
       allowCustomFolders: row.allowCustomFolders,
+      isSystem: row.isSystem,
       resourceCount: this.resourceCountFor(row, counts),
       children,
     };
@@ -219,6 +247,7 @@ export class DirectoriesService {
   private isNodeVisible(
     row: DirectoryRow,
     children: DirectoryNode[],
+    rowsById: Map<string, DirectoryRow>,
     context: VisibilityContext,
   ): boolean {
     // 教师成长分支不属于任何班型：它是所有已登录教师都能看到的职业成长路径说明，
@@ -247,7 +276,7 @@ export class DirectoriesService {
 
     // 3. 单科目点授（今天只有 pe_specialist → physical_education）。
     //    失败关闭：认不出来的科目 code 不会走到这一步被放开。
-    const ownerCode = this.subjectOwnerCodeFor(row);
+    const ownerCode = this.subjectOwnerCodeFor(row, rowsById);
     if (ownerCode !== null && isKnownSubjectCode(ownerCode)) {
       const token = canonicalSubjectOfDirectoryCode(ownerCode);
       if (
@@ -262,22 +291,32 @@ export class DirectoriesService {
   }
 
   /**
-   * 节点所属的「科目 code」。
+   * 节点所属的「科目 code」—— **沿真实父子链向上找**，不解析 code 字符串。
    *
-   * 资料夹/子科节点不带自己的科目归属列，要从 code 推：
-   *   subject      → 自己
-   *   sub_subject  → 自己（如 `k:chinese:reading`）
-   *   folder       → `<科目 code>_<后缀>` 去掉最后的 `_后缀`
+   * 第一版是按字符串推的（资料夹 code 形如 `<科目 code>_<后缀>`，取最后一个下划线之前
+   * 的部分）。那在"只有种子数据"时是对的，但一旦允许管理员**自建**文件夹就立刻错：
+   * 自建节点在 `prek:pe_lesson` 之下，code 是 `prek:pe_lesson_u1`，
+   * lastIndexOf('_') 得到的是 `prek:pe_lesson`（一个 folder），
+   * `isKnownSubjectCode` 判定为假 → 该节点对按科目点授的角色不可见。
+   * 也就是说：**新建文件夹的人自己能看到，被授权该科目的同事看不到**。
    *
-   * 用 **lastIndexOf('_')** 而不是 split('_')：将来科目 code 里可能含 `_`，
-   * 但四个后缀（outline / lesson / resource / assessment）一定不含，
-   * 所以最后一个下划线是唯一可靠的分界。
+   * 父子链是数据本身，不受命名规则影响，所以这里改成沿 parent 上溯。
+   * `rowsById` 由 loadAll() 建立，随每次请求传入。
    */
-  private subjectOwnerCodeFor(row: DirectoryRow): string | null {
+  private subjectOwnerCodeFor(
+    row: DirectoryRow,
+    rowsById: Map<string, DirectoryRow>,
+  ): string | null {
     if (row.type === 'subject' || row.type === 'sub_subject') return row.code;
-    if (row.type === 'folder') {
-      const idx = row.code.lastIndexOf('_');
-      return idx === -1 ? null : row.code.slice(0, idx);
+    let current: DirectoryRow | undefined = row;
+    const seen = new Set<string>();
+    while (current && current.parentId) {
+      if (seen.has(current.id)) return null; // 数据异常时不要死循环
+      seen.add(current.id);
+      const parent: DirectoryRow | undefined = rowsById.get(current.parentId);
+      if (!parent) return null;
+      if (parent.type === 'subject' || parent.type === 'sub_subject') return parent.code;
+      current = parent;
     }
     return null;
   }
@@ -292,7 +331,7 @@ export class DirectoriesService {
    * 做 (program, subject) 反查，与「这个节点是哪个规范科目」是两件事。
    * 完整考证见 directory-vocabulary.ts 头部与 docs/DIRECTORY_SPEC.md §2.2。
    */
-  private canonicalSubjectFor(row: DirectoryRow): string | null {
+  private canonicalSubjectFor(row: DirectoryRow, rowsById: Map<string, DirectoryRow>): string | null {
     if (row.type === 'sub_subject') {
       // 子科返回**自己**的规范 token：`k:chinese:reading` → picture_books。
       // PDF 新增的 `k:chinese:arts`（美育）在规范词汇里没有对应 token，因此返回 null ——
@@ -301,7 +340,7 @@ export class DirectoriesService {
       // 授权判定不读这个字段（见 isNodeVisible），所以返回 null 不会放开任何权限。
       return isKnownSubjectCode(row.code) ? canonicalSubjectOfDirectoryCode(row.code) : null;
     }
-    const ownerCode = this.subjectOwnerCodeFor(row);
+    const ownerCode = this.subjectOwnerCodeFor(row, rowsById);
     if (ownerCode === null) return null;
     return isKnownSubjectCode(ownerCode) ? canonicalSubjectOfDirectoryCode(ownerCode) : null;
   }
@@ -325,6 +364,200 @@ export class DirectoriesService {
     if (token === null) return 0;
     return counts.get(`${row.program ?? ''}:${token}`) ?? 0;
   }
+
+  // ===========================================================================
+  // 写路径（§24/§25/§26）—— 「允许自建文件夹」
+  // ===========================================================================
+  //
+  // 三条规则，全部在服务层判、且全部有数据库层兜底：
+  //
+  //   1. **只能建在允许自建的地方**：父节点 `allowCustomFolders = true`
+  //      （PDF 明确标注的那 16 个叶节点），或者父节点本身就是自建文件夹
+  //      （自建文件夹下允许再建，否则"自建"只有一层，实际用不了）。
+  //      —— 这条不能在 UI 上"藏按钮"了事：接口必须自己拦。
+  //   2. **只能改/删自建节点**：系统节点来自 PDF，是 §1 的验收基准。
+  //      删掉一个系统节点 = 悄悄偏离 PDF，且事后无人知道少了什么。
+  //      数据库层由 `directories_user_node_is_folder` 与 `is_system` 保证语义。
+  //   3. **非空才能删**：有子节点的先删子节点，避免一次请求连带删掉整棵子树。
+  //
+  // 每一次写操作都写审计日志（directory_create / rename / delete）。
+
+  /** 新建自建文件夹。 */
+  async createFolder(
+    input: { parentCode: string; name: string; nameEn?: string; description?: string },
+    actor: DirectoryActor,
+  ): Promise<DirectoryNode> {
+    const parentCode = (input.parentCode ?? '').trim();
+    const name = (input.name ?? '').trim();
+    if (parentCode === '') throw new BadRequestException('缺少父节点 code');
+    if (name === '') throw new BadRequestException('文件夹名称不能为空');
+    if (name.length > 120) throw new BadRequestException('文件夹名称过长（最多 120 字）');
+
+    const rows = await this.loadAll();
+    const rowsById = new Map(rows.map((r) => [r.id, r]));
+    const parent = rows.find((r) => r.code === parentCode);
+    if (!parent) throw new NotFoundException(`父节点不存在：${parentCode}`);
+
+    // 规则 1
+    const parentAllows =
+      parent.allowCustomFolders || (parent.type === 'folder' && !parent.isSystem);
+    if (!parentAllows) {
+      throw new ForbiddenException(
+        `「${parent.name}」不允许自建文件夹（PDF 只允许在部分资料夹下自建）`,
+      );
+    }
+
+    // 同层重名：数据库有唯一索引兜底，但先给出可读的错误，而不是 500。
+    const clash = rows.find(
+      (r) => r.parentId === parent.id && r.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (clash) throw new ConflictException(`同级下已存在同名文件夹「${name}」`);
+
+    const code = await this.nextChildCode(parent, rows);
+    const [created] = await this.db
+      .insert(directories)
+      .values({
+        parentId: parent.id,
+        code,
+        name,
+        nameEn: (input.nameEn ?? '').trim() || name,
+        type: 'folder',
+        program: parent.program,
+        subject: parent.subject,
+        sortOrder: this.nextSortOrder(parent, rows),
+        allowCustomFolders: true, // 自建文件夹下允许继续自建（见规则 1）
+        isSystem: false,
+        createdBy: actor.teacherId ?? null,
+        description: (input.description ?? '').trim() || null,
+      })
+      .returning();
+
+    await this.audit.log('directory_create', {
+      teacherId: actor.teacherId,
+      teacherName: actor.teacherName,
+      detail: `新建文件夹「${name}」于「${parent.name}」（${parent.code}）`,
+    });
+
+    const node = this.buildNode(
+      created as DirectoryRow,
+      this.indexByParent([...rows, created as DirectoryRow]),
+      new Map([...rowsById, [(created as DirectoryRow).id, created as DirectoryRow]]),
+      new Map(),
+      { programsVisible: null, scope: roleSubjectScope([]), hiddenSubjectCodes: [] },
+    );
+    if (node === null) throw new InternalServerErrorException('新建成功但读取失败');
+    return node;
+  }
+
+  /** 重命名 / 改描述 —— 只允许自建节点。 */
+  async updateNode(
+    code: string,
+    input: { name?: string; nameEn?: string; description?: string },
+    actor: DirectoryActor,
+  ): Promise<DirectoryNode> {
+    const rows = await this.loadAll();
+    const target = rows.find((r) => r.code === code);
+    if (!target) throw new NotFoundException(`目录节点不存在：${code}`);
+    if (target.isSystem) {
+      throw new ForbiddenException(
+        '系统目录节点来自 PDF《教师平台》，不能改名；如需调整请先改 PDF 与种子数据',
+      );
+    }
+
+    const name = input.name === undefined ? undefined : input.name.trim();
+    if (name !== undefined) {
+      if (name === '') throw new BadRequestException('文件夹名称不能为空');
+      if (name.length > 120) throw new BadRequestException('文件夹名称过长（最多 120 字）');
+      const clash = rows.find(
+        (r) =>
+          r.id !== target.id &&
+          r.parentId === target.parentId &&
+          r.name.toLowerCase() === name.toLowerCase(),
+      );
+      if (clash) throw new ConflictException(`同级下已存在同名文件夹「${name}」`);
+    }
+
+    const [updated] = await this.db
+      .update(directories)
+      .set({
+        ...(name === undefined ? {} : { name }),
+        ...(input.nameEn === undefined ? {} : { nameEn: input.nameEn.trim() || name }),
+        ...(input.description === undefined
+          ? {}
+          : { description: input.description.trim() || null }),
+        updatedAt: new Date(),
+      })
+      .where(eq(directories.id, target.id))
+      .returning();
+
+    await this.audit.log('directory_rename', {
+      teacherId: actor.teacherId,
+      teacherName: actor.teacherName,
+      detail: `重命名「${target.name}」→「${name ?? target.name}」（${target.code}）`,
+    });
+
+    const merged = rows.map((r) => (r.id === target.id ? (updated as DirectoryRow) : r));
+    const node = this.buildNode(
+      updated as DirectoryRow,
+      this.indexByParent(merged),
+      new Map(merged.map((r) => [r.id, r])),
+      new Map(),
+      { programsVisible: null, scope: roleSubjectScope([]), hiddenSubjectCodes: [] },
+    );
+    if (node === null) throw new InternalServerErrorException('更新成功但读取失败');
+    return node;
+  }
+
+  /** 删除自建文件夹（必须无子节点）。 */
+  async deleteNode(code: string, actor: DirectoryActor): Promise<void> {
+    const rows = await this.loadAll();
+    const target = rows.find((r) => r.code === code);
+    if (!target) throw new NotFoundException(`目录节点不存在：${code}`);
+    if (target.isSystem) {
+      throw new ForbiddenException('系统目录节点来自 PDF《教师平台》，不能删除');
+    }
+    const children = rows.filter((r) => r.parentId === target.id);
+    if (children.length > 0) {
+      throw new ConflictException(
+        `「${target.name}」下还有 ${children.length} 个子文件夹，请先删除子文件夹`,
+      );
+    }
+
+    await this.db.delete(directories).where(eq(directories.id, target.id));
+
+    await this.audit.log('directory_delete', {
+      teacherId: actor.teacherId,
+      teacherName: actor.teacherName,
+      detail: `删除自建文件夹「${target.name}」（${target.code}）`,
+    });
+  }
+
+  /**
+   * 下一个可用的子节点 code。
+   *
+   * 自建节点统一用 `<parentCode>_u<n>`。选择"可读且可判定来源"的形式，
+   * 而不是随机串：出问题时一眼能看出是管理员建的还是种子里的。
+   * 与既有后缀（outline/lesson/resource/assessment）不会冲突（那些不含 `_u`）。
+   */
+  private async nextChildCode(parent: DirectoryRow, rows: DirectoryRow[]): Promise<string> {
+    const taken = new Set(rows.map((r) => r.code));
+    for (let n = 1; n <= 999; n += 1) {
+      const candidate = `${parent.code}_u${n}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+    throw new ConflictException('该文件夹下自建文件夹数量已达上限（999）');
+  }
+
+  private nextSortOrder(parent: DirectoryRow, rows: DirectoryRow[]): number {
+    const siblings = rows.filter((r) => r.parentId === parent.id);
+    return siblings.reduce((max, r) => Math.max(max, r.sortOrder), 0) + 10;
+  }
+}
+
+/** 写操作的操作者信息，仅用于审计。 */
+export interface DirectoryActor {
+  teacherId?: string;
+  teacherName?: string;
 }
 
 function bySortOrder(a: DirectoryRow, b: DirectoryRow): number {

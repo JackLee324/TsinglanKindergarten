@@ -44,6 +44,11 @@ const bad = (label, detail = '') => { console.log(`  FAIL  ${label}${detail ? ' 
  * "少跑了几项检查必须明确打印 NOTE，绝不静默通过"。跳过不等于通过，最终统计里分开列。
  */
 const skip = (label, reason) => { console.log(`  SKIP  ${label}  -> ${reason}`); SKIPPED++; };
+/** 断言实际值等于期望值；用于少数需要看具体数值的地方（本脚本主要用 ok/bad）。 */
+const check = (label, actual, expected) => {
+  if (actual === expected) ok(label, JSON.stringify(actual));
+  else bad(label, `got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
+};
 
 if (!USER || !PASS) {
   console.error('需要 BROWSER_E2E_USER / BROWSER_E2E_PASS。');
@@ -407,6 +412,113 @@ try {
     })()`, 8000);
     if (l1Ok.ok) ok('§1 教师成长 L1 的 4 个分支渲染（来自数据库）');
     else bad('§1 教师成长 L1 的 4 个分支渲染', (await treeText()).slice(0, 240));
+  }
+
+  // ---- 3c. §24/§25/§26：在浏览器里真的建一个自建文件夹，再删掉 ----
+  //
+  // 这一条补的是"接口通过 ≠ 界面能用"：按钮要出现、表单要能输入、
+  // 提交后**树里真的多出这个节点**、删掉后**真的少掉** —— 全程只看 DOM。
+  await goto(
+    '/directory',
+    6000,
+    "!!document.querySelector('[data-testid=\"directory-tree\"]')",
+  );
+  // 先把树展开到目标节点：`goto('/directory')` 是**整页重载**，展开状态会回到默认
+  // （只展开两个根），所以 prek:pe_lesson 此刻根本不在 DOM 里 ——
+  // 第一版就是因为漏了这一步，把"没渲染"误报成"按钮缺失"。
+  await clickSelector('[data-dir-toggle="prek"]',
+    "document.querySelector('[data-dir-toggle=\"prek\"]')?.getAttribute('aria-expanded') === 'true'");
+  await clickSelector('[data-dir-toggle="prek:pe"]',
+    "document.querySelector('[data-dir-toggle=\"prek:pe\"]')?.getAttribute('aria-expanded') === 'true'");
+
+  const createBtnSel = '[data-dir-create="prek:pe_lesson"]';
+  const hasCreateBtn = await evalIn(`!!document.querySelector(${JSON.stringify(createBtnSel)})`);
+  if (!hasCreateBtn) {
+    // 按钮不存在有两种可能：没有 curriculum.manage，或该节点不允许自建。
+    // 两种都不算"功能坏了"，但必须**说清是哪一种**，不能静默跳过。
+    const canManage = await evalIn(
+      "(async () => (await (await fetch('/api/directories/tree', { credentials: 'include' })).json()).canManage)()",
+      true,
+    );
+    bad('§24 「新建文件夹」按钮出现在允许自建的节点上',
+      `按钮缺失；服务端 canManage=${JSON.stringify(canManage)}（false 说明这个账号本来就没有目录管理权限）`);
+  } else {
+    ok('§24 「新建文件夹」按钮出现在允许自建的节点上');
+    await runDirectoryWriteFlow();
+  }
+
+  /**
+   * 在浏览器里真的建一个自建文件夹、再删掉。
+   *
+   * 每一步都单独验证效果 —— 否则任何一步静默失败，最终都只会表现为
+   * "文件夹没出现"，看不出是哪一步断的（第一版本就是这样）。
+   */
+  async function runDirectoryWriteFlow() {
+    const probeName = `浏览器自建-${Date.now().toString().slice(-6)}`;
+
+    const formOpened = await clickSelector(
+      createBtnSel,
+      `!!document.querySelector('[data-dir-name-input="prek:pe_lesson"]')`,
+    );
+    if (formOpened.effect !== 'OK') {
+      bad('§24 点「新建文件夹」后出现名称输入框', `effect=${formOpened.effect}`);
+      return;
+    }
+    ok('§24 点「新建文件夹」后出现名称输入框');
+
+    const setRes = await evalIn(`(() => {
+      const input = document.querySelector('[data-dir-name-input="prek:pe_lesson"]');
+      if (!input) return 'NO_INPUT';
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(probeName)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      return input.value === ${JSON.stringify(probeName)} ? 'SET' : 'VALUE_MISMATCH';
+    })()`);
+    check('§24 能往输入框里填名称', setRes, 'SET');
+
+    const submitClicked = await evalIn(`(() => {
+      const b = document.querySelector('[data-dir-submit="prek:pe_lesson"]');
+      if (!b) return 'NO_SUBMIT_BUTTON';
+      b.click();
+      return 'CLICKED';
+    })()`);
+    check('§24 提交按钮存在且已点击', submitClicked, 'CLICKED');
+
+    const appeared = await waitFor(
+      `(document.body.innerText || '').includes(${JSON.stringify(probeName)})`,
+      20000,
+    );
+    if (!appeared.ok) {
+      const errText = await evalIn(
+        "document.querySelector('[data-testid=\"directory-action-error\"]')?.innerText || '(无错误提示)'");
+      bad('§24 提交后新文件夹出现在树里（数据真的写进去了）', errText);
+      return;
+    }
+    ok('§24 提交后新文件夹出现在树里（数据真的写进去了）', probeName);
+
+    // 用 data-dir-name 精确匹配，而不是"innerText 包含"：
+    // 父节点的 innerText 包含整棵子树，用包含关系会命中根节点 ——
+    // 于是"删掉刚建的那个"变成了"删根节点"，被服务端 403 正确拒绝，
+    // 而测试却报成"删除后没消失"。用节点自己的名字属性才没有歧义。
+    const newCode = await evalIn(`(() => {
+      const el = document.querySelector('[data-dir-name=' + JSON.stringify(${JSON.stringify(probeName)}) + ']');
+      return el ? el.getAttribute('data-dir-code') : null;
+    })()`);
+    if (!newCode) {
+      bad('§24 能定位到新节点的 code', 'NOT_FOUND');
+      return;
+    }
+    ok('§24 能定位到新节点的 code', newCode);
+
+    // 删除（有确认框，先把它短路掉）
+    await evalIn(`window.confirm = () => true`);
+    await evalIn(`document.querySelector('[data-dir-delete="' + ${JSON.stringify(newCode)} + '"]')?.click()`);
+    const gone = await waitFor(
+      `!(document.body.innerText || '').includes(${JSON.stringify(probeName)})`,
+      20000,
+    );
+    if (gone.ok) ok('§24 删除后该文件夹从树里消失', newCode);
+    else bad('§24 删除后该文件夹从树里消失', newCode);
   }
 
   // ---- 4. §19：导出按钮必须是可点的（以前写死 disabled）----

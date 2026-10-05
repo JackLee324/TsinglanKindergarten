@@ -72,6 +72,12 @@ export type AuditAction =
   | 'password_changed'
   | 'password_change_failed'
   | 'password_reset'
+  // --- 目录维护（§24/§25/§26，migration 0010 之后可编辑）--------------------
+  // 单列三个动作而不是复用 permission_change：目录结构变更会被所有人看到，
+  // 事后追查「谁把 K 班型的资料夹删了」需要能按目录动作直接筛出来。
+  | 'directory_create'
+  | 'directory_rename'
+  | 'directory_delete'
   // --- MFA (added by migration 0006) ---------------------------------------
   | 'mfa_enrolled'
   | 'mfa_enabled'
@@ -405,6 +411,12 @@ export interface DirectoryNode {
    * 仅 `type = 'folder'` 且限特定科目，由数据库 CHECK 约束保证。
    */
   allowCustomFolders: boolean;
+  /**
+   * true = 来自 PDF 的权威节点（不可改名、不可删除）；
+   * false = 管理员自建（可改名、可删除，无子节点时）。
+   * 由数据库列 `is_system` 提供，不是"看 code 里有没有某段字符串"推出来的。
+   */
+  isSystem: boolean;
   /** 该节点（含子树）下的资源条数，供 UI 显示徽标；无权限时为 0 而非猜测值。 */
   resourceCount: number;
   children: DirectoryNode[];
@@ -423,4 +435,13 @@ export interface DirectoryTreeResponse {
    * 与「你没有这个科目的权限」，避免把 403 渲染成「暂无数据」。
    */
   hiddenSubjectCodes: string[];
+  /**
+   * 调用方**当前生效**的权限里有没有 `curriculum.manage`。
+   *
+   * 由服务端根据生效权限算出来，而不是让前端拿 roles 自己推：权限是可以按账号
+   * 单独授予/拒绝的（account_permission_overrides），前端按角色推会两边不一致 ——
+   * 那正是"幽灵权限"（界面上有按钮、点了 403）的成因。
+   * 服务端算错也不会变成越权：写接口自己有 @RequirePermission。
+   */
+  canManage: boolean;
 }

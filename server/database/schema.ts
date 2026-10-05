@@ -519,6 +519,13 @@ export const directories = pgTable("directories", {
   sortOrder: integer("sort_order").notNull().default(0),
   enabled: boolean("enabled").notNull().default(true),
   allowCustomFolders: boolean("allow_custom_folders").notNull().default(false),
+  // Added by migration 0010. `isSystem` marks the nodes that came from the PDF
+  // (the §1 acceptance baseline) — those must not be deleted or renamed, so
+  // "editable" cannot mean "you can delete the authoritative structure".
+  // The DB enforces the pairing: system rows must have `created_by IS NULL`,
+  // user rows must have it set, and only `type = 'folder'` may be user-created.
+  isSystem: boolean("is_system").notNull().default(true),
+  createdBy: uuid("created_by"),
   description: text("description"),
   // The DB columns really are `_created_at` / `_updated_at` (see 0009) — the
   // underscore prefix is this project's convention for platform-managed columns.

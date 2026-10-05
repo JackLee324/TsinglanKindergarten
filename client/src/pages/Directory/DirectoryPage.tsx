@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, ChevronDown, ChevronRight, FolderPlus, Loader2 } from 'lucide-react';
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  FolderPlus,
+  Loader2,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react';
 
 import { directories as directoriesApi } from '../../api';
 import { useTranslation } from '../../i18n/useTranslation';
@@ -32,8 +42,23 @@ export default function DirectoryPage() {
     try {
       const data = await directoriesApi.getDirectoryTree();
       setTree(data);
-      // 默认展开两个根，便于一眼看到全貌；下层点开。
-      setExpanded(new Set((data?.roots ?? []).map((r) => r.code)));
+      // 只**首次**设置默认展开（两个根）；之后刷新保留用户当前的展开状态。
+      //
+      // 第一版每次 load 都重置成"只展开根"，后果很实际：新建一个文件夹后视图
+      // 立刻折叠回顶部，用户看不到自己刚建的东西，也丢了原来的位置。
+      // 这个缺陷是浏览器测试暴露的 —— 接口层全绿，界面却"点了没反应"。
+      setExpanded((prev) => {
+        if (prev.size === 0) return new Set((data?.roots ?? []).map((r) => r.code));
+        const known = new Set<string>();
+        const walk = (nodes: DirectoryNode[]) => {
+          for (const n of nodes) { known.add(n.code); walk(n.children); }
+        };
+        walk(data?.roots ?? []);
+        // 丢掉已经不存在的节点，避免状态里堆积无效 code（例如刚被删掉的）
+        const next = new Set<string>();
+        for (const code of prev) if (known.has(code)) next.add(code);
+        return next;
+      });
     } catch (e) {
       // handleApiError 会把后端错误转成可读文本并以 reject 形式抛出，
       // 这里**必须**把失败显示出来，不能吞掉后渲染空树。
@@ -47,6 +72,64 @@ export default function DirectoryPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // ---- 写操作（§24/§25/§26）：新建 / 改名 / 删除自建文件夹 ----
+  // 入口是否显示由**服务端算出的 tree.canManage** 决定（生效权限），不是按角色猜。
+  // 就算显示错了也不会越权：写接口自己有 @RequirePermission，服务层还有规则校验。
+  const [editing, setEditing] = useState<{ mode: 'create' | 'rename'; code: string } | null>(null);
+  const [draftName, setDraftName] = useState<string>('');
+  const [busy, setBusy] = useState<boolean>(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const submitEdit = useCallback(
+    async (parentOrSelfCode: string, mode: 'create' | 'rename') => {
+      const name = draftName.trim();
+      if (name === '') {
+        setActionError(t('directory.nameRequired'));
+        return;
+      }
+      setBusy(true);
+      setActionError(null);
+      try {
+        if (mode === 'create') {
+          await directoriesApi.createDirectoryFolder({ parentCode: parentOrSelfCode, name });
+          // 展开父节点，让新建出来的子文件夹**立刻可见**（见 load() 的注释）
+          setExpanded((prev) => new Set(prev).add(parentOrSelfCode));
+        } else {
+          await directoriesApi.updateDirectoryNode(parentOrSelfCode, { name });
+        }
+        setEditing(null);
+        setDraftName('');
+        await load();
+      } catch (e) {
+        // 失败必须显示出来。吞掉错误会让"点了没反应"变成用户唯一能得到的反馈，
+        // 而这正是这一轮要消灭的假成功形态。
+        setActionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [draftName, load, t],
+  );
+
+  const removeNode = useCallback(
+    async (code: string, name: string) => {
+      if (typeof window !== 'undefined' && !window.confirm(t('directory.confirmDelete').replace('{name}', name))) {
+        return;
+      }
+      setBusy(true);
+      setActionError(null);
+      try {
+        await directoriesApi.deleteDirectoryNode(code);
+        await load();
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load, t],
+  );
 
   const toggle = useCallback((code: string) => {
     setExpanded((prev) => {
@@ -119,6 +202,15 @@ export default function DirectoryPage() {
           第一版断言直接读整页 innerText，结果读到的是左侧导航栏 ——
           于是「Pre-K 下有美德/蒙特梭利/体能」被侧边栏满足、看起来通过了，
           而真正要断言的目录树根本没被检查。测试读错元素 = 假证据。 */}
+      {actionError && (
+        <div
+          className="mb-4 rounded-xl border border-[#D98B8B] bg-white p-4"
+          data-testid="directory-action-error"
+        >
+          <p className="text-sm text-[#2D2A3E]">{actionError}</p>
+        </div>
+      )}
+
       <div className="space-y-3" data-testid="directory-tree">
         {tree.roots.map((root) => (
           <TreeNode
@@ -129,11 +221,45 @@ export default function DirectoryPage() {
             onToggle={toggle}
             label={label}
             t={t}
+            canManage={tree.canManage}
+            editing={editing}
+            draftName={draftName}
+            busy={busy}
+            onStartCreate={(code) => {
+              setActionError(null);
+              setDraftName('');
+              setEditing({ mode: 'create', code });
+            }}
+            onStartRename={(code, current) => {
+              setActionError(null);
+              setDraftName(current);
+              setEditing({ mode: 'rename', code });
+            }}
+            onDraftChange={setDraftName}
+            onSubmitEdit={submitEdit}
+            onCancelEdit={() => {
+              setEditing(null);
+              setDraftName('');
+            }}
+            onDelete={removeNode}
           />
         ))}
       </div>
     </div>
   );
+}
+
+interface TreeNodeActions {
+  canManage: boolean;
+  editing: { mode: 'create' | 'rename'; code: string } | null;
+  draftName: string;
+  busy: boolean;
+  onStartCreate: (code: string) => void;
+  onStartRename: (code: string, currentName: string) => void;
+  onDraftChange: (value: string) => void;
+  onSubmitEdit: (code: string, mode: 'create' | 'rename') => void;
+  onCancelEdit: () => void;
+  onDelete: (code: string, name: string) => void;
 }
 
 function TreeNode({
@@ -143,6 +269,7 @@ function TreeNode({
   onToggle,
   label,
   t,
+  ...actions
 }: {
   node: DirectoryNode;
   depth: number;
@@ -150,16 +277,28 @@ function TreeNode({
   onToggle: (code: string) => void;
   label: (node: DirectoryNode) => string;
   t: (key: TranslationKey) => string;
-}) {
+} & TreeNodeActions) {
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.code);
   const isRoot = node.type === 'root';
+  // 只有"允许自建"的资料夹、或自建文件夹本身，才可能出现新建入口 ——
+  // 与服务层的规则一致（服务端仍会独立校验，这里只是不显示点不动的按钮）。
+  const canCreateHere =
+    actions.canManage && (node.allowCustomFolders || (node.type === 'folder' && !node.isSystem));
+  const canRenameHere = actions.canManage && !node.isSystem;
+  const canDeleteHere = actions.canManage && !node.isSystem;
+  const isCreating = actions.editing?.mode === 'create' && actions.editing.code === node.code;
+  const isRenaming = actions.editing?.mode === 'rename' && actions.editing.code === node.code;
 
   return (
     <div
       className={isRoot ? 'rounded-xl border border-[#E8E4F0] bg-white shadow-sm' : ''}
       data-dir-code={node.code}
       data-dir-type={node.type}
+      // 节点**自己**的名字。不能靠 innerText 找节点：父节点的 innerText 包含
+      // 整棵子树，用"文本包含"去定位会命中根节点（我在 E2E 里就踩过，
+      // 于是"删掉刚建的那个"变成了"删根节点"，被 403 拒绝）。
+      data-dir-name={node.name}
     >
       <div
         className={`flex items-center gap-2 ${isRoot ? 'p-6' : `${depth > 1 ? 'py-2' : 'py-3'} px-4`}`}
@@ -206,7 +345,92 @@ function TreeNode({
             {t('directory.resourceCount').replace('{count}', String(node.resourceCount))}
           </span>
         )}
+
+        {/* 「可自建」标记：自建节点也标出来，便于与 PDF 权威节点区分 */}
+        {!node.isSystem && (
+          <span
+            className="rounded-full bg-[#FAF8FF] px-3 py-1 text-xs font-medium text-[#6B6878]"
+            data-dir-user-node={node.code}
+          >
+            {t('directory.userCreated')}
+          </span>
+        )}
+
+        <span className="ml-auto flex items-center gap-1">
+          {canCreateHere && !isCreating && (
+            <button
+              type="button"
+              data-dir-create={node.code}
+              onClick={() => actions.onStartCreate(node.code)}
+              title={t('directory.newFolder')}
+              className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-primary-dark"
+            >
+              <Plus className="size-4" />
+            </button>
+          )}
+          {canRenameHere && !isRenaming && (
+            <button
+              type="button"
+              data-dir-rename={node.code}
+              onClick={() => actions.onStartRename(node.code, node.name)}
+              title={t('directory.rename')}
+              className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-primary-dark"
+            >
+              <Pencil className="size-4" />
+            </button>
+          )}
+          {canDeleteHere && (
+            <button
+              type="button"
+              data-dir-delete={node.code}
+              onClick={() => actions.onDelete(node.code, node.name)}
+              disabled={actions.busy}
+              title={t('directory.delete')}
+              className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-[#D98B8B] disabled:opacity-40"
+            >
+              <Trash2 className="size-4" />
+            </button>
+          )}
+        </span>
       </div>
+
+      {/* 内联表单：新建/改名。刻意不用弹窗 —— 这是一棵长列表，
+          弹窗会遮住"这个文件夹在树里的哪个位置"，而那正是用户要确认的事。 */}
+      {(isCreating || isRenaming) && (
+        <div
+          className="flex items-center gap-2 px-4 pb-3"
+          style={{ paddingLeft: `${16 + (depth + 1) * 20}px` }}
+        >
+          <input
+            autoFocus
+            value={actions.draftName}
+            data-dir-name-input={node.code}
+            onChange={(e) => actions.onDraftChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') actions.onSubmitEdit(node.code, isCreating ? 'create' : 'rename');
+              if (e.key === 'Escape') actions.onCancelEdit();
+            }}
+            placeholder={t('directory.namePlaceholder')}
+            className="rounded-lg border border-[#E8E4F0] px-3 py-1.5 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+          <button
+            type="button"
+            data-dir-submit={node.code}
+            disabled={actions.busy}
+            onClick={() => actions.onSubmitEdit(node.code, isCreating ? 'create' : 'rename')}
+            className="rounded-lg bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-dark disabled:opacity-40"
+          >
+            {isCreating ? t('directory.newFolder') : t('directory.rename')}
+          </button>
+          <button
+            type="button"
+            onClick={actions.onCancelEdit}
+            className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF]"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
 
       {hasChildren && isOpen && (
         <div className={isRoot ? 'border-t border-[#E8E4F0] py-2' : ''}>
@@ -219,6 +443,7 @@ function TreeNode({
               onToggle={onToggle}
               label={label}
               t={t}
+              {...actions}
             />
           ))}
         </div>
