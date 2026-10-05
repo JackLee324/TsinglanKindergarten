@@ -1,6 +1,6 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Header, Query } from '@nestjs/common';
 import { AuditService } from './audit.service';
-import type { AuditLogListResponse, AuditAction } from '@shared/api.interface';
+import type { AuditAction, AuditLogListParams, AuditLogListResponse } from '@shared/api.interface';
 import { RequirePermission } from '@server/modules/authz/permission.decorator';
 
 @Controller('api/audit')
@@ -40,5 +40,21 @@ export class AuditController {
       page: page ? parseInt(page, 10) : undefined,
       pageSize: pageSize ? parseInt(pageSize, 10) : undefined,
     });
+  }
+
+  /**
+   * 导出审计日志为 CSV 文件（§19）。
+   *
+   * 权限刻意用 `audit.export`（highRisk）而不是 `audit.view`：能把整份日志带成文件的人，
+   * 与能在页面里翻看的人，不是同一档能力。
+   */
+  @Get('logs/export')
+  @RequirePermission('audit.export')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="audit-logs.csv"')
+  async exportLogs(
+    @Query() query: AuditLogListParams & { startDate?: string; endDate?: string },
+  ): Promise<string> {
+    return this.auditService.exportCsv(query);
   }
 }

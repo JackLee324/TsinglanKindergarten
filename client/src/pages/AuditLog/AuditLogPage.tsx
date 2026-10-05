@@ -285,16 +285,43 @@ const AuditLogPage: React.FC = () => {
     },
   ];
 
+  /**
+   * 导出当前筛选条件下的审计日志（§19）。
+   *
+   * 这个按钮以前是 `<Button variant="outline" disabled>` —— 永远点不动，
+   * 而 `audit.export` 权限却真实存在并已授予 principal。现在它真的能导出。
+   *
+   * 走真实导航而不是 axios：浏览器会自动带上会话 Cookie，服务端用
+   * Content-Disposition 落文件，客户端不必处理 Blob，也不用把整份 CSV 先读进内存。
+   * 权限由服务端把关（audit.export，highRisk），前端不做"能不能导出"的判断。
+   */
+  const handleExport = (): void => {
+    const qs = new URLSearchParams();
+    if (actionFilter !== 'all') qs.set('action', actionFilter);
+    if (programFilter !== 'all') qs.set('program', programFilter);
+    if (teacherIdFilter) qs.set('teacherId', teacherIdFilter);
+    if (startDate) qs.set('startDate', startDate);
+    if (endDate) qs.set('endDate', endDate);
+    const query = qs.toString();
+
+    const link = document.createElement('a');
+    link.href = '/api/audit/logs/export' + (query ? '?' + query : '');
+    link.download = 'audit-logs.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+
   return (
     <div>
       <PageHeader
         title={t('page.auditLog')}
         description={t('page.auditLogDesc')}
         actions={
-          <Button variant="outline" disabled>
-            <Download className="size-4" />
-            {t('audit.export')}
-          </Button>
+          <Button variant="outline" onClick={handleExport}>
+                <Download className="size-4" />
+                {t('audit.export')}
+              </Button>
         }
       />
 

@@ -329,3 +329,30 @@ npm install --no-save --no-audit --no-fund \
 
 **与简报的一处差异**：简报写"每天自动检查"，实现是默认每 60 分钟检查一次。
 因为查询条件是 `purge_after <= now`，更频繁地检查只是更及时，不会误删 —— 属于超集而非偏离。
+
+### 追加（第 27 轮）：§19 审计导出
+
+    shared/rbac.ts:421          { code: 'audit.export', ... highRisk: true }   ← 权限存在、已授予
+    audit.controller.ts         只有 @Get('logs') @RequirePermission('audit.view')
+    AuditLogPage.tsx:294         <Button variant="outline" disabled>           ← 永远点不动的按钮
+
+即：一个真实存在、已授予 principal 的权限，配一个永远禁用、也没有任何后端实现的按钮。
+简报的原话是「不要再存在 disabled button 但用户看起来像可以使用的情况」。
+
+**实现**（不是删按钮 —— 权限已定义且已授予，删掉会留下孤儿权限）：
+* `audit.service.ts` 新增 `exportCsv()`：RFC 4180 转义、UTF-8 BOM（否则 Excel 中文乱码）、
+  单次上限 10000 行。
+* `audit.controller.ts` 新增 `@Get('logs/export')`，**权限刻意用 `audit.export`（highRisk）而不是
+  `audit.view`** —— 能把整份日志（含 IP 与操作明细）带成文件带走，与在页面里翻看不是同一档能力。
+* `AuditLogPage.tsx` 按钮接上 `handleExport`：构造带当前筛选条件的 URL 并触发下载
+  （走真实导航，浏览器自动带会话 Cookie，客户端不必处理 Blob）。
+
+**实测（真实 HTTP）**：
+
+    principal（持有 audit.export）:  http=200
+      Content-Type: text/csv; charset=utf-8
+      Content-Disposition: attachment; filename="audit-logs.csv"
+      BOM 存在 ✅   表头：时间,动作,教师,班型,资源/科目,IP,结果,详情   37 行
+    阴性对照（只授 audit.view）:     查看列表 200 ／ 导出 403 缺少权限：audit.export
+
+**未验证**：按钮的下载行为只经过 typecheck + build，没有浏览器级证据（§32 未建立）。
