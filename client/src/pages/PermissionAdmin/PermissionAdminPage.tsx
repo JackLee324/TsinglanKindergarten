@@ -13,6 +13,7 @@ import { useTranslation } from '@client/src/i18n/useTranslation';
 import * as teachersApi from '@client/src/api/teachers';
 import { readListResponse } from '@client/src/api/client';
 import PermissionMatrix from './PermissionMatrix';
+import { EffectivePermissionsPanel } from '@client/src/components/permissions/EffectivePermissionsPanel';
 
 import type {
   ProgramCode,
@@ -352,6 +353,12 @@ const PermissionAdminPage: React.FC = () => {
                   {filteredTeachers.map((teacher) => (
                     <li key={teacher.id}>
                       <button
+                        // data-testid / data-teacher-id：浏览器 E2E 需要能稳定地
+                        // "选中某个账号"。这个列表是 <button> 而非 <table>，
+                        // 用文本或结构去猜元素既脆弱、也容易点到导航栏
+                        // （我在目录页踩过同一个坑）。
+                        data-testid="teacher-option"
+                        data-teacher-id={teacher.id}
                         onClick={() => setSelectedTeacherId(teacher.id)}
                         className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors ${
                           selectedTeacherId === teacher.id
@@ -465,6 +472,15 @@ const PermissionAdminPage: React.FC = () => {
             )}
           </CardContent>
         </Card>
+
+        {/* §11 按账号授权：科目权限管的是"能对哪些数据做"，
+            这里管的是"能不能做这个动作" —— 两者是 RBAC.md 的三层模型里不同的两层，
+            所以分成两块而不是塞进同一张表。 */}
+        {selectedTeacherId && (
+          <div className="mt-6">
+            <EffectivePermissionsPanel teacherId={selectedTeacherId} />
+          </div>
+        )}
       </div>
     </div>
   );

@@ -580,6 +580,96 @@ try {
     }
   }
 
+  // ---- 3e. §11 按账号授权：在浏览器里真的追加一条权限、再恢复 ----
+  // 只看"面板渲染出来了"是不够的 —— 要点到某一条权限上，看服务端返回的
+  // sources 里真的多出一条 granted，界面徽章也跟着变。
+  // 这一页的账号列表是 `<button>` 而不是 `<table>`，而且面板**只在选中账号后才渲染** ——
+  // 第一版断言直接找 `[data-perm-row]`，于是永远找不到（页面本身是好的）。
+  // 现在先点一个账号。
+  await goto('/admin/permissions', 6000, "!!document.querySelector('[data-testid=\"teacher-option\"]')");
+  // 刻意**不要**选第一个。列表是按某种顺序排的，第一个恰好是当前登录账号
+  // （园长），而"管理自己"会被服务端的等级规则正确拒绝（不能管理同级或更高级），
+  // 于是面板上的追加/禁止按钮必然 403 —— 那不是缺陷，是选错了用例对象。
+  // 这里挑一个等级更低的账号（主教/配班/专科教师）。
+  const picked = await evalIn(`(() => {
+    const all = [...document.querySelectorAll('[data-testid="teacher-option"]')];
+    const el = all.find((e) => /主教|配班|教师|专科/.test(e.innerText || '')) || all[0];
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
+    for (const t of ['mousedown','mouseup','click']) {
+      el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, button: 0, view: window }));
+    }
+    return { id: el.getAttribute('data-teacher-id'), text: (el.innerText || '').replace(/\s+/g, ' ').slice(0, 30) };
+  })()`);
+  if (!picked) {
+    bad('§11 权限管理页有可选的账号', 'NO_TEACHER_OPTION');
+  } else {
+    ok('§11 权限管理页选中了一个账号', picked.text);
+  }
+  // 等到**权限行**出现，而不是等到面板容器出现 —— 容器先渲染、数据后到，
+  // 只等容器会读到"还在加载中"（第一版就是这样，报出来却是"面板没渲染"）。
+  await waitFor("document.querySelectorAll('[data-perm-row]').length > 0", 25000);
+  const permRows = await evalIn("document.querySelectorAll('[data-perm-row]').length");
+  if (permRows === 0) {
+    const diag = await evalIn(`(() => {
+      const panel = document.querySelector('[data-testid="effective-permissions"]');
+      return {
+        panel: !!panel,
+        text: (panel?.innerText || '(面板不存在)').replace(/\s+/g, ' ').slice(0, 260),
+        err: document.querySelector('[data-testid="perm-error"]')?.innerText || null,
+      };
+    })()`);
+    bad('§11 生效权限面板渲染出权限行', JSON.stringify(diag));
+  } else {
+    ok('§11 生效权限面板渲染出权限行', `${permRows} 条`);
+
+    // 挑一条当前**没有**被单独追加的权限来做用例（用 UI 上真实存在的按钮）
+    const probe = await evalIn(`(() => {
+      const btn = document.querySelector('[data-perm-grant]');
+      if (!btn) return null;
+      return { code: btn.getAttribute('data-perm-grant') };
+    })()`);
+    if (!probe?.code) {
+      bad('§11 面板上有可点的「追加授权」按钮', 'NOT_FOUND');
+    } else {
+      ok('§11 面板上有可点的「追加授权」按钮', probe.code);
+      await evalIn(`document.querySelector('[data-perm-grant="' + ${JSON.stringify(probe.code)} + '"]').click()`);
+      const appeared = await waitFor(
+        `!!document.querySelector('[data-perm-badge="' + ${JSON.stringify(probe.code)} + '"]')`, 20000);
+      if (appeared.ok) {
+        ok('§11 追加后该项出现「追加」徽章（服务端 sources 已更新）', probe.code);
+        const summary = await evalIn("document.querySelector('[data-testid=\"perm-summary\"]')?.innerText || ''");
+        console.log('       ' + summary);
+        // 恢复：清掉这条覆盖，避免给账号留下测试残留
+        const cleared = await evalIn(`(() => {
+          const b = document.querySelector('[data-perm-clear="' + ${JSON.stringify(probe.code)} + '"]');
+          if (!b) return 'NO_CLEAR_BUTTON';
+          b.click();
+          return 'CLICKED';
+        })()`);
+        if (cleared === 'CLICKED') {
+          const gone = await waitFor(
+            `!document.querySelector('[data-override="' + ${JSON.stringify(probe.code)} + '"]')`, 20000);
+          if (gone.ok) ok('§11 清除覆盖后该项回到角色默认（用例自清理）', probe.code);
+          else bad('§11 清除覆盖后该项回到角色默认', probe.code);
+        } else {
+          bad('§11 能清除刚追加的覆盖', cleared);
+        }
+      } else {
+        const diag = await evalIn(`(() => {
+          const row = document.querySelector('[data-perm-row="' + ${JSON.stringify(probe.code)} + '"]');
+          return {
+            err: document.querySelector('[data-testid="perm-error"]')?.innerText || null,
+            rowText: (row?.innerText || 'ROW_NOT_FOUND').replace(/\s+/g, ' ').slice(0, 120),
+            overrides: document.querySelectorAll('[data-override]').length,
+            summary: document.querySelector('[data-testid="perm-summary"]')?.innerText || null,
+          };
+        })()`);
+        bad('§11 追加后该项出现「追加」徽章', JSON.stringify(diag));
+      }
+    }
+  }
+
   // ---- 4. §19：导出按钮必须是可点的（以前写死 disabled）----
   const audit = await goto('/admin/audit', 5000);
   const exportEnabled = await evalIn(`(() => {

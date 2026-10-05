@@ -433,6 +433,18 @@ export const translations = {
     'security.recoveryTitle': '恢复码（只显示这一次）',
     'security.recoveryHint': '请立刻保存到安全的地方。每个恢复码只能使用一次。',
     'security.savedCodes': '我已保存',
+
+    // === §11 按账号授权面板 ===
+    'permPanel.title': '生效权限',
+    'permPanel.subtitle': '有效权限 = 角色默认 ∪ 追加授权 − 显式禁止。禁止永远优先。',
+    'permPanel.summary': '当前生效 {total} 项；其中 {granted} 项为单独追加、{denied} 项为单独禁止。',
+    'permPanel.sourceGranted': '单独追加',
+    'permPanel.sourceDenied': '单独禁止',
+    'permPanel.clear': '恢复为角色默认',
+    'permPanel.grant': '追加授权（即使角色默认没有）',
+    'permPanel.deny': '显式禁止（即使角色默认包含）',
+    'permPanel.badgeGranted': '追加',
+    'permPanel.badgeDenied': '禁止',
   },
   'en-US': {
     // Navigation
@@ -869,6 +881,18 @@ export const translations = {
     'security.recoveryTitle': 'Recovery codes (shown once)',
     'security.recoveryHint': 'Save them somewhere safe right now. Each code works only once.',
     'security.savedCodes': 'I have saved them',
+
+    // === §11 per-account authorisation panel ===
+    'permPanel.title': 'Effective permissions',
+    'permPanel.subtitle': 'Effective = role defaults ∪ grants − explicit denies. A deny always wins.',
+    'permPanel.summary': '{total} permission(s) in effect; {granted} granted individually, {denied} denied individually.',
+    'permPanel.sourceGranted': 'granted individually',
+    'permPanel.sourceDenied': 'denied individually',
+    'permPanel.clear': 'Back to role default',
+    'permPanel.grant': 'Grant (even if the role lacks it)',
+    'permPanel.deny': 'Deny (even if the role has it)',
+    'permPanel.badgeGranted': 'granted',
+    'permPanel.badgeDenied': 'denied',
   },
 } as const;
 
