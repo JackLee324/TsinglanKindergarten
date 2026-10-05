@@ -28,7 +28,12 @@ import {
 } from '@client/src/components/ui/select';
 import { Textarea } from '@client/src/components/ui/textarea';
 import { useTranslation } from '@client/src/i18n/useTranslation';
-import { createResource, getResource, updateResource } from '@client/src/api/resources';
+import {
+  createResource,
+  getResource,
+  submitReview,
+  updateResource,
+} from '@client/src/api/resources';
 import { getCurriculumStructure } from '@client/src/api/curriculum';
 import type {
   FolderType,
@@ -173,13 +178,36 @@ const UploadPage: React.FC = () => {
       if (editId) {
         await updateResource(editId, { ...base, status });
       } else {
-        await createResource({
+        const created = await createResource({
           ...base,
           program: data.program as ProgramCode,
           subject: data.subject,
           subSubject: data.subSubject || undefined,
           folderType: data.folderType as FolderType,
         });
+
+        // §5：创建接口**只**产生草稿（服务端 `status: 'draft' as const`）。
+        // 以前这里两个分支都不传 status，于是点「提交审核」新建的资源在库里仍是 draft，
+        // 而下面的 toast 却显示「已提交审核」—— API 没做成的事，UI 说做成了；
+        // 审核台也永远看不到它。想真正提交审核，必须再调一次 submit-review（走
+        // resource.submit_review 权限校验）。
+        if (status === 'pending_review') {
+          try {
+            await submitReview(created.id);
+          } catch (submitError) {
+            // 诚实报告：草稿确实建好了，但提交审核失败（例如缺少 resource.submit_review）。
+            // 不能笼统说"操作失败"（那会让人以为资源没保存），也不能说"已提交审核"。
+            logger.error('[Upload] submit-review failed', String(submitError));
+            toast.error(
+              L(
+                '草稿已保存，但提交审核失败，请在「我的资源」重试',
+                'Draft saved, but submitting for review failed — retry from My Resources',
+              ),
+            );
+            navigate('/my-resources');
+            return;
+          }
+        }
       }
       toast.success(
         status === 'draft'
