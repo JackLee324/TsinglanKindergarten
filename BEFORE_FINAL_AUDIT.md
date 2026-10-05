@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、directories-write **31**、browser-e2e **25/25、0 跳过**）、双 typecheck PASS、build PASS、api-contracts matched。
+门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、browser-e2e **32/32、0 跳过**）、双 typecheck PASS、build PASS、api-contracts matched。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -338,6 +338,18 @@ npm install --no-save --no-audit --no-fund \
 2. **体验缺陷**：新建文件夹后视图折叠回顶部，用户看不到刚建的东西。根因是每次
    `load()` 都重置展开状态。改为首次设默认、之后保留 + 新建后展开父节点。
    接口层全绿时这个问题看不出来。
+
+
+### §14 资源详情 + §4/§23 上传侧假成功（commit `5b326a3`）
+
+| 项 | 结果 |
+| --- | --- |
+| 上传侧假成功（**新发现的真实缺陷**） | `registerFile` 只做 bucket 形状检查 → 任何客户端都能让行变成"有文件"（`has_stored_file` 由 path+bucket 非空生成）→ 界面亮「下载」→ 必然 503。客户端那行 `fileBucketId = 'placeholder-bucket'` 正是这么写的 |
+| 修法 | 新增 `ObjectStorageModule` 集中绑定点（`FilesModule` 已 import `ResourcesModule`，互相引用会成环）；`registerFile` 写库**前**判定存储可用性，没有后端就 503 且**不写任何文件列**；客户端不再编造 bucket/路径 |
+| 期望值变化 | files-http **74 → 80 项**，原来"登记成功=201"改为 503，并**新增**数据库直查断言（无 bucket、无 path、`has_stored_file=false`）；"文件名清洗""前导斜杠规范化"两条能力改为从审计行读，没有丢 |
+| §14 | `MyResourcesPage` 的「查看」不再是 `toast.info('详情功能开发中')`；真弹窗，数据全来自 `GET /api/resources/:id`，缺失字段显示"未填写"，失败直接显示 |
+| 浏览器 E2E | **32/32、0 跳过**（新增 §14 五条：打开、无占位文案、状态/版本/上传者真实值、可关闭） |
+| 仍未完成 | 真实字节上传（预签名 PUT → 登记）仍**卡在没有 bucket**；本轮只做到"不再假装成功" |
 
 ### 未完成
 
