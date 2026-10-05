@@ -11,6 +11,7 @@ import {
   DRIZZLE_DATABASE,
   type PostgresJsDatabase,
 } from '@server/database/database.module';
+import { withRbacWriteContext } from '@server/database/rbac-write-context';
 
 import {
   teachersTable,
@@ -377,25 +378,24 @@ export class AuthorizationService {
     // re-assert here so a direct service call is also safe.
     await this.assertCanManageAccount(actor.roles, targetTeacherId);
 
-    await this.db
-      .insert(accountPermissionOverrides)
-      .values({
-        teacherId: targetTeacherId,
-        permission,
-        effect,
-        reason: reason ?? null,
-        grantedBy: actor.id,
-        expiresAt: expiresAt ?? null,
-      })
-      .onConflictDoUpdate({
-        target: [accountPermissionOverrides.teacherId, accountPermissionOverrides.permission],
-        set: {
-          effect,
-          reason: reason ?? null,
-          grantedBy: actor.id,
-          expiresAt: expiresAt ?? null,
-        },
-      });
+    // 必须在 `authenticated_` 下写：这张表上的 AFTER 触发器会去 UPDATE
+    // `teachers.permissions_version`，而 migration 0005 已 REVOKE 掉 `anon_` 在
+    // teachers 上的 UPDATE。以前这条语句是**必 500** 的（42501，而且报的是 teachers，
+    // 不是本次要写的表），所以这套机制不只是"没人调用"，是"调用了也跑不起来"。
+    // 详见 server/database/rbac-write-context.ts。
+    await withRbacWriteContext(this.db, actor.id, async (tx) => {
+      await tx.unsafe(
+        `INSERT INTO account_permission_overrides
+           (teacher_id, permission, effect, reason, granted_by, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (teacher_id, permission) DO UPDATE
+           SET effect = EXCLUDED.effect,
+               reason = EXCLUDED.reason,
+               granted_by = EXCLUDED.granted_by,
+               expires_at = EXCLUDED.expires_at`,
+        [targetTeacherId, permission, effect, reason ?? null, actor.id, expiresAt ?? null],
+      );
+    });
   }
 
   async clearPermissionOverride(
@@ -404,14 +404,13 @@ export class AuthorizationService {
     permission: string,
   ): Promise<void> {
     await this.assertCanManageAccount(actor.roles, targetTeacherId);
-    await this.db
-      .delete(accountPermissionOverrides)
-      .where(
-        and(
-          eq(accountPermissionOverrides.teacherId, targetTeacherId),
-          eq(accountPermissionOverrides.permission, permission),
-        ),
+    // 同上：DELETE 也会触发那个 bump 触发器，所以同样需要 authenticated_。
+    await withRbacWriteContext(this.db, actor.id, async (tx) => {
+      await tx.unsafe(
+        'DELETE FROM account_permission_overrides WHERE teacher_id = $1 AND permission = $2',
+        [targetTeacherId, permission],
       );
+    });
   }
 
   /** Replace all scope bindings for an account in one transaction. */

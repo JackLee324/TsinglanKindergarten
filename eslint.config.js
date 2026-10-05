@@ -56,9 +56,15 @@ module.exports = tseslint.config(
     rules: {
       // 见文件头：存量风格，不是缺陷。
       '@typescript-eslint/no-explicit-any': 'off',
+      // `args: 'all'` 是**因为一次真实事故**才设的（不是洁癖）：
+      // 我曾给 createTeacher/updateTeacher 加了一个 `authz` 形参来强制
+      // `role.assign`，参数加上了、调用方也传了，但方法体里从没读过它 ——
+      // 于是"强制"根本没发生，而默认的 `args: 'after-used'`
+      // 对"后面还有别的参数被使用"的情况**不会报**，静默通过。
+      // 现在只忽略显式下划线开头的占位参数。
       '@typescript-eslint/no-unused-vars': [
         'warn',
-        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+        { args: 'all', argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
       // 允许 `interface X {}` 这类空接口（DTO 标记与扩展位）
       '@typescript-eslint/no-empty-object-type': 'off',

@@ -7,7 +7,9 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 import type {
@@ -152,4 +154,24 @@ export class UpdatePermissionsDto {
   @ValidateNested({ each: true })
   @Type(() => SubjectPermissionInputDto)
   permissions!: SubjectPermissionInputDto[];
+}
+
+/**
+ * §11 按账号授权：追加授权 / 显式禁止。
+ *
+ * `permission` 用字符串而不是 `PermissionCode` 联合：DTO 层的校验只能保证"是个字符串"，
+ * **是否属于权限目录**由服务层用 `isKnownPermission()` 判定 —— 那条判定在
+ * `AuthorizationService.setPermissionOverride` 里，是唯一的真相，
+ * 在这里再抄一份白名单只会变成第二个会漂移的副本（这个项目已经吃过这个亏）。
+ */
+export class PermissionOverrideDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  permission!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }

@@ -13,12 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { TeachersService } from './teachers.service';
-import {
-  CreateTeacherDto,
-  ListTeachersQueryDto,
-  UpdatePermissionsDto,
-  UpdateTeacherDto,
-} from './teachers.dto';
+import {CreateTeacherDto, ListTeachersQueryDto, PermissionOverrideDto, UpdatePermissionsDto, UpdateTeacherDto} from './teachers.dto';
 import type {
   RoleCode,
   SubjectPermission,
@@ -126,6 +121,77 @@ export class TeachersController {
       teacher.roles,
       authz,
       ip,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // §11 按账号授权 —— 生效权限 / 追加授权 / 显式禁止 / 清除覆盖
+  //
+  // grant 与 deny 刻意**分成两条路由**，而不是一条路由按请求体决定要求哪个权限：
+  //   · 装饰器是声明式的、可 grep 的，幽灵权限审计也才看得到消费点；
+  //   · "同一条路由按 body 决定权限"必须在控制器里手写判定，那是权限判定最容易出错的形式。
+  // 清除覆盖同样是特权操作（撤掉一条 deny 等于放开），所以也归 `permission.revoke`。
+  // ---------------------------------------------------------------------------
+
+  /** 读取某个账号的生效权限（含每一项的来源：角色默认 / 追加 / 被禁止）。 */
+  @Get(':id/effective-permissions')
+  @RequirePermission('permission.view')
+  async getEffectivePermissions(@Param('id') id: string) {
+    return this.teachersService.getAccountEffectivePermissions(id);
+  }
+
+  /** 追加授权：即使角色默认没有，也给这个账号开这个权限。 */
+  @Post(':id/permission-overrides/grant')
+  @RequirePermission('permission.grant')
+  async grantPermission(
+    @CurrentTeacher() teacher: { id: string; name: string; roles: RoleCode[] },
+    @Param('id') id: string,
+    @Body() body: PermissionOverrideDto,
+    @Req() req: Request,
+  ) {
+    return this.teachersService.overrideAccountPermission(
+      id,
+      body.permission,
+      'grant',
+      body.reason,
+      { id: teacher.id, name: teacher.name, roles: teacher.roles },
+      auditClientIp(req),
+    );
+  }
+
+  /** 显式禁止：即使角色默认包含，也把这个权限收回来（**禁止永远优先**）。 */
+  @Post(':id/permission-overrides/deny')
+  @RequirePermission('permission.revoke')
+  async denyPermission(
+    @CurrentTeacher() teacher: { id: string; name: string; roles: RoleCode[] },
+    @Param('id') id: string,
+    @Body() body: PermissionOverrideDto,
+    @Req() req: Request,
+  ) {
+    return this.teachersService.overrideAccountPermission(
+      id,
+      body.permission,
+      'deny',
+      body.reason,
+      { id: teacher.id, name: teacher.name, roles: teacher.roles },
+      auditClientIp(req),
+    );
+  }
+
+  /** 清除覆盖项，回到角色默认。 */
+  @Delete(':id/permission-overrides/:permission')
+  @RequirePermission('permission.revoke')
+  async clearPermissionOverride(
+    @CurrentTeacher() teacher: { id: string; name: string; roles: RoleCode[] },
+    @Param('id') id: string,
+    @Param('permission') permission: string,
+    @Req() req: Request,
+  ) {
+    return this.teachersService.clearAccountPermissionOverride(
+      id,
+      permission,
+      { id: teacher.id, name: teacher.name, roles: teacher.roles },
+      auditClientIp(req),
     );
   }
 

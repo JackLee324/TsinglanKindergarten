@@ -90,8 +90,21 @@ for (const m of rbacSource.matchAll(
   constantToCode.set(m[1], m[2]);
 }
 
+/**
+ * 去掉 import 语句。
+ *
+ * **这是本轮抓到的一个真实误报**：`role.assign` 的常量被 import 进
+ * teachers.service.ts 之后，审计就把它算成"已消费" —— 而那份代码里
+ * 根本没有任何地方使用它（参数摆在那里没人读）。也就是说
+ * **只要 import 一下就能骗过这个审计**，那它检查的就不是"有没有被使用"。
+ * 现在先剥 import 再统计：只有真正出现在表达式里的引用才算消费。
+ */
+function stripImports(text) {
+  return text.replace(/^\s*import[\s\S]*?from\s+'[^']+';\s*$/gm, '');
+}
+
 for (const file of serverFiles) {
-  const text = stripComments(readFileSync(file, 'utf8'));
+  const text = stripImports(stripComments(readFileSync(file, 'utf8')));
   const rel = relative(ROOT, file);
 
   // 常量形式的消费
@@ -156,9 +169,10 @@ const unconsumed = PERMISSION_CODES.filter(
  * 真正的问题是没有消费点，不是目录项多余。所以这里把它们记成已知债务，
  * 并在每次运行时完整打印出来，任何人加新权限却忘了接消费点时**立刻失败**。
  */
-// 22 → 21：`role.assign` 已接上消费点（teachers.service 的
-// `assertCanAssignRoles`，读的是生效权限而不是角色列表）。棘轮只能往下走。
-const KNOWN_GHOST_BASELINE = 21;
+// 22 → 21：`role.assign` 接上消费点（teachers.service 的 `assertCanAssignRoles`）。
+// 21 → 19：§11 的按账号授权接口让 `permission.view` 与 `permission.revoke` 也有了消费点。
+// 棘轮只能往下走；每次下降都要能指出是哪条权限、被哪个位置消费。
+const KNOWN_GHOST_BASELINE = 19;
 
 check('幽灵权限没有比已知基线更多（新增权限必须接上消费点）',
   unconsumed.length <= KNOWN_GHOST_BASELINE ? 0 : unconsumed.length - KNOWN_GHOST_BASELINE, 0);

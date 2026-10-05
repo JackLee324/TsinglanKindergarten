@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
@@ -19,6 +20,7 @@ import {
   ROLE_ASSIGN_PERMISSION,
   type EffectivePermissions,
 } from '@shared/rbac';
+import { withRbacWriteContext } from '@server/database/rbac-write-context';
 import {
   auditLogs,
   subjectPermissions,
@@ -82,6 +84,127 @@ export class TeachersService {
     private readonly authService: AuthService,
     private readonly authz: AuthorizationService,
   ) {}
+
+  // ===========================================================================
+  // §11 按账号授权 —— 追加授权 / 显式禁止
+  // ===========================================================================
+  //
+  // RBAC.md §5 把模型写死了：
+  //
+  //     有效权限 = ( 角色默认权限的并集 ∪ 追加授权 ) − 显式禁止      （禁止永远优先）
+  //
+  // 表（`account_permission_overrides`）、读（`getEffectivePermissions`）、
+  // 写（`setPermissionOverride` / `clearPermissionOverride`）三样早已存在，
+  // 但**没有任何 API 或界面调用过它们** —— 需求第七条
+  // 「角色默认权限 + 单独追加权限 + 单独撤销权限」在代码里定义完整却完全无法使用。
+  // 下面把这条链路接上，每次变更都写 `permission_change` 审计。
+
+  /** 读取某个账号的**生效权限**（含每一项的来源：角色默认 / 追加 / 被禁止）。 */
+  async getAccountEffectivePermissions(targetTeacherId: string): Promise<EffectivePermissions> {
+    const target = await this.requireTeacher(targetTeacherId);
+    void target;
+    return this.authz.getEffectivePermissions(targetTeacherId);
+  }
+
+  /** 追加授权（grant）或显式禁止（deny）某一个权限。 */
+  async overrideAccountPermission(
+    targetTeacherId: string,
+    permission: string,
+    effect: 'grant' | 'deny',
+    reason: string | undefined,
+    actor: { id: string; name: string; roles: readonly RoleCode[] },
+    operatorIp?: string,
+  ): Promise<EffectivePermissions> {
+    const target = await this.requireTeacher(targetTeacherId);
+
+    // 接口层的权限只回答"能不能做这类事"，不回答"能不能对**这个人**做"。
+    // 与角色变更同一套理由：两件事都要成立（assertCanManageAccount 在 service 里再挡一次）。
+    await this.authz.setPermissionOverride(
+      { id: actor.id, roles: actor.roles },
+      targetTeacherId,
+      permission,
+      effect,
+      reason,
+    );
+
+    await this.db.insert(auditLogs).values({
+      action: 'permission_change' as AuditAction,
+      teacherId: targetTeacherId,
+      teacherName: target.name,
+      ipAddress: operatorIp,
+      detail:
+        `${effect === 'grant' ? '追加授权' : '显式禁止'} ${permission}；` +
+        `目标角色=${(target.roles ?? []).join(',')}；操作人=${actor.name}` +
+        (reason ? `；理由=${reason}` : ''),
+      success: true,
+    });
+
+    return this.authz.getEffectivePermissions(targetTeacherId);
+  }
+
+  /** 清除覆盖项，让该权限回到角色默认。 */
+  async clearAccountPermissionOverride(
+    targetTeacherId: string,
+    permission: string,
+    actor: { id: string; name: string; roles: readonly RoleCode[] },
+    operatorIp?: string,
+  ): Promise<EffectivePermissions> {
+    const target = await this.requireTeacher(targetTeacherId);
+
+    await this.authz.clearPermissionOverride(
+      { id: actor.id, roles: actor.roles },
+      targetTeacherId,
+      permission,
+    );
+
+    await this.db.insert(auditLogs).values({
+      action: 'permission_change' as AuditAction,
+      teacherId: targetTeacherId,
+      teacherName: target.name,
+      ipAddress: operatorIp,
+      detail:
+        `清除覆盖项 ${permission}（回到角色默认）；` +
+        `目标角色=${(target.roles ?? []).join(',')}；操作人=${actor.name}`,
+      success: true,
+    });
+
+    return this.authz.getEffectivePermissions(targetTeacherId);
+  }
+
+  /** 取账号且不存在就抛 404（三处共用一份判定）。 */
+  private async requireTeacher(id: string): Promise<{ name: string; roles: RoleCode[] }> {
+    const rows = await this.db
+      .select({ name: teachers.name, roles: teachers.roles })
+      .from(teachers)
+      .where(eq(teachers.id, id))
+      .limit(1);
+    if (rows.length === 0) throw new NotFoundException('账号不存在');
+    return { name: rows[0].name, roles: (rows[0].roles ?? []) as RoleCode[] };
+  }
+
+  /**
+   * 角色分配权限（`role.assign`）。
+   *
+   * 判定读的是**生效权限**（含按账号的追加授权/显式禁止），不是角色列表 ——
+   * 与 AuthGuard 交给 PermissionGuard 的是同一份数据，所以两边不可能给出不同答案。
+   *
+   * `authz` 缺失时**拒绝**（fail closed）：那说明接口层漏传了上下文。
+   * 漏传没有任何症状，正是这条权限长期变成幽灵权限的原因。
+   *
+   * ⚠️ 这个方法的存在本身就是一次事故的产物：上一轮我把 `authz` 形参加进了
+   * createTeacher/updateTeacher、调用方也传了，但**方法体里从没读过它** ——
+   * 于是"强制 role.assign"根本没发生，而 lint 的 `args: 'after-used'`
+   * 对"后面还有别的参数被使用"的情况不会报警，静默通过。
+   * 现在 eslint 已改为 `args: 'all'`，这类"加了参数却没用"会被报出来。
+   */
+  private assertCanAssignRoles(authz: EffectivePermissions | undefined, what: string): void {
+    if (!authz) {
+      throw new ForbiddenException(`缺少生效权限上下文，拒绝${what}`);
+    }
+    if (!authz.permissions.includes(ROLE_ASSIGN_PERMISSION)) {
+      throw new ForbiddenException(`缺少权限：${ROLE_ASSIGN_PERMISSION}（无法${what}）`);
+    }
+  }
 
   async listTeachers(params: {
     page?: number;
@@ -173,6 +296,10 @@ export class TeachersService {
   ): Promise<TeacherDetail> {
     // §9：角色不是"随便传的字段"。DTO 只保证"是已知角色"，**谁能授予**由这里决定：
     // 不能授予不低于自身等级的角色，且 super_admin 只能由 super_admin 授予。
+    //
+    // §4：`role.assign` 必须真的拦住。`validateAssignableRoles` 回答的是
+    // "你能不能授予**这个**角色"（等级规则），它不回答"你有没有变更角色的**能力**"。
+    this.assertCanAssignRoles(authz, '创建账号时指定角色');
     const grantedRoles = this.authz.validateAssignableRoles(operatorRoles, dto.roles);
     try {
       const username = dto.username?.trim().toLowerCase() || AuthService.generateUsername(dto.name);
@@ -263,6 +390,9 @@ export class TeachersService {
     // 提权漏洞就会直接打开。所以这两件事必须一起做，而且授权判定要先落地。
     let nextRoles: RoleCode[] | undefined;
     if (dto.roles !== undefined) {
+      // §4：`assertCanManageAccount` 管的是"不能动同级/更高级"，不等价于
+      // "你有权分配角色"。两件事都要成立，所以 `role.assign` 也在这里挡一次。
+      this.assertCanAssignRoles(authz, '变更账号角色');
       await this.authz.assertCanManageAccount(operatorRoles, id);
       nextRoles = this.authz.validateAssignableRoles(operatorRoles, dto.roles);
       patch.roles = nextRoles;
@@ -274,11 +404,23 @@ export class TeachersService {
     }
 
     try {
-      const updated = await this.db
-        .update(teachers)
-        .set(patch)
-        .where(eq(teachers.id, id))
-        .returning();
+      // 必须在 `authenticated_` 下写。`teachers` 的 UPDATE 权限在 migration 0005 里
+      // 已从 `anon_` 收回（只重新授予了 last_login_at / failed_login_attempts /
+      // locked_until 三列），而每个 HTTP 请求默认以 `anon_` 执行 SQL ——
+      // 所以这条语句**一直是 500**（42501 permission denied for table teachers）。
+      // 它此前没被发现，是因为改角色的用例都会在授权判定那一步就被拒绝、走不到写入，
+      // 而"只改名字"这条路径没有任何套件覆盖。本轮由 §11 的行为测试带出来。
+      // 写入走原生 SQL（为了切角色），读回仍用 drizzle —— 这样方法其余部分拿到的
+      // 依旧是完整的、有类型的行，不必把列名一个个抄进 RETURNING 里。
+      const cols = Object.keys(patch);
+      await withRbacWriteContext(this.db, operatorId, async (tx) => {
+        const sets = cols.map((k, i) => `"${toSnake(k)}" = $${i + 1}`).join(', ');
+        await tx.unsafe(
+          `UPDATE teachers SET ${sets} WHERE id = $${cols.length + 1}`,
+          [...cols.map((k) => (patch as Record<string, unknown>)[k]), id],
+        );
+      });
+      const updated = await this.db.select().from(teachers).where(eq(teachers.id, id)).limit(1);
 
       if (updated.length === 0) {
         throw new NotFoundException('教师不存在');
@@ -315,11 +457,19 @@ export class TeachersService {
     operatorIp?: string,
   ): Promise<void> {
     try {
+      // 同上：这也是对 `teachers` 的 UPDATE，同样必须走 authenticated_。
+      // 这正是之前 `DELETE /api/teachers/:id` 稳定 500（42501）的根因 ——
+      // 当时我把它记成"与本次改动无关的既有缺陷"就搁下了，本轮才定位到。
+      // 同样必须走 authenticated_（见 updateTeacher 的注释）：
+      // 这就是 `DELETE /api/teachers/:id` 此前稳定 500 的根因。
+      await withRbacWriteContext(this.db, operatorId, async (tx) => {
+        await tx.unsafe("UPDATE teachers SET status = 'inactive' WHERE id = $1", [id]);
+      });
       const updated = await this.db
-        .update(teachers)
-        .set({ status: 'inactive' })
+        .select({ id: teachers.id, name: teachers.name, wecomUserId: teachers.wecomUserId })
+        .from(teachers)
         .where(eq(teachers.id, id))
-        .returning({ id: teachers.id, name: teachers.name, wecomUserId: teachers.wecomUserId });
+        .limit(1);
 
       if (updated.length === 0) {
         throw new NotFoundException('教师不存在');
@@ -415,4 +565,29 @@ export class TeachersService {
     }
     return map;
   }
+}
+
+
+/**
+ * camelCase → snake_case，仅用于把 patch 的键名映射成列名。
+ *
+ * 这次写入必须走 `$client`（为了能切到 `authenticated_` 角色），而它只接受原生 SQL，
+ * 所以要手拼列名 —— 映射逻辑集中在这一个函数里，避免散落。
+ * 只接受本模块真正会写的键；出现未登记的键会抛错，而不是拼出一个坏 SQL。
+ */
+const COLUMN_NAMES: Record<string, string> = {
+  name: 'name',
+  nameEn: 'name_en',
+  email: 'email',
+  roles: 'roles',
+  status: 'status',
+  mustChangePassword: 'must_change_password',
+};
+
+function toSnake(key: string): string {
+  const mapped = COLUMN_NAMES[key];
+  if (!mapped) {
+    throw new BadRequestException(`不支持的更新字段：${key}`);
+  }
+  return mapped;
 }
