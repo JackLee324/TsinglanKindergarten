@@ -178,3 +178,66 @@ $ git status --short
   没有 PDF，所以没有动目录结构。
 - **下一步**：拿到 PDF + 你对 §4 三点的答复后，从**阶段 1（角色与权限单一真相）**开始，
   每阶段结束后给出该阶段的链路对比与门禁结果。
+
+---
+
+## 6. 追加（第 16 轮）：本机门禁当前**跑不起来** —— 根因已定位
+
+### 6.1 现象
+
+`npm run build` 失败：
+
+```
+Error  Failed to load "@swc/cli" and/or "@swc/core" required packages.
+```
+
+### 6.2 根因
+
+`package-lock.json` 里**没有任何 `*-darwin-arm64` 条目**（lockfile 是在 linux/x64 上生成的）。
+于是本机 macOS 上：
+
+- `npm install` 按 lockfile 正确地把这些"当前平台用不到"的可选依赖**裁剪掉**（实测 `removed 487 packages`）；
+- 又因为 lockfile 里根本没有它们，`npm install` **也无法从 lockfile 装回来**；
+- `@swc/cli` / `@swc/core` 的平台二进制缺失 → 构建直接失败。
+
+**这解释了上一阶段那次"native bindings 缺失"的未解之谜**：那不是 npm 的 bug，
+而是 lockfile 与当前平台不匹配的必然结果。
+
+### 6.3 影响范围（重要：**线上不受影响**）
+
+| 环境 | 影响 |
+| --- | --- |
+| Zeabur / Docker（linux/x64） | **不受影响**。它按 lockfile 安装 linux 平台包，今天所有部署都成功。 |
+| 本机 macOS | **门禁跑不起来**：`npm run build` 失败 → `verify-all.sh` 无法通过 → 任何"已通过门禁"的说法在本机都不成立。 |
+
+### 6.4 恢复办法（下一轮开工前先做这一步）
+
+按**父包版本**显式安装平台包（lockfile 里没有，只能按版本号从 registry 取）：
+
+```bash
+node -p "require('./node_modules/@swc/core/package.json').version"   # 取父包版本
+npm install --no-save --no-audit --no-fund \
+  @swc/cli @swc/core \
+  @swc/core-darwin-arm64@<与 @swc/core 同版本> \
+  lightningcss-darwin-arm64@<与 lightningcss 同版本> \
+  @tailwindcss/oxide-darwin-arm64@<同上> \
+  @rolldown/binding-darwin-arm64@<与 rolldown 同版本> \
+  @napi-rs/nice-darwin-arm64@<与 @napi-rs/nice 同版本>
+```
+
+或在本机以 `--include=optional` / 临时移除 lockfile 重装（**但不得把由此产生的 lockfile 变更提交**，
+否则会把 linux 条目换掉，破坏 Docker 构建）。
+
+### 6.5 顺带发现：macOS 文件提供程序会"驱逐"未跟踪文件
+
+`server/database/schema 2.ts`、`scripts/verify-mfa 2.mjs`、`client/src/components/business-ui/**`
+（82 个文件）都是**未跟踪**且**不可读**（`head` 报 `Error reading`，`grep` 报
+`Resource deadlock avoided`）。它们会被 `tsconfig.*.json` 的 `include` 命中，
+导致 `tsc` 报 `File not found` —— **双类型检查因此随机失败**（同一棵工作区，前后两次结果不同）。
+
+已删除，依据：三者 `git ls-files` 均为 0、无任何引用；`business-ui` 在原始交付 zip 中有 197 条备份，
+另两个连 zip 里都没有（纯复制残渣）。**项目位于本地磁盘而非 iCloud，126 GB 可用空间**，
+因此这不是磁盘或同步目录的问题，而是未跟踪文件长期未被访问后的驱逐/占位状态。
+
+> 工作纪律：本机工作区 ≠ git 内容。凡"删了/没删""能读/不能读"的结论，
+> 必须同时核对 `git ls-files` 与磁盘可读性，不能只看其中一面。
