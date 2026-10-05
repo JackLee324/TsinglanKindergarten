@@ -95,6 +95,7 @@ export class TeachersController {
       dto,
       teacher.id,
       teacher.name,
+      teacher.roles,
       ip,
     );
   }
@@ -118,6 +119,7 @@ export class TeachersController {
       dto,
       teacher.id,
       teacher.name,
+      teacher.roles,
       ip,
     );
   }

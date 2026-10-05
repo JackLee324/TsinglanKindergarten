@@ -22,6 +22,8 @@ import {
 } from '@server/database/schema';
 import type { CreateTeacherDto, UpdateTeacherDto } from './teachers.dto';
 import { AuthService } from '../auth/auth.service';
+// 角色变更的**授权**判定只有这一处：AuthzModule 是 @Global()，无需改模块接线。
+import { AuthorizationService } from '../authz/authorization.service';
 
 interface TeacherListResult {
   items: Teacher[];
@@ -74,6 +76,7 @@ export class TeachersService {
   constructor(
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
     private readonly authService: AuthService,
+    private readonly authz: AuthorizationService,
   ) {}
 
   async listTeachers(params: {
@@ -160,8 +163,12 @@ export class TeachersService {
     dto: CreateTeacherDto,
     operatorId: string,
     operatorName: string,
+    operatorRoles: RoleCode[],
     operatorIp?: string,
   ): Promise<TeacherDetail> {
+    // §9：角色不是"随便传的字段"。DTO 只保证"是已知角色"，**谁能授予**由这里决定：
+    // 不能授予不低于自身等级的角色，且 super_admin 只能由 super_admin 授予。
+    const grantedRoles = this.authz.validateAssignableRoles(operatorRoles, dto.roles);
     try {
       const username = dto.username?.trim().toLowerCase() || AuthService.generateUsername(dto.name);
       const temporaryPassword = this.authService.generateTemporaryPassword();
@@ -176,7 +183,7 @@ export class TeachersService {
             name: dto.name,
             nameEn: dto.nameEn,
             email: dto.email,
-            roles: dto.roles,
+            roles: grantedRoles,
              status: dto.status ?? 'active',
              passwordHash,
           })
@@ -232,13 +239,23 @@ export class TeachersService {
     dto: UpdateTeacherDto,
     operatorId: string,
     operatorName: string,
+    operatorRoles: RoleCode[],
     operatorIp?: string,
   ): Promise<Teacher> {
     const patch: Partial<typeof teachers.$inferInsert> = {};
     if (dto.name !== undefined) patch.name = dto.name;
     if (dto.nameEn !== undefined) patch.nameEn = dto.nameEn;
     if (dto.email !== undefined) patch.email = dto.email;
-    if (dto.roles !== undefined) patch.roles = dto.roles;
+    // §9：改角色的路径以前**完全没有授权判定** —— 唯一挡住"园长把自己/别人提成
+    // super_admin"的，是 teachers.dto.ts 里那份漏掉 super_admin 的角色白名单（返回 400）。
+    // 那是一个偶然的保护：一旦 DTO 的角色表与 shared/rbac.ts 对齐（§10 的要求），
+    // 提权漏洞就会直接打开。所以这两件事必须一起做，而且授权判定要先落地。
+    let nextRoles: RoleCode[] | undefined;
+    if (dto.roles !== undefined) {
+      await this.authz.assertCanManageAccount(operatorRoles, id);
+      nextRoles = this.authz.validateAssignableRoles(operatorRoles, dto.roles);
+      patch.roles = nextRoles;
+    }
     if (dto.status !== undefined) patch.status = dto.status;
 
     if (Object.keys(patch).length === 0) {

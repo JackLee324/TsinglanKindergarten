@@ -17,17 +17,16 @@ import type {
   SubjectPermissionInput,
   UpdateTeacherRequest,
 } from '@shared/api.interface';
+import { ROLE_CODES as SHARED_ROLE_CODES } from '@shared/rbac';
 
-const ROLE_CODES: RoleCode[] = [
-  'principal',
-  'curriculum_director',
-  'prek_head',
-  'k_head',
-  'pe_specialist',
-  'prek_assistant',
-  'k_assistant',
-  'visitor',
-];
+// §10：角色表只有一份，在 shared/rbac.ts。这里以前自己抄了一份 8 个角色的列表，
+// **漏掉 super_admin** —— 于是 DTO 直接拒绝了 super_admin，API 永远无法创建/授予它。
+//
+// 更糟的是它顺手"挡住"了提权：`principal 把自己人提成 super_admin` 返回的是这里的 400，
+// 而不是 RBAC 的 403。也就是说那条安全断言一直在**因为错误的原因通过**。
+// 角色**形状**（是不是已知角色）归 DTO，角色**授予权限**归 AuthorizationService ——
+// 两侧各司其职，见 teachers.service.ts 的 createTeacher/updateTeacher。
+const ROLE_CODES: RoleCode[] = SHARED_ROLE_CODES;
 
 const PROGRAM_CODES: ProgramCode[] = ['prek', 'k'];
 

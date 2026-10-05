@@ -102,8 +102,14 @@ try {
   // does not depend on WHICH account is targeted, and using a private target keeps
   // the suite from writing to a row another suite is reading.
   const r = await req('PATCH', '/api/teachers/' + low.id, { roles: ['super_admin'] });
-  check('principal CANNOT promote to super_admin', r.status, [400, 403, 500]);
+  // 这里以前写的是 [400, 403, 500] —— 一个"只要能失败就算过"的区间。
+  // 实测那 400 来自 teachers.dto.ts 里一份漏掉 super_admin 的本地角色表（@IsIn 拒绝），
+  // 也就是说这条断言当时**根本没碰到 RBAC**：把 DTO 的角色表修对（§10）之后，
+  // 唯一还能挡住提权的就只剩 AuthorizationService。所以现在必须精确要求 403。
+  check('principal CANNOT promote to super_admin (RBAC 403, 不是 DTO 400)', r.status, 403);
   console.log('       response: ' + r.status + ' ' + JSON.stringify(r.data).slice(0, 160));
+  const eq = await req('PATCH', '/api/teachers/' + low.id, { roles: ['principal'] });
+  check('principal CANNOT grant an EQUAL-rank role (principal)', eq.status, 403);
   const me = await req('GET', '/api/auth/me');
   check('principal still principal (no self-escalation)', JSON.stringify(me.data?.roles), '["principal"]');
 
