@@ -39,7 +39,28 @@ function candidates(base) {
   return [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')];
 }
 
+/**
+ * 相对、无扩展名的 import（如 `./object-storage`）。
+ *
+ * TypeScript 与打包器会自动补 `.ts`，Node 不会。测试里用本 loader 直接跑源码时，
+ * 任何跨文件的源码模块都会因此解析失败 —— 之前没暴露，是因为被直接 import 的
+ * 源码模块恰好都只依赖 `@shared/*` 这类别名。加上这一支，源码按原样可被 Node 解析。
+ */
+function resolveRelative(specifier, parentURL) {
+  if (!parentURL) return null;
+  if (!specifier.startsWith('./') && !specifier.startsWith('../')) return null;
+  if (/\.[cm]?[jt]sx?$/.test(specifier)) return null;
+  const base = fileURLToPath(new URL(specifier, parentURL));
+  for (const candidate of candidates(base)) {
+    if (existsSync(candidate)) return { url: pathToFileURL(candidate).href, shortCircuit: true };
+  }
+  return null;
+}
+
 export function resolve(specifier, context, nextResolve) {
+  const relative = resolveRelative(specifier, context.parentURL);
+  if (relative) return relative;
+
   for (const [prefix, dir] of ALIASES) {
     if (!specifier.startsWith(prefix)) continue;
     const rest = specifier.slice(prefix.length);

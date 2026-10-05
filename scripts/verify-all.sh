@@ -156,6 +156,9 @@ run "resource-versions"   node scripts/verify-resource-versions.mjs
 # §11 按账号授权（追加/禁止/清除覆盖）+ `role.assign` 的**行为**验证 ——
 # 构造"有 account.update、无 role.assign"的账号，真的去改角色，看它是否被挡住。
 run "account-permissions" node scripts/verify-account-permissions.mjs
+# S3 兼容对象存储：签名结构 + （S3RVER_MODULE 存在时）**真实字节往返**。
+# 其中两条在缺少"严格校验 V4 的端点"时**大声跳过**，不算通过 —— 见脚本头注释。
+run "storage-s3"          node scripts/verify-storage-s3.mjs
 
 # 真实浏览器 E2E（§32）。它不是"再跑一次接口" —— 它验证的是**浏览器里真的点得动、
 # 页面真的渲染出了数据库里的东西**（§16 那条卡了三轮的 SKIP 已用可判定断言替代）。
