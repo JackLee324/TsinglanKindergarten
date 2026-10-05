@@ -61,7 +61,7 @@ import {
   normalizeTheme,
   themeDbValue,
 } from '@shared/curriculum';
-import { isPlatformAdmin } from '@shared/rbac';
+import { isPlatformAdmin, roleScopeCovers, roleSubjectScope } from '@shared/rbac';
 import {
   describeCoverAssetsResolution,
   describeMissingCoverAsset,
@@ -404,15 +404,19 @@ export class ResourcesService {
       return sql`true`;
     }
 
-    const hasPrekHead = roles.includes('prek_head');
-    const hasKHead = roles.includes('k_head');
-    const hasPeSpecialist = roles.includes('pe_specialist');
+    // §8：不再由本文件自己用角色字面量决定数据范围。规则只有一份（shared/rbac.ts），
+    // 这里只把规则翻译成 SQL 条件。三个布尔与下面 permClauses 的结构保持原样 ——
+    // 这是一次**机械等价替换**，不改 SQL 形状。
+    const scope = roleSubjectScope(roles as RoleCode[]);
+    const hasPrekHead = scope.wholePrograms.includes('prek');
+    const hasKHead = scope.wholePrograms.includes('k');
+    const hasPeSpecialist = scope.explicitPairs.length > 0;
 
     // 如果指定了 program + subject，先检查角色级权限
     if (program && subject) {
       if (hasPrekHead && program === 'prek') return sql`true`;
       if (hasKHead && program === 'k') return sql`true`;
-      if (hasPeSpecialist && subject === 'physical_education') return sql`true`;
+      if (roleScopeCovers(scope, program, subject)) return sql`true`;
       // 否则查 subject_permissions 表
       const hasPerm = await this.hasPermissionInDb(
         teacherId,
@@ -585,18 +589,11 @@ export class ResourcesService {
         return true;
       }
 
-      // prek_head：prek 所有科目有上传权限（view 自然也有）
-      if (roles.includes('prek_head') && program === 'prek') {
-        return true;
-      }
-
-      // k_head：k 所有科目有上传权限
-      if (roles.includes('k_head') && program === 'k') {
-        return true;
-      }
-
-      // pe_specialist：体能类科目有上传权限
-      if (roles.includes('pe_specialist') && subject === 'physical_education') {
+      // prek_head / k_head / pe_specialist：由 shared/rbac.ts 的规则统一判定。
+      // 旧写法是三条角色字面量判断（与本文件另一处、以及 dashboard/curriculum 各一份）。
+      // roleScopeCovers 对 prek_head 等价于 program==='prek'，对 pe_specialist 等价于
+      // subject==='physical_education'（ProgramCode 只有 prek|k，两者逐一对应）。
+      if (roleScopeCovers(roleSubjectScope(roles as RoleCode[]), program as ProgramCode, subject)) {
         return true;
       }
 

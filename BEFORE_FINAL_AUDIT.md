@@ -258,6 +258,7 @@ npm install --no-save --no-audit --no-fund \
 | §21b | 修正一句不实的覆盖声明（我曾声称 HTTP 已覆盖，实际没有） | `git show HEAD:...` 回读确认措辞 | `20724f7` |
 | §8 (1/3) | `roleSubjectScope()` 单一来源；`curriculum.service.ts` 5→0 处角色字面量 | 三个角色的 `/api/curriculum/structure` 实测与旧逻辑逐字一致 | `7426375` |
 | §8 (2/3) | `dashboard.service.ts` 3→0 处；`isAdmin` 改为由 `scope.all` 派生 | `authorizedSubjects` 实测 prek_head=2/k_head=1/pe_specialist=2/prek_assistant=0（期望值先由 SQL 算出） | `2333e32` |
+| §8 (3/3) | `resources.service.ts` 6→0 处（机械等价替换，SQL 结构未动）；`checkSubjectPermission` 三处字面量合并为一次 `roleScopeCovers` | 权限矩阵 7 项实测全部符合预期（见下） | 本轮 |
 
 门禁基线（每轮实跑）：`npm test 275/275`、`verify-all` **283/283**、双 typecheck PASS、build PASS、api-contracts matched。
 
@@ -265,7 +266,6 @@ npm install --no-save --no-audit --no-fund \
 
 | § | 内容 | 卡在哪 |
 | --- | --- | --- |
-| §8 (3/3) | `resources.service.ts` 6 处角色字面量（407-409、589、594、599） | 最复杂：判定喂 SQL 条件，且夹着"未指定科目时收集 (program,subject,sub_subject) 组合"的逻辑，需逐条对照重写 |
 | §1 §2 §20 §24 §25 §26 | PDF 目录树、`directories` 表、Directory API/Renderer、目录权限、自建文件夹、教师成长 | **等业主决策**：资料夹 4 种 vs 6 种（见 `docs/DIRECTORY_SPEC.md` §2.1） |
 | §4 §23 | 真实文件上传/下载、S3 兼容存储 | **等测试 bucket**，或业主同意用本地 MinIO 做等价验证（会明确标注非生产 bucket） |
 | §5 §6 §7 §30 | 资源状态机（含 recall）、审核权限拆分 | 不依赖上述决策，可先做 |
@@ -283,3 +283,15 @@ npm install --no-save --no-audit --no-fund \
 3. 门禁服务需手动起：`SERVER_PORT=3200 MFA_ENFORCE_SUPER_ADMIN=true DOWNLOAD_TOKEN_TTL_SECONDS=10 LOGIN_IP_RATE_LIMIT_MAX=100000 npm run start`。
 4. 改了服务端代码后**先 `npm run build` 再重启服务**，否则套件测的是旧 `dist/`（我曾因此误判过一次）。
 5. 未跟踪文件可能不可读（文件提供程序驱逐），会让 `tsc` 随机报 `File not found`；删前核对 `git ls-files` 与原始 zip。
+
+### §8 3/3 的等价性证据（/api/resources 权限矩阵，7 项实测）
+
+    pe_specialist  → k/physical_education     200（角色级授权）
+    pe_specialist  → prek/physical_education  200
+    pe_specialist  → k/chinese                403（无授权）
+    prek_head      → prek/virtue              200（整段可见）
+    prek_head      → prek/montessori          200
+    prek_head      → k/english                403（非本班型）
+    prek_assistant → prek/virtue              403（须查 subject_permissions）
+
+七个结果与按规则推导的期望**逐条一致**。§8 三个消费者全部收口：全仓业务层角色字面量 **0 处**。
