@@ -140,7 +140,7 @@ const ReviewPage: React.FC = () => {
   const handleRevoke = async (r: Resource) => {
     // Revoke published resource back to draft
     try {
-      await reviewResource(r.id, 'reject', L('审核撤回', 'Revoked by reviewer'));
+      await reviewResource(r.id, 'recall', L('审核撤回', 'Revoked by reviewer'));
       toast.success(L('已撤回', 'Revoked successfully'));
       void fetchData();
     } catch (error) {

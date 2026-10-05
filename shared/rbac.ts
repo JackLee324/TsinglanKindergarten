@@ -439,6 +439,7 @@ export const PERMISSIONS: PermissionDefinition[] = [
   { code: 'review.view', group: 'review', name: '查看待审核', nameEn: 'View Review Queue', description: '查看待审核队列与审核历史', dataScoped: true, highRisk: false },
   { code: 'review.approve', group: 'review', name: '审核通过', nameEn: 'Approve Resource', description: '审核通过并发布', dataScoped: true, highRisk: true },
   { code: 'review.reject', group: 'review', name: '审核退回', nameEn: 'Reject Resource', description: '退回资源并填写意见', dataScoped: true, highRisk: true },
+  { code: 'review.revoke', group: 'review', name: '撤回已发布', nameEn: 'Recall Published Resource', description: '把已发布的资源撤回为草稿（published → draft）', dataScoped: true, highRisk: true },
 
   // ---- storage ----------------------------------------------------------
   { code: 'storage.upload', group: 'storage', name: '上传文件', nameEn: 'Upload File', description: '上传文件到私有存储', dataScoped: true, highRisk: false },
@@ -530,6 +531,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, PermissionCode[]> = {
     'review.view',
     'review.approve',
     'review.reject',
+    'review.revoke',
     'storage.upload',
     'storage.download',
     'storage.delete',
@@ -552,6 +554,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, PermissionCode[]> = {
     'review.view',
     'review.approve',
     'review.reject',
+    'review.revoke',
     'storage.upload',
     'storage.download',
   ],

@@ -63,6 +63,7 @@ export type AuditAction =
   | 'resource_edit'
   | 'resource_submit_review'
   | 'resource_approve'
+  | 'resource_recall'
   | 'resource_reject'
   | 'permission_denied'
   | 'permission_change'
@@ -255,7 +256,7 @@ export interface UpdateResourceRequest {
 }
 
 export interface ReviewResourceRequest {
-  action: 'approve' | 'reject';
+  action: 'approve' | 'reject' | 'recall';
   comment?: string;
 }
 

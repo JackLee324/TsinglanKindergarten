@@ -61,7 +61,9 @@ export class ReviewController {
     // require() 不带 target：review.* 是 dataScoped，但作用域由下游 service 结合
     // subject_permissions 施加（见 AuthorizationService.can 的注释），这里只判定"是否持有该权限"。
     const authz = await this.authorization.getEffectivePermissions(teacher.id);
-    this.authorization.require(authz, dto.action === 'approve' ? 'review.approve' : 'review.reject');
+    // 权限也从状态机那张表取（服务端判定状态、controller 判定权限，读同一份定义）。
+    // 三个动作分别要求 review.approve / review.reject / review.revoke。
+    this.authorization.require(authz, ReviewService.TRANSITIONS[dto.action].permission);
 
     return this.reviewService.reviewResource(
       id,

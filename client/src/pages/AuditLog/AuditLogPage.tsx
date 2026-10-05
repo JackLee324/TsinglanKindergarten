@@ -68,6 +68,7 @@ const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
   resource_submit_review: 'bg-orange-100 text-orange-700 border-orange-200',
   resource_approve: 'bg-green-100 text-green-700 border-green-200',
   resource_reject: 'bg-red-100 text-red-700 border-red-200',
+  resource_recall: 'bg-amber-100 text-amber-700 border-amber-200',
   permission_denied: 'bg-red-100 text-red-700 border-red-200',
   permission_change: 'bg-purple-100 text-purple-700 border-purple-200',
   teacher_create: 'bg-blue-100 text-blue-700 border-blue-200',

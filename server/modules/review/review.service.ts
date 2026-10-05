@@ -65,9 +65,51 @@ export class ReviewService {
     }
   }
 
+  /**
+   * 资源审核状态机 —— **唯一一份**。
+   *
+   * 以前两个动作被硬编码（`action === 'approve' ? 'published' : 'rejected'`），且入口只接受
+   * `pending_review`：
+   *
+   *   if (resource.status !== 'pending_review') throw new BadRequestException(...)
+   *
+   * 于是**已发布的资源无法撤回** —— 前端那个"撤回"无论如何都会失败。现在把
+   * "从哪个状态 → 到哪个状态 → 需要哪个权限 → 写哪条审计" 收进一张表：
+   * 服务端做状态判定、controller 做权限判定，两边读同一张表，不会再各写一份。
+   */
+  static readonly TRANSITIONS = {
+    approve: {
+      label: '审核通过',
+      from: ['pending_review'],
+      to: 'published',
+      permission: 'review.approve',
+      audit: 'resource_approve',
+      record: 'approve',
+    },
+    reject: {
+      label: '审核退回',
+      from: ['pending_review'],
+      to: 'rejected',
+      permission: 'review.reject',
+      audit: 'resource_reject',
+      record: 'reject',
+    },
+    // §6：真正实现"撤回"。published → draft（回到草稿，可再次编辑后重新提交）。
+    // 刻意**不**复用 reject：退回是"审核没通过"，撤回是"发布后又收回"，语义与审计都不同，
+    // 权限也不同（review.revoke 与 review.reject 是分开授予的能力）。
+    recall: {
+      label: '撤回已发布',
+      from: ['published'],
+      to: 'draft',
+      permission: 'review.revoke',
+      audit: 'resource_recall',
+      record: 'recall',
+    },
+  } as const;
+
   async reviewResource(
     resourceId: string,
-    action: 'approve' | 'reject',
+    action: keyof typeof ReviewService.TRANSITIONS,
     comment: string | undefined,
     reviewerId: string,
     reviewerName: string,
@@ -85,11 +127,15 @@ export class ReviewService {
         }
 
         const resource = existing[0];
-        if (resource.status !== 'pending_review') {
-          throw new BadRequestException('只有待审核状态的资源可以执行审核操作');
+        const transition = ReviewService.TRANSITIONS[action];
+        if (!(transition.from as readonly string[]).includes(resource.status)) {
+          throw new BadRequestException(
+            `当前状态「${resource.status}」不能执行「${transition.label}」：` +
+              `该操作要求资源处于 ${transition.from.join(' 或 ')}`,
+          );
         }
 
-        const newStatus = action === 'approve' ? 'published' : 'rejected';
+        const newStatus = transition.to;
         const now = new Date();
 
         const updated = await tx
@@ -119,7 +165,7 @@ export class ReviewService {
         });
 
         // 记录审计日志
-        const auditAction = action === 'approve' ? 'resource_approve' : 'resource_reject';
+        const auditAction = transition.audit;
         await this.auditLogger.log(auditAction, {
           teacherId: reviewerId,
           teacherName: reviewerName,

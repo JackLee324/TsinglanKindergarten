@@ -17,7 +17,7 @@ export async function getPendingReviews(params: ResourceListParams = {}): Promis
 
 export async function reviewResource(
   id: string,
-  action: 'approve' | 'reject',
+  action: 'approve' | 'reject' | 'recall',
   comment?: string,
 ): Promise<void> {
   try {

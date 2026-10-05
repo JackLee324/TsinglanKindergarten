@@ -3,8 +3,8 @@ import type { ReviewResourceRequest } from '@shared/api.interface';
 
 export class ReviewResourceDto implements ReviewResourceRequest {
   @IsString()
-  @IsIn(['approve', 'reject'])
-  action!: 'approve' | 'reject';
+  @IsIn(['approve', 'reject', 'recall'])
+  action!: 'approve' | 'reject' | 'recall';
 
   @IsOptional()
   @IsString()
