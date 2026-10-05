@@ -4,7 +4,7 @@ import type { ProgramStructure, FolderType, RoleCode, SubjectNode } from '@share
 // 与 resources/dashboard 同一个判定：shared/rbac.ts 的 isPlatformAdmin。
 // 这里原本自带 ADMIN_ROLES，漏掉 super_admin —— super_admin 会看到
 // 「无权限」的各班型结构。第六个同源缺陷点。
-import { isPlatformAdmin, roleSubjectScope } from '@shared/rbac';
+import { isPlatformAdmin, programsVisibleForStructure, roleSubjectScope } from '@shared/rbac';
 
 export interface FolderDefinitionResponse {
   key: FolderType;
@@ -62,10 +62,11 @@ export class CurriculumService {
     const scope = roleSubjectScope(roles);
 
     // 配班（assistant）看得到本班型的**结构**，但"能取到哪些数据"仍由
-    // subject_permissions 决定 —— 结构与数据范围是两件事，因此单独处理，
-    // 不塞进 roleSubjectScope（那会让配班被误判成有科目数据权限）。
-    const seesPrek = scope.wholePrograms.includes('prek') || roles.includes('prek_assistant');
-    const seesK = scope.wholePrograms.includes('k') || roles.includes('k_assistant');
+    // subject_permissions 决定 —— 结构与数据范围是两件事。两条规则都在
+    // shared/rbac.ts：本文件不再自己写 roles.includes('prek_assistant')。
+    const visible = programsVisibleForStructure(roles);
+    const seesPrek = visible.includes('prek');
+    const seesK = visible.includes('k');
 
     const result: ProgramStructure[] = [];
     const prekProgram = source.find((p) => p.program === 'prek');

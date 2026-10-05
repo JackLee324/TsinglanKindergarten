@@ -294,4 +294,7 @@ npm install --no-save --no-audit --no-fund \
     prek_head      → k/english                403（非本班型）
     prek_assistant → prek/virtue              403（须查 subject_permissions）
 
-七个结果与按规则推导的期望**逐条一致**。§8 三个消费者全部收口：全仓业务层角色字面量 **0 处**。
+七个结果与按规则推导的期望**逐条一致**。§8 三个消费者全部收口。**修正**：`0e3a529` 的提交信息曾写"全仓业务层角色字面量 0 处"——当时是**错的**，
+`curriculum.service.ts` 还剩 2 处 `roles.includes('prek_assistant'/'k_assistant')`（我的核对命令是在提交**之后**才跑的）。
+已在后续提交把配班的"结构可见性"规则也收进 `shared/rbac.ts` 的 `programsVisibleForStructure()`，
+并用一次精确 grep 复核：业务代码中角色字面量确为 **0 处**。教训：**先跑核对命令、再写结论**。

@@ -879,3 +879,24 @@ export function roleScopeCovers(
   if (scope.wholePrograms.includes(program)) return true;
   return scope.explicitPairs.some((p) => p.program === program && p.subject === subject);
 }
+
+/**
+ * Programs whose STRUCTURE a role may see (i.e. which班型 cards/trees to render).
+ *
+ * NOT the same thing as `roleSubjectScope`, and deliberately kept separate:
+ * an assistant (配班) may see the Pre-K tree while having NO subject data rights —
+ * those come from `subject_permissions`. Folding the assistant rule INTO
+ * roleSubjectScope would make assistants look like they hold subject data access,
+ * which would be a privilege expansion, not a refactor.
+ *
+ * Both facts are single-sourced here so no service has to write
+ * `roles.includes('prek_assistant')` itself.
+ */
+export function programsVisibleForStructure(roles: readonly RoleCode[]): ProgramCode[] {
+  const scope = roleSubjectScope(roles);
+  if (scope.all) return ['prek', 'k'];
+  const programs = new Set<ProgramCode>(scope.wholePrograms);
+  if (roles.includes('prek_assistant')) programs.add('prek');
+  if (roles.includes('k_assistant')) programs.add('k');
+  return [...programs];
+}
