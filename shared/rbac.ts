@@ -796,3 +796,86 @@ export function assertRbacCatalogIntegrity(): void {
     }
   }
 }
+
+/**
+ * The "role-level subject scope" rule — what a ROLE grants without any
+ * `subject_permissions` row.
+ *
+ * WHY THIS IS HERE
+ * ----------------
+ * The same rule was hand-written in THREE services:
+ *
+ *   server/modules/resources/resources.service.ts:407-409, 589, 594, 599
+ *   server/modules/dashboard/dashboard.service.ts:150-152
+ *   server/modules/curriculum/curriculum.service.ts:57-61
+ *
+ * Three copies of one authorization rule is exactly the pattern that produced
+ * the `ADMIN_ROLES` defect three separate times in this repository (each copy
+ * omitted `super_admin`, and each omission was a live outage). §8 of the
+ * consolidation brief asks for one source; this is it.
+ *
+ * WHAT IT IS NOT
+ * --------------
+ * It is NOT the permission authority. Whether a caller may invoke an endpoint at
+ * all is decided by `@@RequirePermission` + AuthorizationService. This describes
+ * only the DATA SCOPE a role implies, which is what the three copies encoded.
+ *
+ * THE RULE (identical in all three services, verified by reading them)
+ *   principal / curriculum_director / super_admin → everything (see isPlatformAdmin)
+ *   prek_head      → every subject in `prek`
+ *   k_head         → every subject in `k`
+ *   pe_specialist  → `physical_education`, in BOTH programs
+ *   prek_assistant → nothing by role; must come from `subject_permissions`
+ *   k_assistant    → nothing by role; must come from `subject_permissions`
+ *   visitor        → nothing
+ */
+export interface RoleSubjectScope {
+  /** Platform administrator: sees every program and subject. */
+  all: boolean;
+  /** Programs granted IN FULL by role (prek_head → prek, k_head → k). */
+  wholePrograms: ProgramCode[];
+  /** Individual (program, subject) grants that are not covered by `wholePrograms`. */
+  explicitPairs: Array<{ program: ProgramCode; subject: string }>;
+  /**
+   * True when the role grants NO subject scope by itself, so the caller MUST
+   * consult `subject_permissions`. Kept explicit (rather than inferred from empty
+   * arrays) because it is the branch that decides whether a 403 is correct.
+   */
+  requiresSubjectPermissions: boolean;
+}
+
+export function roleSubjectScope(roles: readonly RoleCode[]): RoleSubjectScope {
+  if (isPlatformAdmin(roles)) {
+    return { all: true, wholePrograms: [], explicitPairs: [], requiresSubjectPermissions: false };
+  }
+
+  const wholePrograms: ProgramCode[] = [];
+  if (roles.includes('prek_head')) wholePrograms.push('prek');
+  if (roles.includes('k_head')) wholePrograms.push('k');
+
+  const explicitPairs: Array<{ program: ProgramCode; subject: string }> = [];
+  if (roles.includes('pe_specialist')) {
+    explicitPairs.push(
+      { program: 'prek', subject: 'physical_education' },
+      { program: 'k', subject: 'physical_education' },
+    );
+  }
+
+  return {
+    all: false,
+    wholePrograms,
+    explicitPairs,
+    requiresSubjectPermissions: wholePrograms.length === 0 && explicitPairs.length === 0,
+  };
+}
+
+/** Does this role scope cover the given (program, subject)? */
+export function roleScopeCovers(
+  scope: RoleSubjectScope,
+  program: ProgramCode,
+  subject: string,
+): boolean {
+  if (scope.all) return true;
+  if (scope.wholePrograms.includes(program)) return true;
+  return scope.explicitPairs.some((p) => p.program === program && p.subject === subject);
+}

@@ -4,7 +4,7 @@ import type { ProgramStructure, FolderType, RoleCode, SubjectNode } from '@share
 // 与 resources/dashboard 同一个判定：shared/rbac.ts 的 isPlatformAdmin。
 // 这里原本自带 ADMIN_ROLES，漏掉 super_admin —— super_admin 会看到
 // 「无权限」的各班型结构。第六个同源缺陷点。
-import { isPlatformAdmin } from '@shared/rbac';
+import { isPlatformAdmin, roleSubjectScope } from '@shared/rbac';
 
 export interface FolderDefinitionResponse {
   key: FolderType;
@@ -54,68 +54,37 @@ export class CurriculumService {
     if (roles.length === 0 || isPlatformAdmin(roles)) {
       return source;
     }
-    const hasPrekHead = roles.includes('prek_head');
-    const hasKHead = roles.includes('k_head');
-    const hasPeSpecialist = roles.includes('pe_specialist');
-    const hasPrekAssistant = roles.includes('prek_assistant');
-    const hasKAssistant = roles.includes('k_assistant');
+
+    // §8：「角色 → 数据范围」这条规则只有一份实现，在 shared/rbac.ts。
+    // 这里以前自己写死 prek_head / k_head / pe_specialist 三个字面量判断，
+    // 与 resources.service.ts、dashboard.service.ts 各一份 —— 三份同源同规则。
+    // 而"同一条规则抄 N 遍"正是 ADMIN_ROLES 缺陷连出三次的成因。
+    const scope = roleSubjectScope(roles);
+
+    // 配班（assistant）看得到本班型的**结构**，但"能取到哪些数据"仍由
+    // subject_permissions 决定 —— 结构与数据范围是两件事，因此单独处理，
+    // 不塞进 roleSubjectScope（那会让配班被误判成有科目数据权限）。
+    const seesPrek = scope.wholePrograms.includes('prek') || roles.includes('prek_assistant');
+    const seesK = scope.wholePrograms.includes('k') || roles.includes('k_assistant');
 
     const result: ProgramStructure[] = [];
-
     const prekProgram = source.find((p) => p.program === 'prek');
     const kProgram = source.find((p) => p.program === 'k');
 
-    if (hasPrekHead || hasPrekAssistant) {
-      if (prekProgram) result.push(prekProgram);
-    }
+    if (seesPrek && prekProgram) result.push(prekProgram);
+    if (seesK && kProgram) result.push(kProgram);
 
-    if (hasKHead || hasKAssistant) {
-      if (kProgram) result.push(kProgram);
-    }
-
-    if (hasPeSpecialist) {
-      if (prekProgram && !result.find((p) => p.program === 'prek')) {
-        result.push({
-          ...prekProgram,
-          subjects: prekProgram.subjects.filter(
-            (s) => s.key === 'physical_education',
-          ),
-        });
-      } else if (prekProgram) {
-        const existing = result.find((p) => p.program === 'prek');
-        if (existing) {
-          const hasPe = existing.subjects.some(
-            (s) => s.key === 'physical_education',
-          );
-          if (!hasPe) {
-            const peSubject = prekProgram.subjects.find(
-              (s) => s.key === 'physical_education',
-            );
-            if (peSubject) existing.subjects.push(peSubject);
-          }
-        }
-      }
-      if (kProgram && !result.find((p) => p.program === 'k')) {
-        result.push({
-          ...kProgram,
-          subjects: kProgram.subjects.filter(
-            (s) => s.key === 'physical_education',
-          ),
-        });
-      } else if (kProgram) {
-        const existing = result.find((p) => p.program === 'k');
-        if (existing) {
-          const hasPe = existing.subjects.some(
-            (s) => s.key === 'physical_education',
-          );
-          if (!hasPe) {
-            const peSubject = kProgram.subjects.find(
-              (s) => s.key === 'physical_education',
-            );
-            if (peSubject) existing.subjects.push(peSubject);
-          }
-        }
-      }
+    // pe_specialist 这类"只授单个科目"的授权：若该班型已整段可见就跳过
+    // （整段可见时该科目本就在里面；旧代码在这条分支上做的正是空操作）。
+    for (const pair of scope.explicitPairs) {
+      if (result.some((p) => p.program === pair.program)) continue;
+      const program = pair.program === 'prek' ? prekProgram : kProgram;
+      if (!program) continue;
+      if (!program.subjects.some((subject) => subject.key === pair.subject)) continue;
+      result.push({
+        ...program,
+        subjects: program.subjects.filter((subject) => subject.key === pair.subject),
+      });
     }
 
     return result;
