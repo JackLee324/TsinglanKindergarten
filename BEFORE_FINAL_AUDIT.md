@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**。
+门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` 由 275 增至 **276**（新增幽灵权限审计）。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -426,6 +426,29 @@ change-password / logout / me / mfa 登记 / health）；`ProtectedRoute` 加路
 | 界面 | 详情弹窗新增「版本历史」，`change_kind` 有中英文文案 |
 | down 守卫 | 存在**真实**（非回填）历史时**拒绝回滚**并说明原因（实测） |
 | 验证 | `scripts/verify-resource-versions.mjs` **22/22**，已接入门禁 |
+
+
+### §4/§22/§27/§29 幽灵权限审计（commit `baed38f`）
+
+新增 `tests/ghost-permissions.test.mjs`：① 服务端引用的权限码必须存在于目录中
+（**拼错会让守卫静默失效**，比幽灵权限更危险）；② 声明的每个权限必须至少有一个服务端消费点；
+③ 业务层不得有内联角色字面量。
+
+**实测结果：46 个权限里 24 个被真实消费，22 个从未被检查** —— 近一半权限
+"授予或撤销不改变任何服务端行为"，而权限矩阵界面照常显示它们。
+含 `role.assign` / `permission.view` / `permission.revoke` / `resource.purge` /
+`storage.delete` / `system.*` / `security.*`。
+
+审计脚本自身两处误报（已改检测方式，**不是**加白名单）：
+把注释当代码扫；漏掉"通过常量消费"（`account.reset_privileged_password` 经
+`RESET_PRIVILEGED_PASSWORD_PERMISSION` 真实使用）。
+
+**`role.assign` 已真正接管角色变更**：创建/更新账号涉及角色时要求生效权限含它；
+读生效权限（与 PermissionGuard 同一份数据）；`authz` 缺失时 **fail closed**。
+基线 22 → **21**，改用**棘轮**：剩余 21 条逐条打印、数量不得增长，只能往下走。
+
+**仍未完成**：另外 21 条权限的消费点需要产品决策（例如 `permission.view`/`role.view`
+要配 §11 的权限管理界面才有意义）。
 
 ### 未完成
 
