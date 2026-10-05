@@ -20,8 +20,15 @@
  * （本仓库测试用的别名 loader）**不支持装饰器**，直接 import 会抛
  * `SyntaxError: Invalid or unexpected token`。这是本仓库既有的测试边界：
  * Nest 服务一律通过 HTTP 套件（scripts/verify-*.mjs）验证。
- * 所以本文件守住**机制**那一半（共享数据不可被就地修改）；
- * HTTP 那一半（同一角色反复请求结果稳定）由 scripts/verify-authz-http.mjs 覆盖。
+ * 所以本文件守住**机制**那一半（共享数据不可被就地修改）。
+ *
+ * 尚未覆盖的部分（不要误以为已覆盖）：触发旧缺陷需要在同一次请求里同时具备
+ * prek_head 与 pe_specialist 的账号，而 HTTP 套件（scripts/verify-authz-http.mjs）
+ * 现有的夹具都是单角色账号，因此“多角色账号请求一次之后、另一个账号看到的结构
+ * 是否被污染”这一条目前没有 HTTP 级证据。当前的保证来自本文件的深冻结：
+ * 旧写法会直接抛 TypeError，不可能悄悄发生。
+ * 补一个多角色夹具并把该断言加进 HTTP 套件，是 Stage 2（目录/权限收口）应补的项，
+ * 本提交不声称已完成。
  */
 
 import { test, describe } from 'node:test';
