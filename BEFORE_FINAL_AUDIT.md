@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**。
+门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -409,6 +409,23 @@ change-password / logout / me / mfa 登记 / health）；`ProtectedRoute` 加路
 **把紧随其后的密码填充块一并删了** —— 后果不是报错而是"点了没反应"（表单因新密码为空
 拒绝提交）。mfa-web 套件失败并指出位置，已恢复；该处失败诊断也从"截取页面开头"
 （只看到导航栏）改为"截取尾部"（错误提示在表单下方）。
+
+
+### §15 资源版本生命周期（commit `b6f4797`）
+
+**发现**：`resources.version` 一直存在、界面一直显示「版本 v1」，但**没有任何代码写过它**。
+实测迁移前 **348 行全部等于 1** —— 那个数字此前是装饰。
+
+| 项 | 结果 |
+| --- | --- |
+| migration 0011 | `resource_versions`（不可变快照 + `change_kind`）；纯加法；回填每一个既有资源为第 1 版 |
+| 回填实测 | 348 资源 → **348 快照**，未覆盖 **0**，`resources.version` 与最新快照不一致 **0** |
+| 自增 | 创建→v1；编辑→**只有真的改到东西**才自增（避免噪声版本）；附加文件→自增 |
+| 快照策略 | 存整行而非差异（差异法要两侧都对，且"看起来对、回放不对"无从发现） |
+| 读接口 | `GET /api/resources/:id/versions`，权限与"能否看该资源"**同一套判定** |
+| 界面 | 详情弹窗新增「版本历史」，`change_kind` 有中英文文案 |
+| down 守卫 | 存在**真实**（非回填）历史时**拒绝回滚**并说明原因（实测） |
+| 验证 | `scripts/verify-resource-versions.mjs` **22/22**，已接入门禁 |
 
 ### 未完成
 
