@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、browser-e2e **32/32、0 跳过**、mfa-web **16/16、0 跳过**）、双 typecheck PASS、build PASS、api-contracts matched。
+门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -382,6 +382,33 @@ change-password / logout / me / mfa 登记 / health）；`ProtectedRoute` 加路
 `/api/auth/mfa/status` 200 —— **线上登录行为未改变**，只有今后新建与重置密码的账号要求首次改密。
 只读的 browser-e2e 对生产跑出 25 通过 / 0 失败 / 1 条明确说明的 SKIP。
 （mfa-web 套件会建临时账号、清理依赖本地库连接串，所以**刻意不**对生产运行。）
+
+
+### §22/§27/§31 lint 工具链（commit `1c094d2`）
+
+「14 项命令」里的 lint **从去平台化起就没执行过**，且两个命令坏在不同地方 ——
+这正是"看起来有、其实没有"，只不过在工具链里：
+
+| 命令 | 坏在哪 | 修法 |
+| --- | --- | --- |
+| `npm run eslint` | `eslint.config.js` 第一行 `require('@lark-apaas/fullstack-presets')`，包已随去平台化删除 → 直接崩 | 用仓库真实存在的依赖（eslint 9 + typescript-eslint 8）重写为自包含配置；顺带把 `eslint .` 改为显式目录（本机 iCloud 同步目录上 `eslint .` 会 EAGAIN） |
+| `npm run stylelint` | ① 仓库里**没有任何 stylelint 配置**；② `--glob` 未加引号，shell 把 `**` 当单个 `*` → 只匹配到被忽略的 vendor → **一个文件都没检查却退出 0** | 新建 `stylelint.config.mjs`（显式列规则，不 `extends` 不存在的预设）；glob 加引号 |
+
+修好后立刻查出 **19 个真问题并全部修掉**（不是放宽规则）：
+* eslint 16 个：`db-snapshot.mjs` 两个未用导入、`predeploy-db-check.mjs` 的 `info()` 整个死函数、
+  `verify-authz-http.mjs` 的 `sv`、多处残留的 `createRequire`/`require`（含我上一轮新写的脚本）、
+  `verify-directories.mjs` 的 `adminTree`，以及 7 个脚本里的 `ok ? pass++ : fail++;`
+  （无副作用的表达式语句，改为 if/else）
+* stylelint 3 个：`tailwind-theme.css` 里两条空规则（标记类只在 `:not(...)` 里被引用，
+  空规则本身零效果）与一条重复选择器
+
+**lint 已接入 `verify-all.sh`**，并证明过它真的在检查：喂非法 hex 会报
+`color-no-invalid-hex`；verbose 显示实际检查 3 个文件、vendor 明确列为 ignored。
+
+本轮我自己犯的错（被测试抓住）：清理未使用变量时，用 `.*?` 在 `re.S` 下跨行的正则
+**把紧随其后的密码填充块一并删了** —— 后果不是报错而是"点了没反应"（表单因新密码为空
+拒绝提交）。mfa-web 套件失败并指出位置，已恢复；该处失败诊断也从"截取页面开头"
+（只看到导航栏）改为"截取尾部"（错误提示在表单下方）。
 
 ### 未完成
 
