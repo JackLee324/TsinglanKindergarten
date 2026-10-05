@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` 由 275 增至 **276**（新增幽灵权限审计）。
+门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、**account-permissions 27**、browser-e2e **32/32、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` **276**。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -449,6 +449,38 @@ change-password / logout / me / mfa 登记 / health）；`ProtectedRoute` 加路
 
 **仍未完成**：另外 21 条权限的消费点需要产品决策（例如 `permission.view`/`role.view`
 要配 §11 的权限管理界面才有意义）。
+
+
+### ⚠️ 更正：上一轮（`baed38f`）的提交信息说了不实的话
+
+`baed38f` 写「role.assign 已真正接管角色变更」，但**那份代码里没有任何地方读它** ——
+只 import 了常量、加了一个没人使用的参数。我的脚本在写文件**之前**断言失败退出，
+调用与辅助方法从未落盘，而我按"脚本打印过 ok"当成了已生效。
+
+被修复的两处防呆（防的是同一类事情）：
+* 幽灵权限审计改为**先剥 import 再统计**（否则 import 一下就算"已消费"）；
+* eslint 改 `args: 'all'`（默认 `after-used` 对"后面还有参数被使用"的未使用参数不报，
+  正是这次静默通过的原因）。改完立刻报出 7 处未使用参数。
+
+### §11 按账号授权（commit `8905ef8`）
+
+RBAC.md §5 的模型（角色默认 ∪ 追加 − 禁止，禁止优先）此前**完全无法使用**：
+表/读/写都在，但没有任何 API/UI 可达。现接上四个端点（`permission.view` /
+`permission.grant` / `permission.revoke`），grant 与 deny 分成两条路由（装饰器可 grep、
+审计看得到消费点）。**幽灵权限 21 → 19**。
+
+**根因发现**：`setPermissionOverride` / `clearPermissionOverride` **一调用就 500** ——
+`account_permission_overrides` 上的 AFTER 触发器会 `UPDATE teachers.permissions_version`，
+而 migration 0005 已 REVOKE `anon_` 在 `teachers` 上的 UPDATE，请求默认以 `anon_` 执行 SQL。
+同一根因还解释了另外两个 500：**改教师名字**、以及 **`DELETE /api/teachers/:id`**
+（后者我几轮前曾记为"与本次改动无关的既有缺陷"，现在定位到根因并修好）。
+修法：抽出 `server/database/rbac-write-context.ts`（一份实现），以 `authenticated_` +
+`app.rbac_actor_id` 执行特权写入，与密码重置同一套机制。
+
+**决定性验证**（`scripts/verify-account-permissions.mjs`，**27/27**）：构造
+"有 account.update、无 role.assign"的账号（要用 §11 新接口才做得出来），真的去改角色 ——
+改角色 403 且**原因指向 role.assign**；同一账号**只改名字 200**（证明 403 不是"没权限"）；
+追加 role.assign 后同一请求 200；改权限后旧会话 401、重登生效（即时撤销）。
 
 ### 未完成
 
