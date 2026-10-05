@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { FilesController } from './files.controller';
 import { FilesService } from './files.service';
-import { OBJECT_STORAGE, UnconfiguredObjectStorage } from './object-storage';
+import { ObjectStorageModule } from './object-storage.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { AuditModule } from '../audit/audit.module';
 
@@ -20,16 +20,15 @@ import { AuditModule } from '../audit/audit.module';
  * no URL is ever fabricated. To serve real bytes, implement the `ObjectStorage`
  * interface (S3, Cloudflare R2, MinIO, …) and bind it here:
  *
- *     { provide: OBJECT_STORAGE, useClass: S3ObjectStorage }
+ *     （绑定点现在在 ObjectStorageModule）{ provide: OBJECT_STORAGE, useClass: S3ObjectStorage }
  *
  * Nothing else in the download path has to move.
  */
 @Module({
-  imports: [ResourcesModule, AuditModule],
+  // ObjectStorageModule owns the OBJECT_STORAGE binding (see its header) —— 这里不再
+// 自己 provide，避免出现第二个"谁来当后端"的判定点。
+imports: [ObjectStorageModule, ResourcesModule, AuditModule],
   controllers: [FilesController],
-  providers: [
-    FilesService,
-    { provide: OBJECT_STORAGE, useClass: UnconfiguredObjectStorage },
-  ],
+  providers: [FilesService],
 })
 export class FilesModule {}

@@ -10,6 +10,7 @@ import { Badge } from '@client/src/components/ui/badge';
 import { Button } from '@client/src/components/ui/button';
 import { Card, CardContent } from '@client/src/components/ui/card';
 import { ConfirmDialog } from '@client/src/components/ui/confirm-dialog';
+import { ResourceDetailDialog } from '@client/src/components/resource-detail/ResourceDetailDialog';
 import { PageHeader } from '@client/src/components/ui/page-header';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@client/src/components/ui/tabs';
 import { useTranslation } from '@client/src/i18n/useTranslation';
@@ -59,6 +60,8 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  // §14 详情弹窗：只存 id，弹窗自己去取数据（这样列表刷新不会让详情内容错位）
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [submitId, setSubmitId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -202,10 +205,12 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
           <Button
             variant="ghost"
             size="sm"
+            data-testid="resource-detail-open"
             onClick={() => {
-              // View detail - open in new tab for now
-              logger.info('[MyResources] view resource', record.id);
-              toast.info(L('详情功能开发中', 'Detail view coming soon'));
+              // §14：真正的详情弹窗。以前这里是一句
+              // `toast.info('详情功能开发中')` —— 按钮存在、有反馈、但没有任何功能，
+              // 属于必须清掉的假成功。
+              setDetailId(record.id);
             }}
             title={t('btn.view')}
           >
@@ -291,6 +296,9 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
         confirmText={t('btn.submitReview')}
         onConfirm={handleSubmitReview}
       />
+
+      {/* §14 资源详情弹窗：数据由弹窗自己按 id 取，失败会如实显示 */}
+      <ResourceDetailDialog resourceId={detailId} onClose={() => setDetailId(null)} />
     </div>
   );
 };

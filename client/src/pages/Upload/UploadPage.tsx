@@ -159,10 +159,17 @@ const UploadPage: React.FC = () => {
     const data = form.getValues();
     setSubmitLoading(true);
     try {
-      // TODO: Integrate dataloom storage SDK for real file upload
-      // Flow: get pre-signed URL -> upload to storage -> get file_path/bucket -> submit
-      const fileBucketId = selectedFile ? 'placeholder-bucket' : undefined;
-      const filePath = selectedFile ? `uploads/${Date.now()}/${selectedFile.name}` : undefined;
+      // 这里**不再**编造 bucket 与存储路径。
+      //
+      // 以前是 `fileBucketId = 'placeholder-bucket'` + 一个凭空拼出来的
+      // `uploads/<时间戳>/<文件名>`，直接交给 createResource。后果很具体：
+      // `resources.has_stored_file` 是由「path 与 bucket 都非空」生成的
+      // （migration 0008），所以这些行立刻声称"有可下载的文件"，界面亮起"下载"，
+      // 而下载必然失败 —— 一个"看起来成功、其实什么也没发生"的假成功。
+      //
+      // 现在改为：元数据照常保存（草稿是真实存在的），但**不声明任何文件**；
+      // 真正的字节上传要走 POST /api/resources/:id/file（服务端会先判断本进程
+      // 有没有对象存储后端，没有就直接 503 并拒绝登记）。见下方 uploadFileToStorage。
       const base = {
         title: data.title,
         titleEn: data.titleEn || undefined,
@@ -170,7 +177,6 @@ const UploadPage: React.FC = () => {
         semester: data.semester || undefined,
         weekNumber: data.weekNumber ? Number(data.weekNumber) : undefined,
         theme: data.theme || undefined,
-        fileBucketId, filePath,
         fileName: selectedFile?.name,
         fileSize: selectedFile?.size,
         fileType: selectedFile?.type,
@@ -209,11 +215,21 @@ const UploadPage: React.FC = () => {
           }
         }
       }
-      toast.success(
-        status === 'draft'
-          ? L('草稿已保存', 'Draft saved')
-          : L('已提交审核', 'Submitted for review'),
-      );
+      // 选了文件但**没有上传字节**时必须说清楚。
+      //
+      // 这一版客户端不再伪造 bucket/path（见上面的注释），也还没有真实的对象存储
+      // 上传流程（服务端的登记接口在缺少存储后端时会 503 拒绝）。所以"选了文件"
+      // 与"文件已上传"是两件事，不能用一个绿色的「已保存」把区别盖掉 ——
+      // 老师会以为文件已经在平台上了。
+      if (selectedFile) {
+        toast.warning(t('upload.storageNotConfigured'));
+      } else {
+        toast.success(
+          status === 'draft'
+            ? L('草稿已保存', 'Draft saved')
+            : L('已提交审核', 'Submitted for review'),
+        );
+      }
       navigate('/my-resources');
     } catch (error) {
       logger.error('[Upload] submit failed', String(error));

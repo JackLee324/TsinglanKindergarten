@@ -279,21 +279,32 @@ try {
     fileBucketId: 'bucket_naming_probe',
     filePath: 'uploads/naming-probe/lesson.pdf',
   });
-  check('POST /api/resources/:id/file registers a real file', registered.status, 201);
-  check('  -> the response reports hasFile=true', registered.data?.hasFile, true);
+  // 本轮把期望改成 503：本部署没有对象存储后端，登记必须被拒绝，
+  // 而且**不能**在行里留下"有文件"的痕迹（否则界面会亮起必然失败的下载）。
+  check('POST /api/resources/:id/file refuses without a storage backend',
+    registered.status, 503);
+  check('  -> the refusal carries the machine-readable code',
+    /STORAGE_NOT_CONFIGURED/.test(
+      JSON.stringify(registered.data?.error?.details ?? '') + errMessage(registered)), true);
 
   const stored = await sql`
-    select has_stored_file, btrim(file_path) <> '' as path_ok, btrim(file_bucket_id) <> '' as bucket_ok
+    select has_stored_file, btrim(coalesce(file_path, '')) = '' as path_empty,
+           btrim(coalesce(file_bucket_id, '')) = '' as bucket_empty
     from resources where id = ${resourceId}
   `;
-  check('  -> the DATABASE column agrees', stored[0]?.has_stored_file, true);
-  check('  -> and it agrees with an independent recomputation', stored[0]?.path_ok && stored[0]?.bucket_ok, true);
+  // 这一串断言原本都建立在"文件被登记成功"之上。现在登记被拒（没有存储后端），
+  // 所以它们必须整体翻转 —— 但也正因为翻转了，它们变成了**更有价值的**断言：
+  // 它们现在证明"拒绝登记之后，行里确实没有任何文件痕迹"，而不只是"接口回了 503"。
+  check('  -> the DATABASE column agrees (no file)', stored[0]?.has_stored_file, false);
+  check('  -> path and bucket are both empty', stored[0]?.path_empty && stored[0]?.bucket_empty, true);
 
+  // 没有文件的行，下载必须先被 404「资源文件不存在」挡住 —— 这才是正确顺序：
+  // 先判断"这一行有没有文件"，而不是先尝试去存储取字节。
   const withFileDownload = await req('GET', `/api/resources/${resourceId}/download`);
   check(
-    '  -> a resource WITH a file is NOT refused with 404 资源文件不存在',
-    withFileDownload.status === 404 && /资源文件不存在/.test(errMessage(withFileDownload)) ? 'still 404' : 'passed the file check',
-    'passed the file check',
+    '  -> a resource WITHOUT a file is refused with 404 资源文件不存在',
+    withFileDownload.status === 404 && /资源文件不存在/.test(errMessage(withFileDownload)) ? 'refused as expected' : `status=${withFileDownload.status}`,
+    'refused as expected',
   );
 
   // =========================================================================

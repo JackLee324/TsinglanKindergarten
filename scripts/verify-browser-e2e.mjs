@@ -521,6 +521,55 @@ try {
     else bad('§24 删除后该文件夹从树里消失', newCode);
   }
 
+  // ---- 3d. §14：资源详情是真弹窗、显示真数据（不再是"详情功能开发中"）----
+  await goto('/my-resources', 6000, "!!document.querySelector('[data-testid=\"resource-detail-open\"]')");
+  const hasDetailBtn = await evalIn("!!document.querySelector('[data-testid=\"resource-detail-open\"]')");
+  if (!hasDetailBtn) {
+    const body = await evalIn("(document.getElementById('root')?.innerText || '').slice(0, 160)");
+    bad('§14 「查看」按钮存在', body);
+  } else {
+    ok('§14 「查看」按钮存在');
+    // 点开之前先记下"开发中"是否出现，用于验证它**没有**再出现
+    await evalIn(`document.querySelector('[data-testid="resource-detail-open"]').click()`);
+    const opened = await waitFor("!!document.querySelector('[data-testid=\"resource-detail-dialog\"]')", 15000);
+    if (!opened.ok) {
+      bad('§14 点「查看」打开详情弹窗', 'DIALOG_NOT_OPEN');
+    } else {
+      ok('§14 点「查看」打开详情弹窗');
+      // 弹窗先渲染外壳、再异步取数据，所以必须**轮询到内容出现**再断言。
+      // 第一版在这里直接读一次 innerText，读到的是"加载中..."，
+      // 于是三条字段断言全部失败 —— 又是"把没加载完当成功能坏了"。
+      const loaded = await waitFor(
+        `(() => {
+           const t = document.querySelector('[data-testid="resource-detail-dialog"]')?.innerText || '';
+           return /草稿|待审核|已发布|已退回|Draft|Pending|Published|Rejected/.test(t) ? t.replace(/\\s+/g, ' ') : null;
+         })()`,
+        20000,
+      );
+      const detailText = loaded.ok
+        ? loaded.value
+        : await evalIn("(document.querySelector('[data-testid=\"resource-detail-dialog\"]')?.innerText || '').replace(/\\s+/g, ' ')");
+      if (/功能开发中|coming soon/i.test(detailText)) {
+        bad('§14 详情里不再出现"开发中"占位文案', detailText.slice(0, 120));
+      } else {
+        ok('§14 详情里不再出现"开发中"占位文案');
+      }
+      // 必须显示真实字段（状态与版本来自 GET /api/resources/:id）
+      for (const [label, re] of [
+        ['状态', /草稿|待审核|已发布|已退回|Draft|Pending|Published|Rejected/],
+        ['版本', /v\d+/],
+        ['上传者', /上传者|Uploaded by/],
+      ]) {
+        if (re.test(detailText)) ok(`§14 详情显示「${label}」字段`);
+        else bad(`§14 详情显示「${label}」字段`, detailText.slice(0, 200));
+      }
+      await evalIn(`document.querySelector('[data-testid="resource-detail-close"]')?.click()`);
+      const closed = await waitFor("!document.querySelector('[data-testid=\"resource-detail-dialog\"]')", 10000);
+      if (closed.ok) ok('§14 详情弹窗可关闭');
+      else bad('§14 详情弹窗可关闭', 'STILL_OPEN');
+    }
+  }
+
   // ---- 4. §19：导出按钮必须是可点的（以前写死 disabled）----
   const audit = await goto('/admin/audit', 5000);
   const exportEnabled = await evalIn(`(() => {

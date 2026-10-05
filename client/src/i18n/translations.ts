@@ -93,6 +93,33 @@ export const translations = {
     'status.published': '已发布',
     'status.rejected': '已退回',
 
+    // === 资源详情（§14）===
+    'detail.title': '资源详情',
+    'detail.close': '关闭',
+    'detail.loadFailed': '详情加载失败',
+    'detail.status': '状态',
+    'detail.version': '版本',
+    'detail.program': '班型',
+    'detail.subject': '科目',
+    'detail.folderType': '资料夹',
+    'detail.semester': '学期/周次',
+    'detail.week': '第',
+    'detail.uploader': '上传者',
+    'detail.createdAt': '创建时间',
+    'detail.updatedAt': '更新时间',
+    'detail.reviewer': '审核人',
+    'detail.file': '文件',
+    'detail.theme': '主题',
+    'detail.description': '说明',
+    'detail.reviewComment': '审核意见',
+    'detail.reviewedAt': '审核时间',
+    'detail.notProvided': '未填写',
+    'detail.noFile': '未上传文件',
+    'upload.storageNote':
+      '资源信息会正常保存；文件字节只有在服务端配置了对象存储后才能真正上传，否则提交时会明确告诉你原因。',
+    'upload.storageNotConfigured':
+      '资源信息已保存为草稿，但**文件没有上传**：服务端当前没有配置对象存储。请让管理员接入存储后端后重试。',
+
     // 角色
     'role.super_admin': '系统超级管理员',
     'role.principal': '园长/管理员',
@@ -463,6 +490,33 @@ export const translations = {
     'status.pending_review': 'Pending Review',
     'status.published': 'Published',
     'status.rejected': 'Rejected',
+
+    // === Resource detail (§14) ===
+    'detail.title': 'Resource detail',
+    'detail.close': 'Close',
+    'detail.loadFailed': 'Failed to load the resource',
+    'detail.status': 'Status',
+    'detail.version': 'Version',
+    'detail.program': 'Program',
+    'detail.subject': 'Subject',
+    'detail.folderType': 'Folder',
+    'detail.semester': 'Semester / Week',
+    'detail.week': 'Week',
+    'detail.uploader': 'Uploaded by',
+    'detail.createdAt': 'Created',
+    'detail.updatedAt': 'Updated',
+    'detail.reviewer': 'Reviewed by',
+    'detail.file': 'File',
+    'detail.theme': 'Theme',
+    'detail.description': 'Description',
+    'detail.reviewComment': 'Review comment',
+    'detail.reviewedAt': 'Reviewed at',
+    'detail.notProvided': 'Not filled in source',
+    'detail.noFile': 'No file uploaded',
+    'upload.storageNote':
+      'Resource details are saved normally. The file bytes can only be uploaded once the server has object storage configured; otherwise the reason is shown on submit.',
+    'upload.storageNotConfigured':
+      'The resource was saved as a draft, but the FILE WAS NOT UPLOADED: the server has no object storage configured. Ask an administrator to configure it and retry.',
 
     // Roles
     'role.super_admin': 'System Super Admin',

@@ -218,8 +218,57 @@ try {
     fileBucketId: 'bucket_probe_0001',
     filePath: 'uploads/probe/lesson.pdf',
   });
-  check('POST /api/resources/:id/file accepts a real PDF', registered.status, 201);
-  check('  -> the stored name is sanitised (no ../ prefix)', registered.data?.fileName, '教材 第1周.pdf');
+  // 期望值在本轮**变了，而且是变严**：以前这里断言 201（文件被登记），
+  // 但本部署没有对象存储后端 —— 于是这一行会被写成"有文件"，
+  // 界面亮起"下载"，而下载必然 503。「看起来成功、其实什么也没发生」的假成功。
+  // 现在服务端在写库**之前**就判定存储可用性，因此这里必须是 503，
+  // 且行里不能留下任何文件列（下面从数据库直查确认）。
+  check('POST /api/resources/:id/file refuses when no storage backend exists',
+    registered.status, 503);
+  // 读法与套件里 C 节一致：`error.details` 携带机器可读的 code，`error.message` 携带人话。
+  check('  -> the refusal carries the machine-readable code',
+    /STORAGE_NOT_CONFIGURED/.test(
+      JSON.stringify(registered.data?.error?.details ?? '') + errMessage(registered)), true);
+
+  const afterRefusal = await sql`
+    select has_stored_file, btrim(coalesce(file_path, '')) = '' as path_empty,
+           btrim(coalesce(file_bucket_id, '')) = '' as bucket_empty
+    from resources where id = ${resourceId}
+  `;
+  check('  -> the row is NOT marked as having a file', afterRefusal[0]?.has_stored_file, false);
+  check('  -> no bucket was written', afterRefusal[0]?.bucket_empty, true);
+  check('  -> no path was written', afterRefusal[0]?.path_empty, true);
+
+  // 文件名仍然被清洗过 —— 从审计行读，而不是从（已经不存在的）成功响应里读。
+  const refusalAudit = await sql`
+    select detail from audit_logs
+    where resource_id = ${resourceId} and action = 'file_validation_rejected'
+    order by _created_at desc limit 1
+  `;
+  const refusalDetail = String(refusalAudit[0]?.detail ?? '');
+  check('  -> the attempted name was sanitised (no ../ prefix)',
+    /name=教材 第1周\.pdf(\s|$)/.test(refusalDetail), true);
+
+  // -------------------------------------------------------------------------
+  // 故意用 SQL 直接造一条"声称有文件"的行。
+  //
+  // 上传接口**已经正确地拒绝**在这种部署里登记文件（上面刚断言过），所以
+  // 想继续验证"下载路径在缺少存储后端时不会伪造 URL"，唯一诚实的办法就是
+  // 直接构造这种行 —— 它正是迁移前由 API 自己制造出来的状态，
+  // 也正是本次改动要消灭的状态。用 API 造反而做不到，这本身就是修复生效的证据。
+  // -------------------------------------------------------------------------
+  await sql`
+    update resources
+       set file_bucket_id = 'bucket_probe_0001',
+           file_path = 'uploads/probe/lesson.pdf',
+           file_name = '教材 第1周.pdf',
+           file_size = 4096,
+           file_type = 'application/pdf'
+     where id = ${resourceId}
+  `;
+  const seeded = await sql`select has_stored_file from resources where id = ${resourceId}`;
+  check('SQL-seeded row now reports hasStoredFile=true (fixture for the download path)',
+    seeded[0]?.has_stored_file, true);
 
   const first = await mintToken(resourceId);
   check('GET /api/resources/:id/download redirects', /^\/api\/files\/download\?token=/.test(String(first.location)), true);
@@ -443,8 +492,22 @@ try {
     fileBucketId: 'bucket_probe_0001',
     filePath: '/curriculum-resources/probe/cover.pdf',
   });
-  check('a leading-slash platform path is ACCEPTED (normalised, not rejected)', absolutePath.status, 201);
-  check('  -> the stored path is bucket-relative', absolutePath.data?.filePath, 'curriculum-resources/probe/cover.pdf');
+  // 与上面同一件事：登记本身现在是 503（没有存储后端），但"前导斜杠的路径被
+  // **规范化**而不是被当成路径穿越拒绝"这一点必须仍然可验证 —— 否则将来收紧
+  // 校验时，真正会坏掉的是平台上真实使用的 key 形状，而测试却看不出来。
+  // 所以从审计行读规范化结果（detail 里的 path=）。
+  check('a leading-slash platform path is ACCEPTED (normalised, not rejected)',
+    absolutePath.status === 503 ? 'refused for storage, not for the path shape' : `status=${absolutePath.status}`,
+    'refused for storage, not for the path shape');
+
+  const pathAudit = await sql`
+    select detail from audit_logs
+    where resource_id = ${resourceId} and action = 'file_validation_rejected'
+      and detail like '%cover.pdf%'
+    order by _created_at desc limit 1
+  `;
+  check('  -> the path was normalised to the bucket-relative form',
+    /path=curriculum-resources\/probe\/cover\.pdf(\s|$)/.test(String(pathAudit[0]?.detail ?? '')), true);
 
   const badBucket = await req('POST', `/api/resources/${resourceId}/file`, {
     fileName: 'ok.pdf',
@@ -466,7 +529,13 @@ try {
       and action in ('resource_file_register', 'file_validation_rejected', 'resource_delete', 'resource_restore')
     order by _created_at`;
   const actions = auditRows.map((r) => r.action + (r.success ? '' : ':denied'));
-  check('the accepted upload was audited', actions.includes('resource_file_register'), true);
+  // 上传被**拒绝**也要有审计痕迹（写入侧不再有 resource_file_register）。
+  // 注意 `actions` 的元素在成功为 false 时带 `:denied` 后缀（见上面 map），
+  // 所以要用 startsWith 匹配 —— 直接 includes('file_validation_rejected') 永远为假。
+  check('the refused upload was audited',
+    actions.some((a) => a.startsWith('file_validation_rejected')), true);
+  check('  -> and nothing claims the file was registered',
+    actions.includes('resource_file_register'), false);
   check('  -> the rejected uploads were audited too', actions.filter((a) => a === 'file_validation_rejected:denied').length >= 4, true);
   check('  -> the soft delete was audited', actions.includes('resource_delete'), true);
   check('  -> the restore was audited', actions.includes('resource_restore'), true);

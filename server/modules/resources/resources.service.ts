@@ -11,6 +11,13 @@ import { createReadStream, existsSync } from 'fs';
 import { join } from 'path';
 import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@server/database/database.module';
 import {
+  OBJECT_STORAGE,
+  STORAGE_NOT_CONFIGURED_CODE,
+  STORAGE_NOT_CONFIGURED_MESSAGE,
+  storageUnavailable,
+  type ObjectStorage,
+} from '@server/modules/files/object-storage';
+import {
   eq,
   and,
   count,
@@ -246,6 +253,9 @@ export class ResourcesService {
 
   constructor(
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
+    // 上传登记前的"本进程到底有没有对象存储"判定。与下载路径用**同一个**
+    // 后端实例，所以两边对"是否配置"的回答不可能不一致。
+    @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
   ) {}
 
   // ========== 辅助方法 ==========
@@ -1980,6 +1990,42 @@ export class ResourcesService {
         detail: `code=INVALID_BUCKET bucket=${JSON.stringify(input.fileBucketId)}`,
       });
       throw new BadRequestException('存储 bucket 标识非法');
+    }
+
+    // --- storage availability, BEFORE anything is written --------------------
+    //
+    // 这是本轮补上的关键一行。在此之前 `registerFile` 只做"bucket 形状检查"
+    // （非空、无路径穿越），于是**任何**客户端都能凭一个自己编的 bucket 名
+    // 让这一行变成"有文件"：`resources.has_stored_file` 是由
+    // 「path 与 bucket 都非空」生成的（migration 0008），所以行里立刻声称
+    // 有可下载的文件，界面亮起"下载"，而下载必然 503。
+    // 也就是把 object-storage.ts 明确要杜绝的"看起来能用、其实什么也没发生"
+    // 往前挪了一步，只不过发生在写入侧。
+    //
+    // 现在：本进程没有对象存储后端 → 直接拒绝登记（503 STORAGE_NOT_CONFIGURED），
+    // 不写任何文件列，并在审计里留下 file_validation_rejected。
+    // 这与下载路径的判定完全一致（同一个 storage.isConfigured()）。
+    if (!(await this.storage.isConfigured())) {
+      await this.logAudit({
+        action: 'file_validation_rejected',
+        teacherId: currentTeacherId,
+        resourceId: resource.id,
+        resourceTitle: resource.title,
+        program: resource.program,
+        subject: resource.subject,
+        success: false,
+        ipAddress: ip,
+        errorMessage: '对象存储未配置，拒绝登记文件（未写入任何文件列）',
+        // 把"本来会写进去的东西"记进审计：校验通过后的规范化文件名与大小。
+        // 这样"文件名被清洗过"这件事仍然**可被断言**（HTTP 套件从审计行读它），
+        // 而不是因为成功路径变成 503 就丢掉这条证据。
+        detail:
+          `code=${STORAGE_NOT_CONFIGURED_CODE} backend=${this.storage.name} ` +
+          `name=${validation.fileName} type=${validation.mimeType} ` +
+          `detected=${validation.kind} size=${validation.sizeBytes} ` +
+          `bucket=${input.fileBucketId} path=${bucketRelativePath}`,
+      });
+      throw storageUnavailable(STORAGE_NOT_CONFIGURED_CODE, STORAGE_NOT_CONFIGURED_MESSAGE);
     }
 
     // --- persist the SANITISED name and the NORMALISED mime type ------------

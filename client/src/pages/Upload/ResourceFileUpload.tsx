@@ -92,11 +92,14 @@ export const ResourceFileUpload: React.FC<ResourceFileUploadProps> = ({
         )}
       </div>
       {error && <p className="mt-1 text-sm text-destructive">{error}</p>}
-      <p className="mt-2 text-xs text-muted-foreground">
-        <span className="font-medium">TODO:</span> {t('common.loading')} —{' '}
-        {language === 'zh-CN'
-          ? '后续接入 dataloom storage SDK 实现真实上传'
-          : 'Integrate dataloom storage SDK for real upload later'}
+      {/*
+        这里原本是一行**给老师看的** TODO：「后续接入 dataloom storage SDK 实现真实上传」。
+        界面上挂着开发计划既不是功能也不是提示，属于必须清掉的占位。
+        真正该说的是当前能力边界：文件可以选中，但服务端可能会拒绝登记
+        （对象存储未配置时返回 503 STORAGE_NOT_CONFIGURED），那时的提示由提交逻辑给出。
+      */}
+      <p className="mt-2 text-xs text-muted-foreground" data-testid="upload-storage-note">
+        {t('upload.storageNote')}
       </p>
     </div>
   );
