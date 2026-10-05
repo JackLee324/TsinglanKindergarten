@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、**account-permissions 27**、browser-e2e **37/37、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` **276**。
+门禁基线（每轮实跑）：`npm test` **275/275**、**eslint PASS、stylelint PASS**（本轮首次真正可跑，见下）、双 typecheck PASS、build PASS、api-contracts matched、authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、resource-versions **22**、**account-permissions 27**、**storage-s3 28（+2 如实跳过）**、browser-e2e **37/37、0 跳过**、mfa-web **17/17、0 跳过**；`npm test` **276**。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -529,6 +529,33 @@ RBAC.md §5 的模型（角色默认 ∪ 追加 − 禁止，禁止优先）此�
 **如实标注**：这一条会**写**生产（给一个账号加一条 grant 再清除）。跑完我逐个账号核对过：
 检查 22 个账号，**带权限覆盖的 = 0**，即确实自清理干净。将来若要"完全不写生产"，
 应把这一条从生产运行中排除（或用专门的只读断言替代）。
+
+
+### §4/§23 S3 兼容对象存储后端（commit `8be0c56`）
+
+**为什么手写 SigV4**：本机不能再跑 `npm install`（会裁剪掉 darwin-arm64 二进制，
+构建已因此坏过一次）；Docker Hub 在本环境**不可达**（`pull access denied`），MinIO 起不来。
+而预签名 URL 本身就是确定性的哈希/HMAC 链，`node:crypto` 足够。
+
+`server/modules/files/s3-object-storage.ts`：path-style、支持 STS 会话令牌、
+TTL 夹到 [1, 7 天]、**bucket 不匹配拒绝签名**。`ObjectStorageModule` 按"四项配置是否齐全"
+选择后端；缺项一律退回 `UnconfiguredObjectStorage`，日志不打凭据。
+
+**验证（`scripts/verify-storage-s3.mjs`，28 通过 / 0 失败 / 2 跳过）**
+
+做到了：**真实字节往返逐字节一致（2649/2649）**（对象键含空格/中文/`+`/`!`/括号）；
+过期 URL 被拒；不存在对象 404；空格必须 `%20`、`!` 必须编码、规范查询串升序；
+改键/方法/TTL/密钥/区域签名都变；会话令牌参与签名。
+
+**没做到（如实标注，未当作通过）**：
+1. **签名正确性未被验证** —— 用 `aws4` 交叉比对时，它的预签名入口始终用自己的时钟与
+   默认过期时间，两边没在签同一个输入；这是**我的脚手架问题**，既不能说签名错、也不能说对。
+2. **"篡改签名被拒"无法判定** —— s3rver 源码自述「V4 signatures have incomplete support」，
+   实测篡改后仍返回 200，它不校验 V4。所以"PUT 被接受"证明链路可用，**不是**签名正确。
+
+需要**严格校验 V4 的端点**（真实 bucket / MinIO / 装了 SDK 的环境）才能验证这两条。
+
+**仍未完成**：客户端接线（预签名 PUT → 传字节 → 登记）；`registerFile` 在存储未配置时仍 503。
 
 ### 未完成
 
