@@ -241,3 +241,45 @@ npm install --no-save --no-audit --no-fund \
 
 > 工作纪律：本机工作区 ≠ git 内容。凡"删了/没删""能读/不能读"的结论，
 > 必须同时核对 `git ls-files` 与磁盘可读性，不能只看其中一面。
+
+---
+
+## 7. 进度台账（每轮更新，供续接）
+
+> 规则：只有**门禁全绿 + 真实链路验证**过的条目才写"已完成"。其余一律写"未完成"并说明卡在哪。
+
+### 已完成并验证（commit 可查）
+
+| § | 内容 | 证据 | commit |
+| --- | --- | --- | --- |
+| §9 | 角色授予授权判定接入 `createTeacher`/`updateTeacher`（此前**完全没有**授权判定） | authz 套件 `principal CANNOT promote to super_admin` 由 400(DTO) 变为 **403(RBAC)**；新增同级授予断言 | `da509e3`→`f7c7b6b` |
+| §10 | 删除 `teachers.dto.ts` 重复角色表（8 角色、漏 super_admin），改用 `shared/rbac.ts` | 同上（正是这次改动让 §9 的断言不再假绿） | 同上 |
+| §21 | 课程结构共享对象被就地修改（管理员路径返回模块级数组 + 共享对象 push）→ 深拷贝 + 深冻结 | `tests/curriculum-structure-isolation.test.mjs` 6 条；解冻后 4 条失败 | `ea6072f` |
+| §21b | 修正一句不实的覆盖声明（我曾声称 HTTP 已覆盖，实际没有） | `git show HEAD:...` 回读确认措辞 | `20724f7` |
+| §8 (1/3) | `roleSubjectScope()` 单一来源；`curriculum.service.ts` 5→0 处角色字面量 | 三个角色的 `/api/curriculum/structure` 实测与旧逻辑逐字一致 | `7426375` |
+| §8 (2/3) | `dashboard.service.ts` 3→0 处；`isAdmin` 改为由 `scope.all` 派生 | `authorizedSubjects` 实测 prek_head=2/k_head=1/pe_specialist=2/prek_assistant=0（期望值先由 SQL 算出） | `2333e32` |
+
+门禁基线（每轮实跑）：`npm test 275/275`、`verify-all` **283/283**、双 typecheck PASS、build PASS、api-contracts matched。
+
+### 未完成
+
+| § | 内容 | 卡在哪 |
+| --- | --- | --- |
+| §8 (3/3) | `resources.service.ts` 6 处角色字面量（407-409、589、594、599） | 最复杂：判定喂 SQL 条件，且夹着"未指定科目时收集 (program,subject,sub_subject) 组合"的逻辑，需逐条对照重写 |
+| §1 §2 §20 §24 §25 §26 | PDF 目录树、`directories` 表、Directory API/Renderer、目录权限、自建文件夹、教师成长 | **等业主决策**：资料夹 4 种 vs 6 种（见 `docs/DIRECTORY_SPEC.md` §2.1） |
+| §4 §23 | 真实文件上传/下载、S3 兼容存储 | **等测试 bucket**，或业主同意用本地 MinIO 做等价验证（会明确标注非生产 bucket） |
+| §5 §6 §7 §30 | 资源状态机（含 recall）、审核权限拆分 | 不依赖上述决策，可先做 |
+| §11 §12 §13 | 有效权限管理 UI、MFA 网页闭环、首次登录强制改密 | 不依赖上述决策，可先做 |
+| §14 §15 §16 §17 §18 §19 | 详情/版本/分页/回收站文案/调度器/审计导出 | 不依赖上述决策，可先做 |
+| §22 §27 §29 | 幽灵权限审计、死代码、假成功清理 | 部分已做（见 §6）；其余待做 |
+| §31 §32 §33 §34 | 14 项命令全量、浏览器 9 条 E2E、迁移 up/down/backfill、FINAL_COMPLETION_REPORT | 收尾阶段 |
+
+### 环境注意事项（每次开工前先看）
+
+1. 本机 PostgreSQL **不能**用 `pg_ctl start`；用 `postgres -D <pgdata> -p 55432 -c listen_addresses=127.0.0.1` 直接起。
+   测试库若不存在需重建 + `db-bootstrap` + **`node scripts/seed-curriculum.mjs --apply`**
+   （否则 `npm test` 4 条 + `files-http` + `naming-http` 会失败）。
+2. `npm install` 会裁掉 darwin-arm64 平台二进制；必须**一条命令装齐**且之后不再跑 npm install（见 §6）。
+3. 门禁服务需手动起：`SERVER_PORT=3200 MFA_ENFORCE_SUPER_ADMIN=true DOWNLOAD_TOKEN_TTL_SECONDS=10 LOGIN_IP_RATE_LIMIT_MAX=100000 npm run start`。
+4. 改了服务端代码后**先 `npm run build` 再重启服务**，否则套件测的是旧 `dist/`（我曾因此误判过一次）。
+5. 未跟踪文件可能不可读（文件提供程序驱逐），会让 `tsc` 随机报 `File not found`；删前核对 `git ls-files` 与原始 zip。
