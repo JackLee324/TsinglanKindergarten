@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、browser-e2e **32/32、0 跳过**）、双 typecheck PASS、build PASS、api-contracts matched。
+门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files **80**、naming 49、directories 55、directories-write **31**、browser-e2e **32/32、0 跳过**、mfa-web **16/16、0 跳过**）、双 typecheck PASS、build PASS、api-contracts matched。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -350,6 +350,38 @@ npm install --no-save --no-audit --no-fund \
 | §14 | `MyResourcesPage` 的「查看」不再是 `toast.info('详情功能开发中')`；真弹窗，数据全来自 `GET /api/resources/:id`，缺失字段显示"未填写"，失败直接显示 |
 | 浏览器 E2E | **32/32、0 跳过**（新增 §14 五条：打开、无占位文案、状态/版本/上传者真实值、可关闭） |
 | 仍未完成 | 真实字节上传（预签名 PUT → 登记）仍**卡在没有 bucket**；本轮只做到"不再假装成功" |
+
+
+### §12 两步验证网页闭环 + §13 首次登录强制改密（commit `2aa29f0`）
+
+**§12 此前网页端一行都没有**：服务端 MFA 早已完整（55 项断言全绿），但登录页不处理
+`mfaRequired`、也没有任何登记入口 —— 必须开 MFA 的账号在浏览器里既进不去也救不了自己。
+
+发现并修掉的隐患：`login()` 原先写的是 `return resp.data.teacher`，而 MFA 待验证的响应里
+**没有 teacher** → 得到 `undefined` → 被当成"已登录用户"塞进 context。
+一旦有人启用 MFA，前端会以"看起来正常、其实完全没登录"的状态继续跑。
+
+**§13 此前是假的**，三个问题：
+
+| # | 问题 | 证据 |
+| --- | --- | --- |
+| 1 | **服务端从不拦截** `must_change_password` | `provision-super-admin.mjs` 原注释写明「设了等于假装有强制改密」——判断正确 |
+| 2 | 前端从不读这个字段 | 全局 grep 只有 server/schema 命中 |
+| 3 | **创建账号时不置标志** | `createTeacher` 返回 `temporaryPassword`，但标志保持默认 false → **临时密码就是永久密码** |
+
+修法：`auth.guard.ts` 真的拦（403 + `PASSWORD_CHANGE_REQUIRED`，白名单只放行
+change-password / logout / me / mfa 登记 / health）；`ProtectedRoute` 加路由级闸门；
+`createTeacher` 与 `provision-super-admin.mjs` 置 true（后者只在**确实换了新密码**时置）。
+
+新增 `scripts/verify-mfa-web.mjs`（**16/16、0 跳过**，已接入门禁）：真浏览器走完
+临时密码 → 强制改密（前端挡 + **服务端 403**）→ 改密 → 启用 MFA（独立实现的真 TOTP）
+→ 10 个恢复码 → 退出重登 → 第二步 → 正确码进入工作台 → 错误码不放行。
+
+**生产实测**：现有 `TsinglanAdmin` 的标志为 false（改动前创建），登录 201 /
+`mfaRequired=false` / `/api/auth/me` 200 / `/api/directories/tree` 200 /
+`/api/auth/mfa/status` 200 —— **线上登录行为未改变**，只有今后新建与重置密码的账号要求首次改密。
+只读的 browser-e2e 对生产跑出 25 通过 / 0 失败 / 1 条明确说明的 SKIP。
+（mfa-web 套件会建临时账号、清理依赖本地库连接串，所以**刻意不**对生产运行。）
 
 ### 未完成
 
