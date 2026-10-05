@@ -13,14 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ResourcesService } from './resources.service';
-import {
-  ResourceListQueryDto,
-  CreateResourceDto,
-  UpdateResourceDto,
-  ResourceIdParamDto,
-  RecycleBinQueryDto,
-  RegisterFileDto,
-} from './resources.dto';
+import {CreateResourceDto, CreateUploadUrlDto, RecycleBinQueryDto, RegisterFileDto, ResourceIdParamDto, ResourceListQueryDto, UpdateResourceDto} from './resources.dto';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
 import { RequirePermission } from '@server/modules/authz/permission.decorator';
 import { getClientIp } from '@server/common/http/client-ip';
@@ -192,6 +185,28 @@ export class ResourcesController {
    * success are audited. `storage.upload` is required in addition to
    * `resource.update` because attaching bytes is an upload, not a metadata edit.
    */
+  /**
+   * 签发客户端直传地址（预签名 PUT）。
+   *
+   * 权限与登记一致：`resource.update` + `storage.upload` —— 拿到上传地址就等于
+   * 能往对象存储写字节，这本身就是一次上传动作。
+   */
+  @Post(':id/upload-url')
+  @RequirePermission('resource.update', 'storage.upload')
+  async createUploadUrl(
+    @CurrentTeacher() teacher: AuthUser,
+    @Param() params: ResourceIdParamDto,
+    @Body() dto: CreateUploadUrlDto,
+    @Req() req: Request,
+  ) {
+    return this.resourcesService.createUploadUrl(
+      params.id,
+      teacher.id,
+      dto.fileName,
+      this.getIp(req),
+    );
+  }
+
   @Post(':id/file')
   @RequirePermission('resource.update', 'storage.upload')
   async registerFile(

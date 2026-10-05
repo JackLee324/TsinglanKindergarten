@@ -2003,6 +2003,88 @@ export class ResourcesService {
    *
    * Both outcomes are audited: a rejection is a security event worth keeping.
    */
+  /**
+   * 签发一个"客户端直传"的预签名 PUT URL（§4/§23）。
+   *
+   * 三条设计取舍，每一条都对应一个真实的失败模式：
+   *
+   * 1. **对象键由服务端决定**，不接受客户端传入。客户端能选键就意味着能覆盖
+   *    任意对象（包括别人的文件）—— 那不是"上传"，那是"任意写"。
+   *    键形如 `uploads/<resourceId>/<时间戳>-<清洗后的文件名>`：
+   *    带 resourceId 便于按资源清理，带时间戳使同名重传不会互相覆盖。
+   * 2. **没有直传能力就明确拒绝**（503），不退回"假装上传成功"。
+   *    这个项目此前正是在这里编造 `placeholder-bucket`，让行里声称有文件、
+   *    下载却必然失败。
+   * 3. **返回 bucketId 与 filePath**，客户端拿到后再调 `registerFile` 登记；
+   *    登记时会做文件名清洗、类型/大小/魔数校验 —— 直传拿到 URL 不等于已被信任。
+   */
+  async createUploadUrl(
+    resourceId: string,
+    currentTeacherId: string,
+    fileName: string,
+    ip?: string,
+  ): Promise<{ uploadUrl: string; bucketId: string; filePath: string; expiresInSeconds: number }> {
+    const rows = await this.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.id, resourceId), this.activeOnly()))
+      .limit(1);
+    if (rows.length === 0) throw new NotFoundException('资源不存在');
+
+    const resource = rows[0];
+    const isAdmin = await this.isAdminTeacher(currentTeacherId);
+    if (!isAdmin && resource.uploaderId !== currentTeacherId) {
+      throw new ForbiddenException('只有上传者本人或管理员可以上传该资源的文件');
+    }
+
+    if (typeof this.storage.createPresignedUploadUrl !== 'function') {
+      throw storageUnavailable(STORAGE_NOT_CONFIGURED_CODE, STORAGE_NOT_CONFIGURED_MESSAGE);
+    }
+    if (!(await this.storage.isConfigured())) {
+      throw storageUnavailable(STORAGE_NOT_CONFIGURED_CODE, STORAGE_NOT_CONFIGURED_MESSAGE);
+    }
+
+    const bucketId = this.configuredBucketId();
+    if (bucketId === null) {
+      throw storageUnavailable(STORAGE_NOT_CONFIGURED_CODE, STORAGE_NOT_CONFIGURED_MESSAGE);
+    }
+
+    const safeName = fileName.replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_').slice(0, 120) || 'file';
+    const filePath = `uploads/${resourceId}/${Date.now()}-${safeName}`;
+    const expiresInSeconds = 900;
+
+    const uploadUrl = await this.storage.createPresignedUploadUrl({
+      bucketId,
+      filePath,
+      ttlSeconds: expiresInSeconds,
+    });
+
+    await this.logAudit({
+      action: 'resource_upload',
+      teacherId: currentTeacherId,
+      resourceId: resource.id,
+      resourceTitle: resource.title,
+      program: resource.program,
+      subject: resource.subject,
+      success: true,
+      ipAddress: ip,
+      detail: `签发直传地址：bucket=${bucketId} path=${filePath}（此后仍需 registerFile 校验并登记）`,
+    });
+
+    return { uploadUrl, bucketId, filePath, expiresInSeconds };
+  }
+
+  /**
+   * 配置里的 bucket 名。
+   *
+   * 从 `S3_BUCKET` 读，与 `S3ObjectStorage` 用的是同一个环境变量 ——
+   * 不在这里另立一套命名，否则"签名用的桶"和"登记的桶"会各说各话。
+   */
+  private configuredBucketId(): string | null {
+    const bucket = (process.env.S3_BUCKET ?? '').trim();
+    return bucket === '' ? null : bucket;
+  }
+
   async registerFile(
     resourceId: string,
     currentTeacherId: string,

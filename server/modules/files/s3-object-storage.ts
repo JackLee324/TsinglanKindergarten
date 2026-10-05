@@ -216,7 +216,7 @@ export class S3ObjectStorage implements ObjectStorage {
   }
 
   /** 预签名 PUT：供客户端直传字节（服务端不中转文件内容）。 */
-  createPresignedUploadUrl(request: SignedUrlRequest): string {
+  async createPresignedUploadUrl(request: SignedUrlRequest): Promise<string> {
     if (request.bucketId !== this.cfg.bucket) {
       throw storageUnavailable(
         STORAGE_UNAVAILABLE_CODE,

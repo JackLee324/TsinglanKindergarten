@@ -159,6 +159,10 @@ run "account-permissions" node scripts/verify-account-permissions.mjs
 # S3 兼容对象存储：签名结构 + （S3RVER_MODULE 存在时）**真实字节往返**。
 # 其中两条在缺少"严格校验 V4 的端点"时**大声跳过**，不算通过 —— 见脚本头注释。
 run "storage-s3"          node scripts/verify-storage-s3.mjs
+# **真实上传链路**：建资源 → 申请直传地址 → PUT 真字节 → 登记 → 两跳签名下载 → 逐字节比对。
+# 服务端未配置 S3 时会（正确地）503，本套件据此**大声跳过**而不是假通过；
+# 配好 S3 后再跑同一个门禁即可执行完整链路（见脚本头注释）。
+run "storage-upload"      node scripts/verify-storage-upload-flow.mjs
 
 # 真实浏览器 E2E（§32）。它不是"再跑一次接口" —— 它验证的是**浏览器里真的点得动、
 # 页面真的渲染出了数据库里的东西**（§16 那条卡了三轮的 SKIP 已用可判定断言替代）。

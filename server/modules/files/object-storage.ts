@@ -67,6 +67,14 @@ export interface ObjectStorage {
   isConfigured(): Promise<boolean>;
   /** A real signed URL. Throws `ServiceUnavailableException` on every failure path. */
   createSignedUrl(request: SignedUrlRequest): Promise<string>;
+  /**
+   * Optional: mint a short-lived URL the CLIENT can PUT bytes to.
+   *
+   * 刻意做成可选：不是每个后端都能做直传（有的部署会把上传收口到服务端代理）。
+   * 缺失时上层必须**明确拒绝**上传，而不是退回"假装上传成功" ——
+   * 那正是这个项目此前 `placeholder-bucket` 犯过的错。
+   */
+  createPresignedUploadUrl?(request: SignedUrlRequest): Promise<string>;
   /** Optional: release a local handle (a connection pool, a credential cache). */
   close?(): Promise<void>;
 }

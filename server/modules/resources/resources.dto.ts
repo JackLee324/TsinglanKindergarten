@@ -1,14 +1,4 @@
-import {
-  IsString,
-  IsOptional,
-  IsIn,
-  IsNumber,
-  Min,
-  Max,
-  MaxLength,
-  IsNotEmpty,
-  IsUUID,
-} from 'class-validator';
+import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import type {
   ProgramCode,
@@ -308,4 +298,18 @@ export class RegisterFileDto {
 export class ResourceIdParamDto {
   @IsUUID()
   id!: string;
+}
+
+/**
+ * 申请一个客户端直传地址。
+ *
+ * 只接受**文件名**：对象键由服务端生成（`uploads/<resourceId>/<时间戳>-<名字>`）。
+ * 让客户端指定键就等于让它能覆盖任意对象 —— 那不是上传，是任意写。
+ * 文件名在这里只用于拼键与后续登记时的清洗，不会被当作路径。
+ */
+export class CreateUploadUrlDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  fileName!: string;
 }
