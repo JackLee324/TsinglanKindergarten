@@ -270,7 +270,7 @@ npm install --no-save --no-audit --no-fund \
 | §16（浏览器级） | 卡了三轮的 SKIP 已修好并变成可判定断言：**Radix Tabs 在 onMouseDown 切换值，不看 click**；CDP 坐标失败的真因是 756×413 视口下侧边栏盖住目标 | 浏览器实测：标签进入选中态 → 「已显示 50 / 共 79 条」→ 点「加载更多」→ **卡片 50 → 79** | `bfb48ca` |
 | §31（门禁完整性） | 两处"静默少跑"修掉：① browser-e2e 未配账号时明确打印"未运行、**不算通过**"而不是 PASS；② 门禁只设 `AUTHZ_TEST_DB`，而 5 条数据库用例只在 `DATABASE_URL` 存在时注册 → 一直跑的是 270 而非 275 | 门禁全绿：npm test **275/275**、authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18** | `bfb48ca` |
 
-门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、browser-e2e **18/18**）、双 typecheck PASS、build PASS、api-contracts matched。
+门禁基线（每轮实跑）：`npm test` **275/275**、`verify-all` **全绿**（authz 75、hardening 10、mfa 55、headers 20、files 74、naming 49、directories 55、directories-write **31**、browser-e2e **25/25、0 跳过**）、双 typecheck PASS、build PASS、api-contracts matched。
 
 > 关于 270 vs 275：有 5 条用例只在 `DATABASE_URL` 存在时注册。门禁原先只设 `AUTHZ_TEST_DB`，
 > 所以它一直跑的是 270，而输出里的 `pass 270 fail 0` 看上去完全正常 —— **静默少跑**。
@@ -318,11 +318,32 @@ npm install --no-save --no-audit --no-fund \
    不是一一对应。**刻意返回 0 而不是"整个科目的总数"**：后者是个看起来精确、其实是另一个数的数字。
    等 6→4 映射定了、`directory_id` 迁移落地后再改成精确统计。
 
+### §24/§25/§26 可编辑目录系统（commit `f59b549`）
+
+| 证据 | 结果 |
+| --- | --- |
+| migration 0010 up/down 往返 | 带自建节点时 down 被守卫**拒绝**；清理后 down 成功、两列消失；再 up 回到 **69 个系统节点**；force 逃生阀在回滚事务内验证可执行 |
+| 数据库层约束 | `created_by_pairing` / `user_node_is_folder` / `sibling_name_key` 三条，实测生效（同名 409、班型下建 403） |
+| 写接口否定用例（`verify-directories-write.mjs` 31/31） | PDF 未标自建处 403、系统节点改/删 403、非空删 409、空名 400、`prek_head` 无 manage 全 403、无 CSRF 403 / 有 CSRF 401 |
+| 浏览器端到端（E2E 25/25） | 点「新建文件夹」→ 填名 → 提交 → **树里真的出现** → 删除 → **真的消失**；每一步单独验证效果 |
+| 审计 | 实测 21 行 `directory_*`，含操作人与"<父>下新建<名>"细节 |
+| 收尾状态 | 节点 = 69、自建残留 = 0（测试自清理） |
+
+**本轮修掉的两个真实缺陷**（都不是预防性改动）：
+
+1. **授权缺陷（潜在越权/可见性错）**：`subjectOwnerCodeFor` 靠解析 code 字符串推断
+   节点归属科目。只有种子数据时正确，一旦允许自建立刻错 —— 自建节点
+   `prek:pe_lesson_u1` 被判成 `prek:pe_lesson`（folder），于是
+   **只有建它的人看得到，按科目点授的同事看不到**。已改为沿真实父子链上溯。
+2. **体验缺陷**：新建文件夹后视图折叠回顶部，用户看不到刚建的东西。根因是每次
+   `load()` 都重置展开状态。改为首次设默认、之后保留 + 新建后展开父节点。
+   接口层全绿时这个问题看不出来。
+
 ### 未完成
 
 | § | 内容 | 卡在哪 |
 | --- | --- | --- |
-| §24 §25 §26（写入） | 目录的**增删改**：自建文件夹的创建/重命名/删除 | 读路径已完成；写路径需要先定资料夹映射，且需要一个 `is_system` 列来保护 69 个种子节点不被误删（否则"可编辑"等于"可把 PDF 权威结构删掉"）|
+| ~~§24 §25 §26（写入）~~ | ~~目录的增删改~~ | **已完成**（`f59b549`）：migration 0010 用 `is_system` 划出「PDF 权威 / 管理员自建」的界线，写接口 + 界面 + 审计齐备 |
 | §4 §23 | 真实文件上传/下载、S3 兼容存储 | **等测试 bucket**，或业主同意用本地 MinIO 做等价验证（会明确标注非生产 bucket） |
 | §15 §16 §17 §18 §19 | 版本生命周期 / 分页 / 回收站文案 / 自动清理调度器 / 审计导出 | 不依赖决策，可先做 |
 | §32 | 真实浏览器 E2E（9 条流程） | 尚未建立。当前所有 UI 改动只经过 typecheck+build，**没有浏览器级证据** |
