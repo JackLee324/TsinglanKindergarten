@@ -37,6 +37,10 @@ const LoginPage: React.FC = () => {
   const [formError, setFormError] = useState<string>('');
   const [searchParams] = useSearchParams();
   const externalError = searchParams.get('error');
+  // 第二因素（§12）。服务端在启用 MFA 时**不签发会话**，只回一个一次性
+  // challengeToken，所以这里必须真的走完第二步才可能进得去。
+  const [mfa, setMfa] = useState<{ challengeToken: string; expiresAt: string } | null>(null);
+  const [mfaCode, setMfaCode] = useState<string>('');
 
   const form = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
@@ -48,9 +52,21 @@ const LoginPage: React.FC = () => {
       try {
         setLoading(true);
         setFormError('');
-        const user = await api.login(data.username.trim(), data.password);
-        login(user);
-        navigate('/', { replace: true });
+        const result = await api.login(data.username.trim(), data.password);
+        // 显式 `=== true`：本仓库的 tsconfig 是 `strict: false`，
+        // 布尔字面量判别联合在真值判断下**不会**收窄（同一坑在
+        // resources.service.ts 里也有注释记录）。写成 `if (result.mfaRequired)`
+        // 会在 `result.teacher` 处报 TS2339。
+        if (result.mfaRequired === true) {
+          // 不设置 user、不跳转：此时**还没有会话**。
+          setMfa({ challengeToken: result.challengeToken, expiresAt: result.expiresAt });
+          return;
+        }
+        login(result.teacher);
+        // §13：首次登录（或被重置密码后）必须先改密码。
+        // 以前登录后一律去首页，而服务端只把 mustChangePassword 放在用户对象里、
+        // 前端从不读它 —— 于是"强制改密"实际只是页面上一个可忽略的入口。
+        navigate(result.teacher.mustChangePassword ? '/change-password' : '/', { replace: true });
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (msg.includes('锁定')) {
@@ -68,6 +84,36 @@ const LoginPage: React.FC = () => {
       }
     },
     [login, navigate, t],
+  );
+
+  /** 第二步：提交 TOTP 或恢复码。 */
+  const onVerifyMfa = useCallback(
+    async (e: React.FormEvent): Promise<void> => {
+      e.preventDefault();
+      if (!mfa) return;
+      const code = mfaCode.trim();
+      if (code === '') {
+        setFormError(t('login.mfa.codeRequired'));
+        return;
+      }
+      try {
+        setLoading(true);
+        setFormError('');
+        const teacher = await api.verifyMfa(mfa.challengeToken, code);
+        login(teacher);
+        setMfa(null);
+        setMfaCode('');
+        navigate(teacher.mustChangePassword ? '/change-password' : '/', { replace: true });
+      } catch (err) {
+        // 服务端会明确区分"验证码不对，还可尝试 N 次"与"尝试次数过多，请重新登录"，
+        // 所以这里直接把它的消息显示出来，而不是笼统替换成"登录失败"。
+        setFormError(err instanceof Error ? err.message : t('login.mfa.failed'));
+        logger.warn('MFA verify failed', String(err));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [login, mfa, mfaCode, navigate, t],
   );
 
   useEffect(() => {
@@ -104,6 +150,50 @@ const LoginPage: React.FC = () => {
               </div>
             )}
 
+            {/* 第二步：第二因素。整块**替换**账号密码表单，而不是并排显示 ——
+                此时密码已校验完，再让用户看到密码框只会让人以为要重填。 */}
+            {mfa ? (
+              <form onSubmit={onVerifyMfa} className="space-y-4" data-testid="mfa-step">
+                <p className="text-sm text-muted-foreground">{t('login.mfa.hint')}</p>
+                <div>
+                  <label htmlFor="mfa-code" className="text-sm font-medium text-foreground">
+                    {t('login.mfa.code')}
+                  </label>
+                  <Input
+                    id="mfa-code"
+                    data-testid="mfa-code-input"
+                    className="mt-1"
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value)}
+                    placeholder="123456"
+                    autoComplete="one-time-code"
+                    inputMode="numeric"
+                    autoFocus
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  data-testid="mfa-submit"
+                  className="w-full bg-primary hover:bg-primary-dark"
+                  size="lg"
+                  disabled={loading}
+                >
+                  {loading ? t('common.loading') : t('login.mfa.submit')}
+                </Button>
+                <button
+                  type="button"
+                  className="w-full text-sm text-muted-foreground underline-offset-2 hover:underline"
+                  onClick={() => {
+                    // 回到第一步：challengeToken 是一次性的，放弃后就作废。
+                    setMfa(null);
+                    setMfaCode('');
+                    setFormError('');
+                  }}
+                >
+                  {t('login.mfa.back')}
+                </button>
+              </form>
+            ) : (
             <Form {...form}>
               <form
                 onSubmit={form.handleSubmit(onSubmit)}
@@ -148,6 +238,7 @@ const LoginPage: React.FC = () => {
 
                 <Button
                   type="submit"
+                  data-testid="login-submit"
                   className="w-full bg-primary hover:bg-primary-dark"
                   size="lg"
                   disabled={loading}
@@ -156,6 +247,7 @@ const LoginPage: React.FC = () => {
                 </Button>
               </form>
             </Form>
+            )}
           </CardContent>
         </Card>
       </div>

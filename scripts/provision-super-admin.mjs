@@ -32,9 +32,13 @@
  * ------------------
  *   · 不绑定 MFA（那走已发布的 API 自助完成；手工写 teacher_mfa 需要复现
  *     AES-256-GCM 加密，风险高且无必要）
- *   · 不设 must_change_password —— 已核实该标志**只被读取并发给前端，
- *     服务端网关不据此拦截**（auth.guard.ts 只把它放进 AuthUser）。
- *     设成 true 会假装有"强制改密"，而实际上没有。
+ *   · **设置 must_change_password = true**（本轮改动）。
+ *     这里原先刻意不设，理由写得很准确：该标志当时只被读取并放进 AuthUser，
+ *     服务端网关不据此拦截，设了等于假装有"强制改密"。
+ *     现在 auth.guard.ts 真的会拦（PASSWORD_CHANGE_REQUIRED，并放行
+ *     change-password / logout / me / mfa 登记），所以初装密码成为一个
+ *     **真正的一次性密码**：首次登录后必须改掉才能使用其它功能。
+ *     出网配置的部署方登录时会看到改密页，这是预期的。
  *   · 不打印密码或哈希（哈希是可离线爆破的物料，不该进终端记录）
  *   · 不删除任何东西；不修改除目标账号外的任何行
  *
@@ -281,8 +285,8 @@ try {
         throw new Error(`--grant-role 指定了不存在的账号 '${username}'；该选项只用于恢复既有账号的角色`);
       }
       const rows = await tx`
-        insert into teachers (username, name, roles, status, password_hash)
-        values (${username}, ${name}, array[${ROLE}]::varchar[], 'active', ${hash})
+        insert into teachers (username, name, roles, status, password_hash, must_change_password)
+        values (${username}, ${name}, array[${ROLE}]::varchar[], 'active', ${hash}, true)
         returning id`;
       targetId = rows[0].id;
       action = 'created';
@@ -296,6 +300,9 @@ try {
                status        = 'active',
                name          = ${name},
                password_hash = case when ${password === ''} then password_hash else ${hash} end,
+               -- 只有当本次确实换了一把新密码时，才要求下次登录改密。
+               -- 单纯恢复角色（--grant-role）不该把人家已有的密码标记成临时的。
+               must_change_password = case when ${password === ''} then must_change_password else true end,
                failed_login_attempts = 0,
                locked_until  = null
          where id = ${targetId}
@@ -372,10 +379,9 @@ try {
   line('     node scripts/predeploy-db-check.mjs super-admin     # 期望 PASS + CAN LOG IN');
   line('     npm run predeploy                                   # 期望 FAIL[07]/[08] 消失');
   line('');
-  line('⚠️ 本次密码是通过命令行/文件传入的。请在首次登录后到应用内改密，');
-  line('   并删除你用于传递密码的临时文件。');
-  line('⚠️ must_change_password **没有**被设置：已核实该标志只被读取并发给前端，');
-  line('   服务端网关不据此拦截，设它等于假装有"强制改密"。所以这一步靠人执行。');
+  line('⚠️ 本次密码是通过命令行/文件传入的。请删除你用于传递密码的临时文件。');
+  line('✅ must_change_password 已置为 true：首次登录后服务端会拦截其它接口');
+  line('   （PASSWORD_CHANGE_REQUIRED），必须先在应用内改密才能使用其它功能。');
   line('');
 } catch (error) {
   process.stderr.write(`\n[provision-super-admin] 失败: ${String(error.message).split('\n')[0]}\n`);

@@ -186,6 +186,11 @@ export class TeachersService {
             roles: grantedRoles,
              status: dto.status ?? 'active',
              passwordHash,
+             // 创建接口返回的是**临时密码**（响应体里的 temporaryPassword），
+             // 所以这一行必须同时把"必须先改密"置上 —— 否则那个临时密码就是永久密码：
+             // 管理员把它念给老师之后，它一直有效，且没有任何环节会提醒更换。
+             // 服务端会据此拦截其它接口（见 auth.guard.ts），不是只靠前端跳转。
+             mustChangePassword: true,
           })
           .returning();
 

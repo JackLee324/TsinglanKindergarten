@@ -147,6 +147,9 @@ run "directories-write"   node scripts/verify-directories-write.mjs
 # 门禁里最危险的不是失败，是一条看起来通过的检查其实什么都没检查。
 if [ -n "${BROWSER_E2E_USER:-}" ] && [ -n "${BROWSER_E2E_PASS:-}" ]; then
   run "browser-e2e"       node scripts/verify-browser-e2e.mjs
+  # 两步验证与首次登录强制改密的浏览器闭环（§12/§13）。它会建一个临时账号、
+  # 走完"临时密码→强制改密→启用 MFA→退出重登→第二步"，用完即删。
+  run "mfa-web"           node scripts/verify-mfa-web.mjs
 else
   printf '  %-24s ' "browser-e2e"
   echo "未运行（未设置 BROWSER_E2E_USER / BROWSER_E2E_PASS）—— 这一项**不算通过**"

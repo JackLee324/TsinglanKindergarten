@@ -43,7 +43,7 @@ type PasswordFormData = z.infer<typeof passwordSchema>;
 
 const ChangePasswordPage: React.FC = () => {
   const { t } = useTranslation();
-  const { user, login } = useAuth();
+  const { user, login, refreshUser } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
@@ -66,6 +66,11 @@ const ChangePasswordPage: React.FC = () => {
         const result = await api.changePassword(data.currentPassword, data.newPassword);
         if (result.teacher) {
           login(result.teacher);
+        } else {
+          // 服务端没回 teacher 时必须主动拉一次：否则 context 里的
+          // `mustChangePassword` 仍是 true，路由闸门会把人一直按在改密页上
+          // （改成功了却出不去，是最难排查的那种"看起来坏了"）。
+          await refreshUser();
         }
         setSuccess(true);
         setTimeout(() => {
@@ -84,7 +89,7 @@ const ChangePasswordPage: React.FC = () => {
         setLoading(false);
       }
     },
-    [login, navigate, t],
+    [login, navigate, refreshUser, t],
   );
 
   if (!user) {

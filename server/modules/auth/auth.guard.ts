@@ -42,6 +42,31 @@ export const CurrentTeacherRoles = createParamDecorator(
   },
 );
 
+/** 机器可读的拒绝码：调用方可以据此跳转到改密页，而不必匹配中文措辞。 */
+export const PASSWORD_CHANGE_REQUIRED_CODE = 'PASSWORD_CHANGE_REQUIRED';
+export const PASSWORD_CHANGE_REQUIRED_MESSAGE =
+  '该账号使用的是临时密码，必须先在「修改密码」完成修改后才能使用其它功能。';
+
+/**
+ * 强制改密期间仍然放行的路径前缀。
+ *
+ * 这份白名单必须**刚好**够用：少一条会把用户锁死在改不了密码的状态；
+ * 多一条就等于在临时密码状态下开了一个口子。所以它只包含
+ * "读自己是谁 / 改密码 / 退出 / 两步验证登记" 这几件事。
+ */
+const PASSWORD_CHANGE_EXEMPT_PREFIXES = [
+  '/api/auth/change-password',
+  '/api/auth/logout',
+  '/api/auth/me',
+  '/api/auth/mfa/', // 登记/确认/恢复码：强制改密的人也需要先能绑定第二因素
+  '/api/health',
+];
+
+function isPasswordChangeExempt(request: Request): boolean {
+  const path = String(request.path ?? request.url ?? '');
+  return PASSWORD_CHANGE_EXEMPT_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 export interface AuthRequest extends Request {
   teacher?: AuthUser;
   /**
@@ -143,6 +168,25 @@ export class AuthGuard implements CanActivate {
       status: row.status as 'active' | 'inactive',
       mustChangePassword: row.mustChangePassword,
     };
+
+    // -------------------------------------------------------------------------
+    // 强制改密（§13）—— 在**服务端**拦，而不是只在前端跳转
+    // -------------------------------------------------------------------------
+    //
+    // `must_change_password` 一直被写进 AuthUser、也有接口会把它置为 true
+    // （管理员重置密码时），但**没有任何地方据此拦截请求** —— 这一点在
+    // scripts/provision-super-admin.mjs 里被明确记录过，那个脚本因此刻意不设置它，
+    // 理由是"设了等于假装有强制改密"。那个判断是对的：只有前端跳转的强制改密，
+    // 绕过前端直接调接口就失效了。
+    //
+    // 现在网关真的拦，flag 才成为一个有意义的承诺。放行的只有"改密本身所必需"的端点：
+    // 否则用户会被彻底锁死 —— 连改密码的接口都进不去。
+    if (row.mustChangePassword && !isPasswordChangeExempt(request)) {
+      throw new ForbiddenException({
+        code: PASSWORD_CHANGE_REQUIRED_CODE,
+        message: PASSWORD_CHANGE_REQUIRED_MESSAGE,
+      });
+    }
 
     request.teacher = teacher;
 

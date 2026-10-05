@@ -13,7 +13,7 @@ import {
   Settings,
   LogOut,
   KeyRound,
-  User, FolderTree } from 'lucide-react';
+  User, FolderTree, ShieldCheck } from 'lucide-react';
 import { logger } from '@client/src/lib/logger';
 
 import { Button } from '@client/src/components/ui/button';
@@ -162,6 +162,12 @@ const Layout: React.FC = () => {
       path: '/directory',
       labelKey: 'nav.directory',
       icon: <FolderTree className="size-5" />,
+    },
+    {
+      // 账号安全（§12）：每个账号管理自己的两步验证，不按角色区分。
+      path: '/account/security',
+      labelKey: 'nav.security',
+      icon: <ShieldCheck className="size-5" />,
     },
     {
       path: '/review',

@@ -21,6 +21,7 @@ import LoginPage from './pages/Login/LoginPage';
 import UnauthorizedPage from './pages/Unauthorized/UnauthorizedPage';
 import ChangePasswordPage from './pages/ChangePassword/ChangePasswordPage';
 import DirectoryPage from './pages/Directory/DirectoryPage';
+import AccountSecurityPage from './pages/AccountSecurity/AccountSecurityPage';
 
 import { LanguageProvider } from './i18n/i18n-context';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
@@ -134,6 +135,11 @@ const RoutesComponent = () => {
                   </ProtectedRoute>
                 }
               />
+
+              {/* 账号安全 / 两步验证（§12）。对所有教师开放：每个账号管理自己的第二因素。
+                  注意它必须放在受保护路由组内 —— 未登录进不来，而 MFA 未启用的
+                  super_admin 也能进来自救（服务端对 mfa/enroll 做了豁免）。 */}
+              <Route path="account/security" element={<AccountSecurityPage />} />
 
               {/* Change password */}
               <Route path="change-password" element={<ChangePasswordPage />} />
