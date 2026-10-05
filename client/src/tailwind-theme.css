@@ -160,8 +160,13 @@
     pointer-events: none;
   }
 
-  .no-default-hover-elevate {}
-  .no-default-active-elevate {}
+  /*
+   * `.no-default-hover-elevate` / `.no-default-active-elevate` 是**标记类**：
+   * 它们不需要任何声明，作用是在下面的 `:not(...)` 里把自己排除掉。
+   * 这里原本写着两条空规则（`.x {}`）—— 空规则在 CSS 里没有任何效果，
+   * 而且它们的存在会让人以为"这两个类的行为定义在这里"。
+   * stylelint 的 block-no-empty 报出它们是对的，所以删掉，改为这段说明。
+   */
 
   .toggle-elevate::before,
   .toggle-elevate-2::before {
@@ -214,8 +219,7 @@
   .border.hover-elevate:not(.no-hover-interaction-elevate)::after,
   .border.active-elevate:not(.no-active-interaction-elevate)::after,
   .border.hover-elevate-2:not(.no-hover-interaction-elevate)::after,
-  .border.active-elevate-2:not(.no-active-interaction-elevate)::after,
-  .border.hover-elevate:not(.no-hover-interaction-elevate)::after {
+  .border.active-elevate-2:not(.no-active-interaction-elevate)::after {
     inset: -1px;
   }
 

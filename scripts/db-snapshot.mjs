@@ -25,8 +25,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import postgres from 'postgres';
 
 const c = {

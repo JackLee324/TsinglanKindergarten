@@ -206,7 +206,7 @@ try {
    * 后面每一条都跟着失败（我第一次对生产跑就是 0/7 全红，其实什么都没坏）。
    * 所以改成轮询页面出现内容（或调用方给的条件），超时再报错。
    */
-  const goto = async (path, _waitMs = 4500, until = null) => {
+  const goto = async (path, until = null) => {
     await send('Page.navigate', { url: `${BASE}${path}` });
     const cond = until || '(document.getElementById("root")?.innerText || "").trim().length > 10';
     await waitFor(cond, 45000);

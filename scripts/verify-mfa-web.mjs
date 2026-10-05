@@ -18,10 +18,8 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
 
-const require = createRequire(import.meta.url);
 const BASE = process.env.BROWSER_E2E_BASE || 'http://127.0.0.1:3200';
 const ADMIN_USER = process.env.BROWSER_E2E_USER || '';
 const ADMIN_PASS = process.env.BROWSER_E2E_PASS || '';
@@ -224,26 +222,39 @@ async function main() {
     const inputs = await evalIn("[...document.querySelectorAll('input')].map(i => i.getAttribute('autocomplete') || i.type)");
     console.log('        （改密页输入框：' + JSON.stringify(inputs) + '）');
     await fill('input[autocomplete="current-password"]', tempPassword);
-    const newPwSel = await evalIn(`(() => {
-      const els = [...document.querySelectorAll('input[type=password]')];
-      return els.length >= 2 ? (els[1].getAttribute('name') || 'index:1') : null;
-    })()`);
-    // 直接按顺序填：第 1 个当前密码、第 2 个新密码、第 3 个（若有）确认
-    await evalIn(`(() => {
+    // 按顺序填三个密码框：当前密码、新密码、确认新密码。
+    //
+    // 这一段曾经被我删掉过一次：我用一条正则去清理一个未使用的诊断变量
+    // （newPwSel），而正则里的 `.*?` 在 re.S 下跨行匹配，把紧随其后的
+    // **这个填充块一起删了**。后果不是报错而是"点了没反应"——表单校验因为
+    // 新密码为空而拒绝提交，页面停在原地。测试随后失败并指了出来，
+    // 这正是"只看代码不看运行结果"会漏掉的东西。
+    const filled = await evalIn(`(() => {
       const els = [...document.querySelectorAll('input[type=password]')];
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
       const vals = [${JSON.stringify(tempPassword)}, ${JSON.stringify(NEW_PASSWORD)}, ${JSON.stringify(NEW_PASSWORD)}];
       els.forEach((el, i) => { if (vals[i] !== undefined) { setter.call(el, vals[i]); el.dispatchEvent(new Event('input', { bubbles: true })); } });
       return els.length;
     })()`);
-    await sleep(300);
-    await evalIn(`(() => { const b = [...document.querySelectorAll('button[type=submit]')][0]; if (b) b.click(); return !!b; })()`);
+    if (filled >= 3) ok('填好三个密码框（当前/新/确认）', `${filled} 个输入框`);
+    else bad('填好三个密码框（当前/新/确认）', `只有 ${filled} 个密码框`);
+
+    // 提交（用真实鼠标序列，与其它交互一致）
+    const submitted = await evalIn(`(() => {
+      const b = [...document.querySelectorAll('button[type=submit]')][0];
+      if (!b) return 'NO_SUBMIT';
+      for (const t of ['mousedown','mouseup','click']) b.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,button:0,view:window}));
+      return 'CLICKED';
+    })()`);
+    if (submitted !== 'CLICKED') bad('点「确认修改」提交', submitted);
 
     const left = await waitFor("location.pathname === '/'", 30000);
     if (left.ok) ok('改密成功后离开改密页并进入工作台');
     else {
-      const errText = await evalIn("(document.getElementById('root')?.innerText || '').replace(/\\s+/g, ' ').slice(0, 200)");
-      bad('改密成功后离开改密页', `停在 ${await path()}；页面：${errText}`);
+      // 看**尾部**：错误提示在表单下方，而截取开头只会看到导航栏（我第一版就是这样，
+      // 打印出来的 200 字全是侧边栏，看不出任何有用信息）。
+      const errText = await evalIn("(document.getElementById('root')?.innerText || '').replace(/\\s+/g, ' ').slice(-320)");
+      bad('改密成功后离开改密页', `停在 ${await path()}；页面尾部：${errText}`);
     }
   }
 

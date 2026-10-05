@@ -17,9 +17,7 @@
  *   「没有 curriculum.view 的角色被挡住」——因为现有账号里没有任何一个 visitor，
  *   不建就只能凭空声称这条规则成立。用完即删。
  */
-import { createRequire } from 'node:module';
 
-const require = createRequire(import.meta.url);
 const BASE = process.env.DIRECTORY_BASE || 'http://127.0.0.1:3200';
 
 let pass = 0;
@@ -128,12 +126,10 @@ console.log(`\ndirectories 接口验证 @ ${BASE}\n${'='.repeat(78)}\n`);
 // 1. 平台管理员：整棵树
 // ---------------------------------------------------------------------------
 const principal = await login('seq_principal', PRINCIPAL_PW);
-let adminTree = null;
 {
   console.log('\n1) principal（平台管理员）看到完整目录');
   const r = await principal.req('GET', '/api/directories/tree');
   check('HTTP 200', r.s, 200);
-  adminTree = r.d;
   check('两个根（教育教学 + 教师成长）', (r.d?.roots ?? []).length, 2);
   check('根 code 依次为 root:edu / root:growth',
     (r.d?.roots ?? []).map((x) => x.code), ['root:edu', 'root:growth']);

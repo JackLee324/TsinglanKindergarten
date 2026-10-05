@@ -32,7 +32,10 @@ function check(label, actual, expected) {
       ok ? '' : `   expected ${expected}`
     }`,
   );
-  ok ? pass++ : fail++;
+  // 写成 if/else 而不是 `ok ? pass++ : fail++`：后者是一条**没有副作用的表达式语句**，
+  // eslint 的 no-unused-expressions 会正确报错，而且读的人需要多看一眼才知道它在计数。
+  if (ok) pass++;
+  else fail++;
 }
 
 function isTruthyEnv(v) {

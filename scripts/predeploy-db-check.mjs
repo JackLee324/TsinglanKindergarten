@@ -58,7 +58,6 @@ function emit(status, ok, unverified = false) {
 function pass() { emit('PASS', true, false); }
 function fail() { emit('FAIL', false, false); }
 function warnStatus() { emit('WARN', false, true); }
-function info() { emit('INFO', true, false); }
 function die(message) {
   process.stderr.write(`[predeploy-db-check] ${message}\n`);
   process.exit(2);

@@ -108,6 +108,17 @@ else
   echo "FAIL"; echo "$out" | tail -5 | sed 's/^/      /'; FAILED=1
 fi
 
+echo "=== 静态检查（lint）==="
+# lint 此前**从未在这个门禁里跑过**，而且两个命令本身都是坏的：
+#   * `npm run eslint` 依赖已随去平台化删除的 @lark-apaas/fullstack-presets → 找不到模块；
+#   * `npm run stylelint` 仓库里根本没有配置文件，且 glob 未加引号，
+#     shell 把 `**` 当单个 `*`，只匹配到被忽略的 vendor 目录 → 一个文件都没检查却退出 0。
+# 两项都已修好；现在把它们放进门禁，否则"修好了"只存在于注释里。
+printf '  %-24s ' "eslint"
+npm run eslint >/dev/null 2>&1 && echo PASS || { echo FAIL; npm run eslint 2>&1 | tail -12 | sed 's/^/      /'; FAILED=1; }
+printf '  %-24s ' "stylelint"
+npm run stylelint >/dev/null 2>&1 && echo PASS || { echo FAIL; npm run stylelint 2>&1 | tail -12 | sed 's/^/      /'; FAILED=1; }
+
 echo "=== 类型检查 ==="
 printf '  %-24s ' "typecheck server"
 npm run type:check:server >/dev/null 2>&1 && echo PASS || { echo FAIL; FAILED=1; }

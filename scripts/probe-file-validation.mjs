@@ -50,7 +50,10 @@ let pass = 0, fail = 0;
 const check = (label, actual, expected) => {
   const ok = Array.isArray(expected) ? expected.includes(actual) : actual === expected;
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(62)}-> ${String(actual)}${ok ? '' : `   expected ${expected}`}`);
-  ok ? pass++ : fail++;
+  // 写成 if/else 而不是 `ok ? pass++ : fail++`：后者是一条**没有副作用的表达式语句**，
+  // eslint 的 no-unused-expressions 会正确报错，而且读的人需要多看一眼才知道它在计数。
+  if (ok) pass++;
+  else fail++;
 };
 
 const buf = (...bytes) => Buffer.from(bytes);
