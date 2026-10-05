@@ -305,3 +305,27 @@ npm install --no-save --no-audit --no-fund \
 `curriculum.service.ts` 还剩 2 处 `roles.includes('prek_assistant'/'k_assistant')`（我的核对命令是在提交**之后**才跑的）。
 已在后续提交把配班的"结构可见性"规则也收进 `shared/rbac.ts` 的 `programsVisibleForStructure()`，
 并用一次精确 grep 复核：业务代码中角色字面量确为 **0 处**。教训：**先跑核对命令、再写结论**。
+
+### 追加（第 26 轮）：§18 回收站到期清理调度器
+
+`ResourcesService.purgeExpiredResources()` 早就实现了（按 `purgeAfter <= now` 找行 → 删库 → 写审计），
+但**全仓没有任何调用者**（`grep -rn purgeExpiredResources server/` 只匹配到它自己的定义与日志字符串）——
+也就是说"资源到期后被永久删除"这件事**从来不会发生**，回收站只会越积越多。
+
+新增 `server/modules/resources/purge.scheduler.ts`（无新依赖；本仓库是单实例部署，见报告附录 B3，
+因此不需要 @nestjs/schedule；**若将来多副本，正确做法是加分布式锁或独立 job runner，
+而不是多起一个副本** —— 已写进代码注释）：
+启动后立即扫一次 + 之后每 `PURGE_SWEEP_INTERVAL_MINUTES`（默认 60）分钟一次；
+`PURGE_SCHEDULER=off` 可关闭；不重叠运行；**永不抛异常**（清理失败不得升级成平台起不来）；destroy 时清定时器。
+
+实测（把一条资源标成 `deleted_at = now()-40d, purge_after = now()-10d` 后启动服务）：
+
+    [PurgeScheduler] 调度器已启动：每 60 分钟一次
+    [PurgeScheduler] 清理完成（trigger=bootstrap）：永久删除 1 条资源 [1a91afda-…]
+    库中核验：已永久删除 ✅        审计记录：resource_purge ✅
+
+**未验证**：§18 还要求"删除对象存储文件"。本环境**没有配置对象存储**（`UnconfiguredObjectStorage`），
+所以**对象删除这一步没有被验证**，不得声称完成 —— 与 §4/§23 是同一个前置条件。
+
+**与简报的一处差异**：简报写"每天自动检查"，实现是默认每 60 分钟检查一次。
+因为查询条件是 `purge_after <= now`，更频繁地检查只是更及时，不会误删 —— 属于超集而非偏离。
