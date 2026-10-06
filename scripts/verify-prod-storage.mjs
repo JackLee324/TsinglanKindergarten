@@ -181,8 +181,19 @@ try {
 } finally {
   // 失败路径也必须清理 —— 探针留在生产里比测试失败更糟。
   if (resourceId) {
-    try { const del = await req('DELETE', `/api/resources/${resourceId}`); console.log(`\n清理：删除探针 -> HTTP ${del.s}`); }
-    catch (e) { console.error(`清理删除失败：${e?.message ?? e}`); }
+    try {
+      const del = await req('DELETE', `/api/resources/${resourceId}`);
+      console.log(`\n清理：移入回收站 -> HTTP ${del.s}`);
+      // ⚠️ 只 DELETE 是不够的：那是**软删除**，行会留在回收站里，
+      // 而"正常列表里查不到"会让这个脚本误以为清干净了 ——
+      // 我因此在生产上留下过 10 条探针。必须再 purge 一次才算真的清掉。
+      const pg = await req('POST', `/api/resources/${resourceId}/purge`, {
+        reason: `探针清理（${process.argv[1].split('/').pop()} @ ${new Date().toISOString()}）`,
+      });
+      console.log(`清理：purge 永久删除 -> HTTP ${pg.s}`);
+      if (!(pg.s === 200 || pg.s === 201)) exitCode = 1;
+    }
+    catch (e) { console.error(`清理失败：${e?.message ?? e}`); exitCode = 1; }
     try {
       const after = await req('GET', `/api/resources?pageSize=100&keyword=${encodeURIComponent(String(STAMP))}`);
       const residue = (after.d?.items ?? []).filter((r) => String(r.title).includes(String(STAMP)));

@@ -25,6 +25,11 @@ const BASE = process.env.BROWSER_E2E_BASE || 'http://127.0.0.1:3200';
 const USER = process.env.BROWSER_E2E_USER || '';
 const PASS = process.env.BROWSER_E2E_PASS || '';
 const PORT = Number(process.env.BROWSER_E2E_CDP_PORT || 9297);
+/**
+ * 目标环境强制 MFA 时的 TOTP 密钥（生产就是这样）。
+ * 不提供 = 假定不需要第二因子，行为与以前一致。
+ */
+const TOTP_SECRET = process.env.BROWSER_E2E_TOTP_SECRET || '';
 
 if (!USER || !PASS) {
   console.error('需要 BROWSER_E2E_USER / BROWSER_E2E_PASS。');
@@ -63,7 +68,24 @@ function makeClient() {
   const rawGet = (u) => fetch(u, { headers: { cookie: cookie() }, redirect: 'manual' });
   const login = async (u, p) => {
     await req('GET', '/');
-    return req('POST', '/api/auth/login', { username: u, password: p });
+    const res = await req('POST', '/api/auth/login', { username: u, password: p });
+    /*
+     * 生产开了 `MFA_ENFORCE_SUPER_ADMIN=true`：口令正确也只到"挑战态"，
+     * 必须再提交第二因子才拿到可用会话。不处理这一步的话，
+     * 后面的每个请求都是 401，而下面的存储探测会把 401 误报成"没有配置对象存储"
+     * —— 一个**错误的原因**会把排查方向整个带偏。
+     */
+    if (TOTP_SECRET && res.s === 201 && res.d?.mfaRequired === true) {
+      const { createRequire } = await import('node:module');
+      const require2 = createRequire(process.cwd() + '/');
+      const mfaLib = require2(process.cwd() + '/dist/server/common/crypto/mfa-crypto.js');
+      const verify = await req('POST', '/api/auth/mfa/verify', {
+        challengeToken: res.d?.challengeToken,
+        code: mfaLib.generateTotp(TOTP_SECRET),
+      });
+      return { s: verify.s, d: verify.d, mfaVerified: true };
+    }
+    return res;
   };
   return { req, rawGet, login };
 }
@@ -111,12 +133,34 @@ async function main() {
   });
   const probeId = probeRes.d?.id ?? probeRes.d?.resource?.id ?? null;
   let storageConfigured = false;
+  let probeFailure = null;
   if (probeId) {
     const urlProbe = await c.req('POST', `/api/resources/${probeId}/upload-url`, { fileName: 'probe.pdf' });
     storageConfigured = urlProbe.s !== 503;
+    // 503 之外的非 2xx 也要说出来。原来只看"是不是 503"，
+    // 于是 401（会话不完整）/403（权限）会被归到下面的"没有配置存储"里 ——
+    // **原因写错**比不写更糟，它会让人去查存储而真正的问题在别处。
+    if (!storageConfigured && urlProbe.s !== 503) {
+      probeFailure = `upload-url HTTP ${urlProbe.s}：${String(urlProbe.d?.error?.message ?? '').slice(0, 80)}`;
+    }
     await c.req('DELETE', `/api/resources/${probeId}`);
+  } else {
+    probeFailure = `前置探测资源没建出来（POST /api/resources -> HTTP ${probeRes.s}：${String(probeRes.d?.error?.message ?? '').slice(0, 80)}）`;
   }
   if (!storageConfigured) {
+    if (probeFailure) {
+      console.log('='.repeat(78));
+      console.log('⚠️  前置条件不成立，而且**原因不是**"没有配置对象存储"：');
+      console.log(`      ${probeFailure}`);
+      console.log('    在把这条报成环境问题之前，先确认上面的原因 —— 例如目标环境强制 MFA 时');
+      console.log('    需要提供 BROWSER_E2E_TOTP_SECRET，否则会话不完整、后面全是 401。');
+      console.log('='.repeat(78));
+      for (const label of ['新建→上传→保存草稿', '编辑→保存→刷新', '我的资源→详情', '提交审核',
+        '审核→发布', '目录中出现', '下载→字节一致', '删除→回收站→恢复', '授权/撤销']) {
+        skip(label, `前置条件不成立：${probeFailure}`);
+      }
+      return;
+    }
     console.log('='.repeat(78));
     console.log('⚠️  本进程**没有配置对象存储**（upload-url 返回 503）。');
     console.log('    这条全链路包含"上传真实文件"与"下载字节一致"，缺存储时无法成立。');
@@ -333,6 +377,40 @@ async function main() {
     return 1;
   })()`);
   await mouseClick(`document.querySelector('[data-testid="login-submit"]')`);
+
+  /*
+   * 生产开了 `MFA_ENFORCE_SUPER_ADMIN=true`，所以登录后会停在第二因子页，
+   * 而不是直接进工作台。这里必须真的过第二因子 —— 用**服务端自己编译出来的**
+   * TOTP 实现（dist/.../mfa-crypto.js），不另写一份算法。
+   * 没提供 TOTP 密钥时行为与以前完全一致（本地跑不受影响）。
+   */
+  if (TOTP_SECRET) {
+    const needMfa = await waitFor(
+      `location.pathname !== '/' && !!document.querySelector('input[inputmode="numeric"], input[autocomplete="one-time-code"]')`,
+      20000,
+    );
+    if (needMfa.ok) {
+      const { createRequire } = await import('node:module');
+      const require2 = createRequire(process.cwd() + '/');
+      const mfaLib = require2(process.cwd() + '/dist/server/common/crypto/mfa-crypto.js');
+      const code = mfaLib.generateTotp(TOTP_SECRET);
+      await evalIn(`(() => {
+        const el = document.querySelector('input[inputmode="numeric"], input[autocomplete="one-time-code"]')
+          || [...document.querySelectorAll('input')].pop();
+        const st = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        st.call(el, ${JSON.stringify('')} + ${JSON.stringify(code)});
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return el.value;
+      })()`);
+      await mouseClick(`[...document.querySelectorAll('button')].find((b) => /验证|确认|提交|Verify|Submit/i.test(b.innerText || ''))`);
+      const passed = await waitFor("location.pathname === '/'", 30000);
+      if (passed.ok) ok('生产强制 MFA：第二因子通过后进入工作台');
+      else bad('生产强制 MFA：第二因子通过后进入工作台', await evalIn('location.pathname'));
+    } else {
+      skip('第二因子', '登录后没有出现第二因子页（本进程未强制 MFA）');
+    }
+  }
+
   const home = await waitFor("location.pathname === '/'", 30000);
   if (home.ok) ok('浏览器登录进入工作台');
   else { bad('浏览器登录进入工作台', await evalIn('location.pathname')); }
@@ -695,7 +773,28 @@ try {
     }
     // 探针资源**硬删**：软删除的行仍会被目录外键拦住，清理不干净会留残留。
     const dbUrl = process.env.DATABASE_URL || process.env.AUTHZ_TEST_DB;
-    if (dbUrl) {
+    if (!dbUrl) {
+      /*
+       * 没有直连数据库时走 API 清理 —— 这是"对生产跑本套件"的前提：
+       * 生产库不对外暴露，但**应用自己**有软删除与永久删除两条路径。
+       *
+       * 顺序必须是 DELETE（移入回收站）→ purge（永久删除）：
+       * 只 DELETE 的话行会留在回收站里，而"正常列表里查不到"会让脚本误以为清干净了
+       * —— 我在生产上正是这么留下过 10 条探针的。
+       */
+      console.log('\n清理：无 DATABASE_URL，改用 API 路径（DELETE → purge）');
+      for (const id of createdResourceIds) {
+        const del = await c.req('DELETE', `/api/resources/${id}`);
+        const pg = await c.req('POST', `/api/resources/${id}/purge`, {
+          reason: `business-e2e 探针清理（${runStamp ?? 'no-stamp'}）`,
+        });
+        console.log(`清理：探针资源 ${id} DELETE=${del.s} purge=${pg.s}`);
+      }
+      if (probeTeacherUsername) {
+        const t = await c.req('DELETE', `/api/teachers/${probeTeacherId ?? ''}`);
+        console.log(`清理：探针账号 ${probeTeacherUsername} → HTTP ${t.s}（服务端语义是"停用"，不是删除）`);
+      }
+    } else if (dbUrl) {
       const postgres = (await import('postgres')).default;
       const sql = postgres(dbUrl, { max: 1 });
       for (const id of createdResourceIds) {

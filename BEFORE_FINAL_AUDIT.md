@@ -2316,3 +2316,79 @@ PASS  越权尝试没有产生成功的 purge 审计
 #### 15.4 门禁
 
 **280 单元 + 611 HTTP/浏览器 = 891 项，✅ 全部通过**（第 14 轮为 869）。
+
+### 第 16 轮追加：生产收口 —— 除 CORS 外，用户点名的整条链路**在生产上逐段通过**
+
+#### 16.1 新增三个"打生产"的验收脚本
+
+| 脚本 | 作用 | 实测结果 |
+|---|---|---|
+| `scripts/verify-prod-cors.mjs` | 直接对 bucket 发**裸 OPTIONS**（预检不带签名，所以不需要凭据、不做任何写操作），逐条核对：2xx / `Allow-Origin` 精确等于生产 origin / `Allow-Methods` 含 PUT / `Allow-Headers` 覆盖 content-type / **其它 origin 必须被拒** / DELETE 不被允许 | **3 pass / 4 fail** —— CORS 尚未应用 |
+| `scripts/verify-prod-signed-url.mjs` | bucket 与 object key 是否正确、正确签名被接受、错误签名被拒（并核对**拒绝原因**是 `SignatureDoesNotMatch` 而不是别的）、篡改 key 被拒且篡改路径下没有写出对象、过期签名被拒、下载字节一致 | **17/0/0，零跳过** |
+| `scripts/purge-prod-probes.mjs` | 清理生产回收站里的探针，**白名单正则**限定标题，默认 dry-run | 见 16.3 |
+
+过期签名那一条**真的等了 902 秒**（服务端硬编码 900 秒有效期、没有可配 TTL），
+生产 R2 返回 `ExpiredRequest` —— 不是"我以为会过期"。
+
+#### 16.2 用户点名的整条链路，在生产上跑了
+
+给 `verify-business-e2e.mjs` 补了两件生产需要的能力：
+Node 侧客户端也要过第二因子（原来只有浏览器侧会过）；没有 `DATABASE_URL` 时
+改用 API 清理（`DELETE → purge`）。然后把它直接指向生产：
+
+```
+1) 浏览器登录
+  PASS  生产强制 MFA：第二因子通过后进入工作台
+2) 新建 → 选班型 → 选科目 → 选目录 → 上传真实文件 → 保存草稿
+  PASS  填标题 / 选班型 = Pre-K / 选科目 = 美德 / 选资料夹 = 周次教案
+  PASS  选学期 = 第一学期 / 选目录归属 = Pre-K / 美德
+  PASS  选中真实文件（真实字节）
+  FAIL  保存草稿 → 提示"资源与文件均已保存"
+        -> **资源已保存，但文件上传失败：Failed to fetch**     ← CORS 预检被拒
+  PASS  新建后拿到资源 id
+3) 编辑 → 保存 → F5 刷新 → 数据仍在          全部 PASS
+5) 提交审核 → pending_review                  PASS
+6) 审核工作台 → 通过 → published               PASS
+7) 目录页面：该目录下能看到这条资源              PASS（该目录已发布资源数 total=11）
+8) 下载 → 字节一致                            FAIL（HTTP 404 —— 上一步就没传上文件，无对象可下载）
+9) 删除 → 回收站 → 恢复 → 再出现              全部 PASS（含侧边栏入口、真实点击恢复、
+                                             用"二次调接口应 404"反证界面那一跳生效）
+10) 授权→重登生效；撤销→旧 Session 失效         全部 PASS
+清理：DELETE=200 purge=201（回收站 0 残留）
+=== RESULT ===  pass=34 fail=2 skipped=1
+```
+
+**两条红都在同一个根因上**：浏览器 PUT 到 R2 被 CORS 预检拒绝；
+第 8 步的 404 只是因为第 2 步没传上文件、没有对象可下载。
+除这两条之外，用户列出的链路在**生产上逐段通过**。
+
+#### 16.3 清理生产回收站里的探针（用户要求，已执行）
+
+`resource.purge` 在上一轮才成为真能力（原来没有按需永久删除的入口），
+所以这一轮才清得掉。清理脚本把"不要误删真实业务资源"做成**代码里的硬约束**：
+
+* 只处理回收站里的行（`purge` 接口本身就只接受已软删除的行）；
+* 只处理标题命中**白名单正则**的（`^R2 往返探针 \d+$` 等 6 条），
+  任何一条不匹配就跳过并打印，绝不"顺手一起删"；
+* 默认 dry-run；每条 purge 带 `reason`（含本次运行标记），写进 `resource_purge` 审计。
+
+dry-run 结果：命中白名单 **10 条**，**不匹配 1 条**（标题 `test`）——
+那条**没有被碰**。执行后回收站 `11 → 1`。
+审计证据在生产上可查（`GET /api/audit/logs?action=resource_purge` → **total=10**），
+每条都带操作者、原因与本次运行标记 `probe-cleanup-2026-10-06T06:58:32.527Z`。
+
+顺带把两个旧的探针脚本也补上了 `purge`：它们的清理复查原来只查"正常列表"，
+而 `DELETE` 是软删除 —— 这就是我留下 10 条探针的原因。现在实测 0 残留。
+
+#### 16.4 生产不变量（用户点名的其余几项）
+
+```
+PASS  原 bootstrap 口令 Tsinglan001 已无法登录           -> HTTP 401
+PASS  当前（轮换后）口令登录成功                          -> HTTP 201
+PASS  登录要求第二因子（MFA_ENFORCE_SUPER_ADMIN 生效）    -> mfaRequired=true
+PASS  未过第二因子前业务接口拿不到数据                     -> HTTP 401
+PASS  第二因子通过 / 通过后业务接口可用
+PASS  MFA 状态 {"enabled":true,"recoveryCodesRemaining":9,"required":true}
+```
+`INITIAL_ADMIN_PASSWORD` 已从生产环境变量里删除（第 9 轮），
+且多次重新部署都没有把口令打回 bootstrap 值 —— 上面"当前口令仍有效 + 原口令 401"就是这条的证据。
