@@ -1,9 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { sql } from 'drizzle-orm';
 import {
   DRIZZLE_DATABASE,
   type PostgresJsDatabase,
 } from '@server/database/database.module';
+import { rawPostgresClient } from '@server/database/rbac-write-context';
 
 /**
  * BackupService — 逻辑导出（**不是** pg_dump）。
@@ -46,33 +46,45 @@ export class BackupService {
 
   constructor(@Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase) {}
 
+  /** 应用运行在哪个库上 —— 只用于给备份产物做标注，不含连接串。 */
   /**
-   * drizzle 的 `execute()` 在不同驱动/版本下可能返回 `{rows: []}` 或直接返回数组。
-   * 仓库里既有的写法（authorization.service.ts:510）就是这么兼取的 —— 照抄，
-   * 免得这里因为驱动差异在运行时才炸。
+   * 导出必须跑在**裸 client**（不经过按请求的 `SET LOCAL ROLE 'anon_'` 前导）上。
+   *
+   * 为什么：`anon_` 在若干表上**没有 SELECT 策略** —— 例如 `sessions`。
+   * 走请求默认路径时 `SELECT * FROM "sessions"` 会被 RLS 挡掉，drizzle 抛
+   * "Failed query"，接口 500。实测就是这样炸的（本地与生产都复现）。
+   *
+   * 裸 client 上的语句是本应用里**唯一**不会被自动加上 `anon_` 前导的一类，
+   * 于是它们以连接用户（表属主）身份执行；`force RLS = false` 时属主不受 RLS 约束。
+   * 到期清理调度器一直就是这么跑的，所以它删得掉回收站的行 —— 同一套机制。
+   *
+   * 安全性不因此降低：这条路径只能由 `@RequireSuperAdmin()` 的路由进入，
+   * 而 super_admin 本来就能读到全部业务数据。
    */
-  private rowsOf(result: unknown): unknown[] {
-    const maybe = result as { rows?: unknown[] } | unknown[];
-    const rows = (maybe as { rows?: unknown[] }).rows ?? maybe;
-    return Array.isArray(rows) ? rows : [];
+  private async withExportClient<T>(fn: (tx: { unsafe: (q: string) => Promise<unknown> }) => Promise<T>): Promise<T> {
+    const client = rawPostgresClient(this.db);
+    return client.begin(async (tx) => fn(tx as { unsafe: (q: string) => Promise<unknown> }));
   }
 
-  /** 应用运行在哪个库上 —— 只用于给备份产物做标注，不含连接串。 */
   private async databaseName(): Promise<string> {
-    const result = await this.db.execute(sql`SELECT current_database() AS name`);
-    const rows = this.rowsOf(result);
+    const rows = await this.withExportClient(
+      async (tx) => (await tx.unsafe('SELECT current_database() AS name')) as unknown[],
+    );
     return (rows[0] as { name?: string } | undefined)?.name ?? 'unknown';
   }
 
   private async tableNames(): Promise<string[]> {
-    const result = await this.db.execute(sql`
-      SELECT c.relname AS name
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relkind = 'r'
-      ORDER BY c.relname
-    `);
-    return this.rowsOf(result).map((r) => (r as { name: string }).name);
+    const rows = await this.withExportClient(
+      async (tx) =>
+        (await tx.unsafe(`
+          SELECT c.relname AS name
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relkind = 'r'
+          ORDER BY c.relname
+        `)) as unknown[],
+    );
+    return rows.map((r) => (r as { name: string }).name);
   }
 
   /**
@@ -113,8 +125,9 @@ export class BackupService {
       if (!/^[A-Za-z0-9_]+$/.test(table)) {
         throw new Error(`refusing to export table with unexpected name: ${table}`);
       }
-      const result = await this.db.execute(sql.raw(`SELECT * FROM "${table}"`));
-      const list = this.rowsOf(result) as Array<Record<string, unknown>>;
+      const list = await this.withExportClient(
+        async (tx) => (await tx.unsafe(`SELECT * FROM "${table}"`)) as Array<Record<string, unknown>>,
+      );
       counts[table] = list.length;
       total += list.length;
       parts.push(
