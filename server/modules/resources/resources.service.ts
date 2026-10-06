@@ -47,7 +47,6 @@ import {
   resources,
   resourceVersions,
   teachers,
-  subjectPermissions,
   auditLogs,
   directories,
 } from '@server/database/schema';
@@ -72,7 +71,8 @@ import {
   normalizeTheme,
   themeDbValue,
 } from '@shared/curriculum';
-import { isPlatformAdmin, roleScopeCovers, roleSubjectScope } from '@shared/rbac';
+import { roleScopeCovers } from '@shared/rbac';
+import { AuthorizationService } from '@server/modules/authz/authorization.service';
 import {
   describeCoverAssetsResolution,
   describeMissingCoverAsset,
@@ -260,6 +260,9 @@ export class ResourcesService {
     // 上传登记前的"本进程到底有没有对象存储"判定。与下载路径用**同一个**
     // 后端实例，所以两边对"是否配置"的回答不可能不一致。
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+    // 数据范围判定的**唯一**入口（§3）。本文件不再自己实现
+    // "平台管理员 / 角色范围 / subject_permissions" 这条规则。
+    private readonly authz: AuthorizationService,
   ) {}
 
   // ========== 辅助方法 ==========
@@ -267,7 +270,8 @@ export class ResourcesService {
   private async isAdminTeacher(teacherId: string): Promise<boolean> {
     const teacher = await this.getTeacherById(teacherId);
     if (!teacher) return false;
-    return isPlatformAdmin((teacher.roles ?? []) as RoleCode[]);
+    // 规则本身在 shared/rbac，读取口在 AuthorizationService —— 本文件不再直接判定。
+    return this.authz.isPlatformAdminAccount((teacher.roles ?? []) as RoleCode[]);
   }
 
   /**
@@ -414,14 +418,16 @@ export class ResourcesService {
     const roles: string[] = teacherRows[0].roles ?? [];
 
     // 园长 / 教学主任 / 超级管理员：全部通过
-    if (isPlatformAdmin(roles as RoleCode[])) {
+    if (this.authz.isPlatformAdminAccount(roles)) {
       return sql`true`;
     }
 
     // §8：不再由本文件自己用角色字面量决定数据范围。规则只有一份（shared/rbac.ts），
     // 这里只把规则翻译成 SQL 条件。三个布尔与下面 permClauses 的结构保持原样 ——
     // 这是一次**机械等价替换**，不改 SQL 形状。
-    const scope = roleSubjectScope(roles as RoleCode[]);
+    // §3：连"读取角色范围"这件小事也走 AuthorizationService，
+    // 于是"谁的范围是什么"在全仓只有一个入口。
+    const scope = this.authz.subjectScopeOf(roles);
     const hasPrekHead = scope.wholePrograms.includes('prek');
     const hasKHead = scope.wholePrograms.includes('k');
     const hasPeSpecialist = scope.explicitPairs.length > 0;
@@ -466,26 +472,11 @@ export class ResourcesService {
       }
     }
 
-    // 查 subject_permissions 表获取明细权限
-    const permQueryConditions = [
-      eq(subjectPermissions.teacherId, teacherId),
-      eq(subjectPermissions.canView, true),
-    ];
-    if (program) {
-      permQueryConditions.push(eq(subjectPermissions.program, program));
-    }
-    if (subject) {
-      permQueryConditions.push(eq(subjectPermissions.subject, subject));
-    }
-
-    const permRows = await this.db
-      .select({
-        program: subjectPermissions.program,
-        subject: subjectPermissions.subject,
-        subSubject: subjectPermissions.subSubject,
-      })
-      .from(subjectPermissions)
-      .where(and(...permQueryConditions));
+    // 明细权限：读取实现只有一份，在 AuthorizationService（§3）。
+    const permRows = await this.authz.subjectPermissionRowsFor(teacherId, 'view', {
+      program,
+      subject,
+    });
 
     if (permRows.length > 0) {
       for (const perm of permRows) {
@@ -512,6 +503,13 @@ export class ResourcesService {
     return or(...permClauses);
   }
 
+  /**
+   * `subject_permissions` 的读取（§3）。
+   *
+   * 这原本是本文件里的**第三份**同款查询 —— 与 `AuthorizationService.hasSubjectPermission`
+   * 逐行等价（连"只配了父科目时的回落"都一样）。三份同源实现意味着改一处漏两处，
+   * 所以这里改为转发，实现只剩一份。
+   */
   private async hasPermissionInDb(
     teacherId: string,
     program: string,
@@ -519,63 +517,20 @@ export class ResourcesService {
     subSubject: string | undefined,
     action: 'view' | 'upload',
   ): Promise<boolean> {
-    const conditions = [
-      eq(subjectPermissions.teacherId, teacherId),
-      eq(subjectPermissions.program, program),
-      eq(subjectPermissions.subject, subject),
-    ];
-
-    if (subSubject) {
-      conditions.push(eq(subjectPermissions.subSubject, subSubject));
-    } else {
-      conditions.push(isNull(subjectPermissions.subSubject));
-    }
-
-    const permRows = await this.db
-      .select({
-        canView: subjectPermissions.canView,
-        canUpload: subjectPermissions.canUpload,
-      })
-      .from(subjectPermissions)
-      .where(and(...conditions))
-      .limit(1);
-
-    if (permRows.length > 0) {
-      return action === 'view'
-        ? permRows[0].canView
-        : permRows[0].canUpload;
-    }
-
-    // 查父科目（只配了 subject 没配 subSubject）
-    if (subSubject) {
-      const parentPerm = await this.db
-        .select({
-          canView: subjectPermissions.canView,
-          canUpload: subjectPermissions.canUpload,
-        })
-        .from(subjectPermissions)
-        .where(
-          and(
-            eq(subjectPermissions.teacherId, teacherId),
-            eq(subjectPermissions.program, program),
-            eq(subjectPermissions.subject, subject),
-            isNull(subjectPermissions.subSubject),
-          ),
-        )
-        .limit(1);
-
-      if (parentPerm.length > 0) {
-        return action === 'view'
-          ? parentPerm[0].canView
-          : parentPerm[0].canUpload;
-      }
-    }
-
-    return false;
+    return this.authz.hasSubjectPermission(teacherId, program, subject, subSubject, action);
   }
 
   /**
    * 检查教师对指定科目的权限
+   */
+  /**
+   * 科目级数据范围（§3）。
+   *
+   * 这里**不再有实现** —— 判定整体搬到了 `AuthorizationService.canAccessSubject`。
+   * 本方法保留为薄转发，因为调用点有 5 处，全部改名只会放大这次改动的爆炸半径；
+   * 而转发是等价的，且"实现只有一处"这个目标已经达成。
+   *
+   * 想改判定规则的人应该去 `AuthorizationService`，不要在这里加分支。
    */
   async checkSubjectPermission(
     teacherId: string,
@@ -585,85 +540,13 @@ export class ResourcesService {
     action: 'view' | 'upload',
   ): Promise<boolean> {
     try {
-      // 查教师角色
-      const teacherRows = await this.db
-        .select({ roles: teachers.roles })
-        .from(teachers)
-        .where(eq(teachers.id, teacherId))
-        .limit(1);
-
-      if (teacherRows.length === 0) {
-        return false;
-      }
-
-      const roles: string[] = teacherRows[0].roles ?? [];
-
-      // 园长 / 教学主任 / 超级管理员：全部通过
-      if (isPlatformAdmin(roles as RoleCode[])) {
-        return true;
-      }
-
-      // prek_head / k_head / pe_specialist：由 shared/rbac.ts 的规则统一判定。
-      // 旧写法是三条角色字面量判断（与本文件另一处、以及 dashboard/curriculum 各一份）。
-      // roleScopeCovers 对 prek_head 等价于 program==='prek'，对 pe_specialist 等价于
-      // subject==='physical_education'（ProgramCode 只有 prek|k，两者逐一对应）。
-      if (roleScopeCovers(roleSubjectScope(roles as RoleCode[]), program as ProgramCode, subject)) {
-        return true;
-      }
-
-      // 其他角色查 subject_permissions 表
-      const conditions = [
-        eq(subjectPermissions.teacherId, teacherId),
-        eq(subjectPermissions.program, program),
-        eq(subjectPermissions.subject, subject),
-      ];
-
-      if (subSubject) {
-        conditions.push(eq(subjectPermissions.subSubject, subSubject));
-      } else {
-        conditions.push(isNull(subjectPermissions.subSubject));
-      }
-
-      const permRows = await this.db
-        .select({
-          canView: subjectPermissions.canView,
-          canUpload: subjectPermissions.canUpload,
-        })
-        .from(subjectPermissions)
-        .where(and(...conditions))
-        .limit(1);
-
-      if (permRows.length === 0) {
-        // 没配权限记录：尝试查父科目（只配了 subject 没配 subSubject 的情况）
-        if (subSubject) {
-          const parentPermRows = await this.db
-            .select({
-              canView: subjectPermissions.canView,
-              canUpload: subjectPermissions.canUpload,
-            })
-            .from(subjectPermissions)
-            .where(
-              and(
-                eq(subjectPermissions.teacherId, teacherId),
-                eq(subjectPermissions.program, program),
-                eq(subjectPermissions.subject, subject),
-                isNull(subjectPermissions.subSubject),
-              ),
-            )
-            .limit(1);
-
-          if (parentPermRows.length > 0) {
-            return action === 'view'
-              ? parentPermRows[0].canView
-              : parentPermRows[0].canUpload;
-          }
-        }
-        return false;
-      }
-
-      return action === 'view'
-        ? permRows[0].canView
-        : permRows[0].canUpload;
+      return await this.authz.canAccessSubject(
+        teacherId,
+        action,
+        program,
+        subject,
+        subSubject,
+      );
     } catch (error) {
       this.logger.error(
         `checkSubjectPermission failed: ${(error as Error).message}`,

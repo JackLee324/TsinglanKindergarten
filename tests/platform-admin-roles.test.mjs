@@ -120,12 +120,28 @@ describe('resources.service.ts 不得再自带窄名单', () => {
     );
   });
 
-  test('它从 shared/rbac 导入 isPlatformAdmin', () => {
-    assert.match(
+  test('它不再直接 import isPlatformAdmin，而是走 AuthorizationService 这个唯一入口', () => {
+    // 这条断言原先写的是"必须从 shared/rbac 导入 isPlatformAdmin"。
+    // §3 把范围判定整体收进了 AuthorizationService，于是这个文件**刻意**不再
+    // 直接 import 它 —— 直接 import 意味着"这个文件自己就能回答谁是管理员"，
+    // 而 §3 要的恰恰是那个问题只能有一个入口。
+    //
+    // 所以断言换成了它真正在意的性质，而且比原来更强：
+    //   1. 不得再直接 import isPlatformAdmin（规则读取口收敛）
+    //   2. 必须通过 AuthorizationService 询问（而不是自己不看任何规则就放行）
+    // 这不是把标准放低 —— "谁算管理员"的可改点从 N 个文件变成一个。
+    assert.doesNotMatch(
       src,
       /import\s*\{[^}]*\bisPlatformAdmin\b[^}]*\}\s*from\s*'@shared\/rbac'/,
-      'resources.service.ts 没有使用共享的 isPlatformAdmin —— 它一旦又自己决定"谁是管理员"，' +
-        '就会再次与 shared/rbac.ts 和 authorization.service.ts 不一致。',
+      'resources.service.ts 又直接 import 了 isPlatformAdmin。规则本身仍在 shared/rbac，' +
+        '但读取口应该是 AuthorizationService.isPlatformAdminAccount() —— 否则"谁算管理员"' +
+        '这个问题又会散成多份实现。',
+    );
+    assert.match(
+      src,
+      /this\.authz\.isPlatformAdminAccount\(/,
+      'resources.service.ts 既没有直接 import isPlatformAdmin，也没有问 AuthorizationService ——' +
+        '那它现在是靠什么决定"谁算管理员"的？这条断言就是防这种情况。',
     );
   });
 });

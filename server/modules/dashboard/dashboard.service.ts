@@ -21,12 +21,11 @@ import {
   teachers,
   subjectPermissions,
 } from '@server/database/schema';
-import type { RoleCode } from '@shared/api.interface';
 // 全平台课程管理员判定只有一处实现：shared/rbac.ts 的 isPlatformAdmin。
 // 这里原本自带一份 ADMIN_ROLES = ['principal','curriculum_director']，
 // 漏掉 super_admin，导致首页的「Pre-K 资源 / K 资源 / 本周绘本封面」
 // 三张卡对 super_admin 恒为 0（与 resources.service.ts 那次 403 同一缺陷形态）。
-import { roleSubjectScope } from '@shared/rbac';
+import { AuthorizationService } from '@server/modules/authz/authorization.service';
 
 /**
  * The soft-delete predicate (migration 0007).
@@ -69,6 +68,8 @@ export class DashboardService {
 
   constructor(
     @Inject(DRIZZLE_DATABASE) private readonly db: PostgresJsDatabase,
+    // 数据范围判定的唯一入口（§3）。本文件不再直接读 shared/rbac 的范围函数。
+    private readonly authz: AuthorizationService,
   ) {}
 
   async getStats(teacherId: string): Promise<DashboardStatsResult> {
@@ -82,7 +83,8 @@ export class DashboardService {
     const roles: string[] = teacherRows[0]?.roles ?? [];
     // §8：数据范围规则只有一份（shared/rbac.ts）。isAdmin 也由它派生，
     // 避免同一件事两个来源 —— 这个文件以前自己写死 prek_head/k_head/pe_specialist。
-    const scope = roleSubjectScope(roles as RoleCode[]);
+    // §3：连"读取角色范围"也走 AuthorizationService，全仓只有一个入口。
+    const scope = this.authz.subjectScopeOf(roles);
     const isAdmin = scope.all;
 
     // 我的资源总数
@@ -256,7 +258,7 @@ export class DashboardService {
       .where(eq(teachers.id, teacherId))
       .limit(1);
     const roles: string[] = teacherRows[0]?.roles ?? [];
-    const isAdmin = roleSubjectScope(roles as RoleCode[]).all;
+    const isAdmin = this.authz.subjectScopeOf(roles).all;
 
     // Soft delete first: it applies to BOTH branches. An administrator's "recent
     // updates" list must not advertise a resource that has been deleted, and a

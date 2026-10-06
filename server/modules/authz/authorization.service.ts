@@ -28,11 +28,15 @@ import {
   highestRole,
   isProtectedRole,
   scopeSatisfies,
+  isPlatformAdmin,
+  roleSubjectScope,
+  roleScopeCovers,
   SUPER_ADMIN_ROLE,
   ROLE_RANK,
   DATA_SCOPED_PERMISSIONS,
   type RoleCode,
   type PermissionCode,
+  type ProgramCode,
   type ScopeBinding,
   type ScopeTarget,
   type EffectivePermissions,
@@ -514,6 +518,107 @@ export class AuthorizationService {
     `);
     const rows = (result as unknown as { rows?: unknown[] }).rows ?? (result as unknown[]);
     return Array.isArray(rows) ? rows.length : 0;
+  }
+
+  // ===========================================================================
+  // 科目级数据范围 —— **唯一**实现
+  // ===========================================================================
+
+  /**
+   * 「这个账号能不能在这个 (班型, 科目[, 子科目]) 上做这件事」—— 全平台只有这一份实现。
+   *
+   * WHY THIS METHOD EXISTS
+   *   在这之前，这条规则在 `resources.service.ts` 里被完整实现了一遍
+   *   （自己查 `teachers.roles`、自己调 `isPlatformAdmin` / `roleScopeCovers`、
+   *   自己查 `subject_permissions` 并处理"只配了父科目"的回落），
+   *   而 `AuthorizationService.hasSubjectPermission()` 又实现了
+   *   `subject_permissions` 那一半。于是同一个问题有两个答案来源，
+   *   改一处漏一处只是时间问题 —— 这正是 §3 要清掉的东西。
+   *
+   * 判定顺序（**刻意与旧实现逐条一致**，这是一次搬移而不是改写）：
+   *   1. 账号不存在 → false（失败关闭）
+   *   2. 平台管理员（principal / curriculum_director / super_admin）→ true
+   *   3. 角色范围覆盖该 (program, subject) → true（prek_head → 整个 prek；等等）
+   *   4. 否则查 `subject_permissions`；只配了科目没配子科目时，子科目查询回落到父行
+   *   5. 都没有 → false
+   *
+   * 为什么不顺手把它改成"先查权限码再查范围"：那会改变语义。
+   * 权限码（`resource.view` 等）与 `subject_permissions` 是两层，
+   * 有些账号靠后者拿访问权而不持有对应的角色默认权限码。合并会静默收窄权限，
+   * 而"收窄"在权限系统里同样是缺陷。搬移保持行为，语义变更要单独做、单独验。
+   */
+  async canAccessSubject(
+    teacherId: string,
+    action: 'view' | 'upload',
+    program: ProgramCode | string,
+    subject: string,
+    subSubject?: string,
+  ): Promise<boolean> {
+    const teacherRows = await this.db
+      .select({ roles: teachersTable.roles })
+      .from(teachersTable)
+      .where(eq(teachersTable.id, teacherId))
+      .limit(1);
+
+    if (teacherRows.length === 0) return false;
+    const roles = ((teacherRows[0].roles ?? []) as RoleCode[]).filter(isKnownRole);
+
+    if (isPlatformAdmin(roles)) return true;
+    if (roleScopeCovers(roleSubjectScope(roles), program as ProgramCode, subject)) return true;
+
+    return this.hasSubjectPermission(teacherId, program, subject, subSubject, action);
+  }
+
+  /**
+   * 平台管理员（能看到全部课程数据的账号）—— 规则在 `shared/rbac.ts`，
+   * 这里只是**唯一**的读取口。各服务不再直接 import `isPlatformAdmin`，
+   * 于是"谁算管理员"这个问题只有一处可改。
+   */
+  isPlatformAdminAccount(roles: readonly RoleCode[] | string[]): boolean {
+    return isPlatformAdmin(roles as RoleCode[]);
+  }
+
+  /**
+   * 角色范围结构（`roleSubjectScope`）—— 同上，唯一读取口。
+   * 给需要把范围翻译成 SQL 条件的地方用（如资源列表过滤）：
+   * 规则仍然只有一份，调用方只做翻译。
+   */
+  subjectScopeOf(roles: readonly RoleCode[] | string[]) {
+    return roleSubjectScope((roles ?? []) as RoleCode[]);
+  }
+
+  /**
+   * `subject_permissions` 里"这个账号能看哪些 (program, subject, subSubject)"——
+   * 布尔版是 `hasSubjectPermission`，这是它的列表版。
+   *
+   * 为什么需要列表版：资源列表要把范围**翻译成 SQL**，而 SQL 条件需要枚举，
+   * 不是一个是/否。以前这个枚举在 `resources.service.ts` 里自己查表，
+   * 于是 `subject_permissions` 的读取散落成三处。现在两版都在这里，
+   * 表结构变了也只有这一处要改。
+   */
+  async subjectPermissionRowsFor(
+    teacherId: string,
+    action: 'view' | 'upload',
+    filter?: { program?: string; subject?: string },
+  ): Promise<Array<{ program: string; subject: string; subSubject: string | null }>> {
+    const conditions = [
+      eq(subjectPermissionsTable.teacherId, teacherId),
+      eq(
+        action === 'view' ? subjectPermissionsTable.canView : subjectPermissionsTable.canUpload,
+        true,
+      ),
+    ];
+    if (filter?.program) conditions.push(eq(subjectPermissionsTable.program, filter.program));
+    if (filter?.subject) conditions.push(eq(subjectPermissionsTable.subject, filter.subject));
+
+    return this.db
+      .select({
+        program: subjectPermissionsTable.program,
+        subject: subjectPermissionsTable.subject,
+        subSubject: subjectPermissionsTable.subSubject,
+      })
+      .from(subjectPermissionsTable)
+      .where(and(...conditions));
   }
 
   // ===========================================================================
