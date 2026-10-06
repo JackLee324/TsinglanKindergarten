@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
+  Eye,
+  EyeOff,
   FolderPlus,
   Loader2,
   Pencil,
@@ -37,6 +41,14 @@ export default function DirectoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   /**
+   * 是否把已停用节点也显示出来。
+   *
+   * 默认 false（看不到），但**必须能打开** —— 否则"停用"是单向门：
+   * 停掉之后节点从树上消失，界面上再也找不回来（实测确认过）。
+   * 这个开关只在 `canManage` 时显示；服务端也只在有管理权时才认这个参数。
+   */
+  const [showDisabled, setShowDisabled] = useState<boolean>(false);
+  /**
    * 当前**选中**的目录节点（§1：目录页要能查到该目录下的资源）。
    * 存整节而不是只存 code：面板标题要显示名字，只存 code 就得再遍历一次树，
    * 而且刷新后名字变了会对不上。
@@ -47,7 +59,7 @@ export default function DirectoryPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await directoriesApi.getDirectoryTree();
+      const data = await directoriesApi.getDirectoryTree({ includeDisabled: showDisabled });
       setTree(data);
       // 只**首次**设置默认展开（两个根）；之后刷新保留用户当前的展开状态。
       //
@@ -74,7 +86,7 @@ export default function DirectoryPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showDisabled]);
 
   useEffect(() => {
     void load();
@@ -85,6 +97,11 @@ export default function DirectoryPage() {
   // 就算显示错了也不会越权：写接口自己有 @RequirePermission，服务层还有规则校验。
   const [editing, setEditing] = useState<{ mode: 'create' | 'rename'; code: string } | null>(null);
   const [draftName, setDraftName] = useState<string>('');
+  /**
+   * 英文名（§1「改中英文名」）。中文名与英文名是两个独立字段：
+   * 英文界面（en-US）读 `nameEn`，丢掉它就等于英文界面看不到自己改的名字。
+   */
+  const [draftNameEn, setDraftNameEn] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -95,18 +112,28 @@ export default function DirectoryPage() {
         setActionError(t('directory.nameRequired'));
         return;
       }
+      const nameEn = draftNameEn.trim();
       setBusy(true);
       setActionError(null);
       try {
         if (mode === 'create') {
-          await directoriesApi.createDirectoryFolder({ parentCode: parentOrSelfCode, name });
+          await directoriesApi.createDirectoryFolder({
+            parentCode: parentOrSelfCode,
+            name,
+            // 留空就不传：服务端会以中文名兜底，而不是写入空字符串。
+            ...(nameEn === '' ? {} : { nameEn }),
+          });
           // 展开父节点，让新建出来的子文件夹**立刻可见**（见 load() 的注释）
           setExpanded((prev) => new Set(prev).add(parentOrSelfCode));
         } else {
-          await directoriesApi.updateDirectoryNode(parentOrSelfCode, { name });
+          await directoriesApi.updateDirectoryNode(parentOrSelfCode, {
+            name,
+            ...(nameEn === '' ? {} : { nameEn }),
+          });
         }
         setEditing(null);
         setDraftName('');
+        setDraftNameEn('');
         await load();
       } catch (e) {
         // 失败必须显示出来。吞掉错误会让"点了没反应"变成用户唯一能得到的反馈，
@@ -116,7 +143,7 @@ export default function DirectoryPage() {
         setBusy(false);
       }
     },
-    [draftName, load, t],
+    [draftName, draftNameEn, load, t],
   );
 
   const removeNode = useCallback(
@@ -136,6 +163,65 @@ export default function DirectoryPage() {
       }
     },
     [load, t],
+  );
+
+  /**
+   * 排序（§1「排序」）—— 与**相邻兄弟**交换相对位置。
+   *
+   * 实现选择：只 PATCH **当前节点**一个值，而不是把整组兄弟按新顺序重写一遍。
+   *   * 上移：把 sortOrder 设为「上一个兄弟的 sortOrder − 1」
+   *   * 下移：把 sortOrder 设为「下一个兄弟的 sortOrder + 1」
+   *
+   * 这样一次点击 = 一次请求，失败时不会留下"改了一半"的中间状态。
+   * 如果两个兄弟的 sortOrder 相同（历史数据里很常见），上面的算法**依然**能
+   * 得到正确的相对顺序（5 → 4、6），不需要先做一次归一化。
+   *
+   * 代价：反复移动会让数值缓慢漂移。服务端把范围钳在 ±100000 并会在超界时
+   * 明确报错，而不是静默夹断 —— 真到那一步用户会看到错误提示，
+   * 由管理员重新排序即可，不会出现"点了没反应"。
+   */
+  const moveNode = useCallback(
+    async (node: DirectoryNode, siblings: DirectoryNode[], direction: 'up' | 'down') => {
+      const idx = siblings.findIndex((s) => s.code === node.code);
+      if (idx < 0) return;
+      const neighbor = direction === 'up' ? siblings[idx - 1] : siblings[idx + 1];
+      if (!neighbor) return;
+      const base = Number(neighbor.sortOrder ?? 0);
+      const next = direction === 'up' ? base - 1 : base + 1;
+      setBusy(true);
+      setActionError(null);
+      try {
+        await directoriesApi.updateDirectoryNode(node.code, { sortOrder: next });
+        await load();
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
+  );
+
+  /**
+   * 启用 / 停用（§1「启用停用」）。
+   *
+   * 停用后节点会从**普通**树上消失，所以列表里必须有一个"显示已停用"开关，
+   * 否则这是单向门。停用与启用走同一个接口，只是 `enabled` 取反。
+   */
+  const toggleEnabled = useCallback(
+    async (node: DirectoryNode) => {
+      setBusy(true);
+      setActionError(null);
+      try {
+        await directoriesApi.updateDirectoryNode(node.code, { enabled: !node.enabled });
+        await load();
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
   );
 
   const toggle = useCallback((code: string) => {
@@ -193,6 +279,24 @@ export default function DirectoryPage() {
             .replace('{nodes}', String(totalNodes))
             .replace('{custom}', String(tree.customFolderLeafCount))}
         </p>
+
+        {/*
+          「显示已停用」开关（仅管理权可见）。
+          没有它，"停用"就是单向门 —— 节点从树上消失后再也找不回来，
+          于是"停用"实际上等于"删除"，而这与 §1 要求的"启用停用"是两回事。
+        */}
+        {tree.canManage && (
+          <label className="mt-3 inline-flex cursor-pointer items-center gap-2 text-sm text-[#6B6878]">
+            <input
+              type="checkbox"
+              data-testid="directory-show-disabled"
+              checked={showDisabled}
+              onChange={(e) => setShowDisabled(e.target.checked)}
+              className="size-4 rounded border-[#E8E4F0]"
+            />
+            {t('directory.showDisabled')}
+          </label>
+        )}
       </header>
 
       {/*
@@ -239,20 +343,30 @@ export default function DirectoryPage() {
             onStartCreate={(code) => {
               setActionError(null);
               setDraftName('');
+              setDraftNameEn('');
               setEditing({ mode: 'create', code });
             }}
-            onStartRename={(code, current) => {
+            onStartRename={(code, current, currentEn) => {
               setActionError(null);
               setDraftName(current);
+              // 英文名一并预填：只预填中文会让用户在不知情的情况下**清空**英文名。
+              setDraftNameEn(currentEn ?? '');
               setEditing({ mode: 'rename', code });
             }}
             onDraftChange={setDraftName}
+            onDraftNameEnChange={setDraftNameEn}
+            draftNameEn={draftNameEn}
             onSubmitEdit={submitEdit}
             onCancelEdit={() => {
               setEditing(null);
               setDraftName('');
+              setDraftNameEn('');
             }}
             onDelete={removeNode}
+            onMove={moveNode}
+            onToggleEnabled={toggleEnabled}
+            siblings={tree.roots}
+            siblingIndex={0}
           />
         ))}
       </div>
@@ -390,11 +504,15 @@ interface TreeNodeActions {
   draftName: string;
   busy: boolean;
   onStartCreate: (code: string) => void;
-  onStartRename: (code: string, currentName: string) => void;
+  onStartRename: (code: string, currentName: string, currentNameEn?: string) => void;
   onDraftChange: (value: string) => void;
+  onDraftNameEnChange: (value: string) => void;
+  draftNameEn: string;
   onSubmitEdit: (code: string, mode: 'create' | 'rename') => void;
   onCancelEdit: () => void;
   onDelete: (code: string, name: string) => void;
+  onMove: (node: DirectoryNode, siblings: DirectoryNode[], direction: 'up' | 'down') => void;
+  onToggleEnabled: (node: DirectoryNode) => void;
 }
 
 function TreeNode({
@@ -404,6 +522,12 @@ function TreeNode({
   onToggle,
   label,
   t,
+  // ⚠️ siblings / siblingIndex 必须在这里**被解构掉**，不能留在 `actions` 里。
+  // 它们会原样透传给子节点（`{...actions}`），而 JSX 里后写的同名 prop 生效 ——
+  // 于是显式的 `siblings={node.children}` 被覆盖，每个节点都以为自己有一堆兄弟，
+  // 上移/下移查不到自己的位置，点了没反应（实测踩到过）。
+  siblings,
+  siblingIndex,
   ...actions
 }: {
   node: DirectoryNode;
@@ -412,6 +536,9 @@ function TreeNode({
   onToggle: (code: string) => void;
   label: (node: DirectoryNode) => string;
   t: (key: TranslationKey) => string;
+  /** 同级兄弟列表（判断能不能上移/下移）。由父节点给出，TreeNode 不自己去树里反查。 */
+  siblings: DirectoryNode[];
+  siblingIndex: number;
 } & TreeNodeActions) {
   const hasChildren = node.children.length > 0;
   const isOpen = expanded.has(node.code);
@@ -424,12 +551,24 @@ function TreeNode({
   const canDeleteHere = actions.canManage && !node.isSystem;
   const isCreating = actions.editing?.mode === 'create' && actions.editing.code === node.code;
   const isRenaming = actions.editing?.mode === 'rename' && actions.editing.code === node.code;
+  const isDisabled = !node.enabled;
+  // 排序与启停都属于"改结构"，范围与改名一致（系统节点可排序/可停用，但不可改名/不可删）。
+  const canSortHere = actions.canManage && siblings.length > 1;
+  const canMoveUp = canSortHere && siblingIndex > 0;
+  const canMoveDown = canSortHere && siblingIndex < siblings.length - 1;
+  const canToggleEnabledHere = actions.canManage && !isRoot;
 
   return (
     <div
-      className={isRoot ? 'rounded-xl border border-[#E8E4F0] bg-white shadow-sm' : ''}
+      className={
+        (isRoot ? 'rounded-xl border border-[#E8E4F0] bg-white shadow-sm' : '') +
+        // 已停用的节点整行变暗：它出现在列表里只因为开了「显示已停用」，
+        // 如果和正常节点长得一样，用户会以为它还在生效。
+        (isDisabled ? ' opacity-55' : '')
+      }
       data-dir-code={node.code}
       data-dir-type={node.type}
+      data-dir-enabled={node.enabled ? 'true' : 'false'}
       // 节点**自己**的名字。不能靠 innerText 找节点：父节点的 innerText 包含
       // 整棵子树，用"文本包含"去定位会命中根节点（我在 E2E 里就踩过，
       // 于是"删掉刚建的那个"变成了"删根节点"，被 403 拒绝）。
@@ -492,6 +631,17 @@ function TreeNode({
           </span>
         )}
 
+        {/* 已停用徽标 —— 必须显式写出来，不能只靠"变暗"这一个视觉线索 */}
+        {isDisabled && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full bg-[#FFF7F7] px-3 py-1 text-xs font-medium text-[#D98B8B]"
+            data-dir-disabled-badge={node.code}
+          >
+            <EyeOff className="size-3" />
+            {t('directory.disabled')}
+          </span>
+        )}
+
         {/* 「可自建」标记：自建节点也标出来，便于与 PDF 权威节点区分 */}
         {!node.isSystem && (
           <span
@@ -518,11 +668,47 @@ function TreeNode({
             <button
               type="button"
               data-dir-rename={node.code}
-              onClick={() => actions.onStartRename(node.code, node.name)}
+              onClick={() => actions.onStartRename(node.code, node.name, node.nameEn)}
               title={t('directory.rename')}
               className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-primary-dark"
             >
               <Pencil className="size-4" />
+            </button>
+          )}
+          {canSortHere && (
+            <>
+              <button
+                type="button"
+                data-dir-move-up={node.code}
+                onClick={() => actions.onMove(node, siblings, 'up')}
+                disabled={!canMoveUp || actions.busy}
+                title={t('directory.moveUp')}
+                className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-primary-dark disabled:opacity-30"
+              >
+                <ArrowUp className="size-4" />
+              </button>
+              <button
+                type="button"
+                data-dir-move-down={node.code}
+                onClick={() => actions.onMove(node, siblings, 'down')}
+                disabled={!canMoveDown || actions.busy}
+                title={t('directory.moveDown')}
+                className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-primary-dark disabled:opacity-30"
+              >
+                <ArrowDown className="size-4" />
+              </button>
+            </>
+          )}
+          {canToggleEnabledHere && (
+            <button
+              type="button"
+              data-dir-toggle-enabled={node.code}
+              onClick={() => actions.onToggleEnabled(node)}
+              disabled={actions.busy}
+              title={isDisabled ? t('directory.enable') : t('directory.disable')}
+              className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-primary-dark disabled:opacity-40"
+            >
+              {isDisabled ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
             </button>
           )}
           {canDeleteHere && (
@@ -544,7 +730,7 @@ function TreeNode({
           弹窗会遮住"这个文件夹在树里的哪个位置"，而那正是用户要确认的事。 */}
       {(isCreating || isRenaming) && (
         <div
-          className="flex items-center gap-2 px-4 pb-3"
+          className="flex flex-wrap items-center gap-2 px-4 pb-3"
           style={{ paddingLeft: `${16 + (depth + 1) * 20}px` }}
         >
           <input
@@ -557,6 +743,21 @@ function TreeNode({
               if (e.key === 'Escape') actions.onCancelEdit();
             }}
             placeholder={t('directory.namePlaceholder')}
+            className="rounded-lg border border-[#E8E4F0] px-3 py-1.5 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+          />
+          {/*
+            英文名（§1「改中英文名」）。中文名必填、英文名可空 ——
+            留空时服务端以中文名兜底，不会写入空串。
+          */}
+          <input
+            value={actions.draftNameEn}
+            data-dir-name-en-input={node.code}
+            onChange={(e) => actions.onDraftNameEnChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') actions.onSubmitEdit(node.code, isCreating ? 'create' : 'rename');
+              if (e.key === 'Escape') actions.onCancelEdit();
+            }}
+            placeholder={t('directory.nameEnPlaceholder')}
             className="rounded-lg border border-[#E8E4F0] px-3 py-1.5 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
           <button
@@ -580,7 +781,7 @@ function TreeNode({
 
       {hasChildren && isOpen && (
         <div className={isRoot ? 'border-t border-[#E8E4F0] py-2' : ''}>
-          {node.children.map((child) => (
+          {node.children.map((child, childIndex) => (
             <TreeNode
               key={child.code}
               node={child}
@@ -589,6 +790,10 @@ function TreeNode({
               onToggle={onToggle}
               label={label}
               t={t}
+              // 兄弟列表与下标由**父节点**给出：TreeNode 自己去树里反查父级既慢
+              // 又容易在过滤后的树上算错（被权限剪掉的兄弟不该参与排序判断）。
+              siblings={node.children}
+              siblingIndex={childIndex}
               {...actions}
             />
           ))}

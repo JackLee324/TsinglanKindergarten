@@ -77,8 +77,22 @@ export class DirectoriesService {
    * `canManage` 由控制器从**生效权限**传入（不是从 roles 推），前端据此决定
    * 是否显示"新建文件夹"入口 —— 服务端算错也不会越权，写接口另有 @RequirePermission。
    */
-  async getTree(roles: RoleCode[] = [], canManage = false): Promise<DirectoryTreeResponse> {
-    const rows = await this.loadAll();
+  /**
+   * @param includeDisabled 把**已停用**的节点也返回（仅当调用方有 `curriculum.manage`
+   *   时由控制器传入）。为什么需要它：停用会让节点从树上消失，于是「启用停用」
+   *   变成一道**单向门** —— 停掉之后界面上再也找不到那个节点，也就无法重新启用。
+   *   加这个开关之前，实测确认过：树里只有 enabled=true 的行，确实没有回头路。
+   *
+   *   安全性：这个开关**只影响可见性，不影响权限** —— 它由控制器在
+   *   `canManage === true` 时才置位，且写接口自身仍有 `@RequirePermission`
+   *   与 `assertWithinScope`。无管理权的调用方拿到的仍是原来的树。
+   */
+  async getTree(
+    roles: RoleCode[] = [],
+    canManage = false,
+    includeDisabled = false,
+  ): Promise<DirectoryTreeResponse> {
+    const rows = await this.loadAll(includeDisabled && canManage);
     const childrenOf = this.indexByParent(rows);
     const counts = this.computeSubtreeCounts(rows, await this.loadResourceCounts());
     const context = this.visibilityFor(roles);

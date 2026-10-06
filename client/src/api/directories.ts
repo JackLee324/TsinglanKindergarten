@@ -10,9 +10,19 @@ import { axiosForBackend, handleApiError } from './client';
  * **数据库里那棵完整的目录树**（含两个根、教师成长分支、以及「允许自建文件夹」
  * 标记）。管理员改目录改的是后者。
  */
-export async function getDirectoryTree(): Promise<DirectoryTreeResponse> {
+export async function getDirectoryTree(options?: {
+  /**
+   * 把**已停用**的节点也取回来（服务端只在调用方有 `curriculum.manage` 时才认这个参数）。
+   *
+   * 没有它，"停用"就是一道单向门：停掉之后节点从树上消失，界面上再也找不到它，
+   * 也就无法重新启用 —— 那等于"停用"实际是"删除"。
+   */
+  includeDisabled?: boolean;
+}): Promise<DirectoryTreeResponse> {
   try {
-    const resp = await axiosForBackend.get('/api/directories/tree');
+    const resp = await axiosForBackend.get('/api/directories/tree', {
+      params: options?.includeDisabled ? { includeDisabled: 'true' } : undefined,
+    });
     return resp.data;
   } catch (error) {
     return handleApiError(error, 'getDirectoryTree');

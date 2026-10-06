@@ -62,6 +62,8 @@ function makeClient() {
 const profile = mkdtempSync(join(tmpdir(), 'qls-dirweb-'));
 let chrome = null;
 let createdFolderCode = null;
+/** 第 7 节为了验证排序/启停而建的目录 —— 至少两个，否则"排序"没有可交换的对象。 */
+const extraFolderCodes = [];
 const createdResourceIds = [];
 
 async function main() {
@@ -463,6 +465,126 @@ async function main() {
         }
       }
     }
+
+    // ---------------------------------------------------------------
+    // 7) 目录的排序 / 启用停用 / 中英文名（§1 里明列的三个能力）
+    // ---------------------------------------------------------------
+    // 这三项此前只做到**接口**：服务端 updateNode 早就支持 sortOrder / enabled /
+    // nameEn，但目录页上一个控件都没有 —— 也就是说用户**点不到**。
+    // 接口能用 ≠ 用户能用，这一节补的就是那一段。
+    console.log('\n7) 排序 / 启用停用 / 中英文名（界面上真的点得到）');
+
+    const mkFolder = async (suffix, zh, en) => {
+      const parent = createdFolderCode ? createdFolderCode.split('_u')[0] : 'prek:english_lesson';
+      const r = await c.req('POST', '/api/directories/folder', {
+        parentCode: parent, name: `${zh} ${stamp}`, nameEn: `${en}-${stamp}`,
+      });
+      const code = r.d?.code ?? r.d?.node?.code ?? null;
+      if (code) extraFolderCodes.push({ code, zh: `${zh} ${stamp}`, en: `${en}-${stamp}` });
+      return { code, status: r.s };
+    };
+    const fA = await mkFolder('A', '排序探针A', 'SortProbeA');
+    const fB = await mkFolder('B', '排序探针B', 'SortProbeB');
+    if (!fA.code || !fB.code) {
+      skip('排序 / 启停 / 中英文名', `第二个兄弟目录没建出来（A=${fA.status} B=${fB.status}）—— 只有一个子节点时排序无从验证`);
+    } else {
+      await openPath('/directory', `!!document.querySelector('[data-testid="directory-tree"]')`);
+      const reveal = `[data-testid="directory-browse"][data-dir-browse="${fA.code}"]`;
+      await expandUntil(reveal, 12);
+
+      // (a) 「显示已停用」开关必须存在 —— 它是"停用"不是单向门的前提
+      const hasSwitch = await evalIn(`!!document.querySelector('[data-testid="directory-show-disabled"]')`);
+      if (hasSwitch) ok('「显示已停用」开关存在（管理权可见）');
+      else bad('「显示已停用」开关存在', '没有 directory-show-disabled');
+
+      // (b) 排序：第一个兄弟的「上移」应被禁用；点「下移」应真的改变同级顺序
+      const sibExpr = `(() => {
+        const row = document.querySelector('[data-dir-code="${fA.code}"]');
+        if (!row) return null;
+        let p = row.parentElement;
+        while (p && ![...p.children].some((ch) => ch.hasAttribute && ch.hasAttribute('data-dir-code') && ch !== row)) p = p.parentElement;
+        if (!p) return null;
+        return JSON.stringify([...p.children].filter((ch) => ch.hasAttribute && ch.hasAttribute('data-dir-code')).map((ch) => ch.getAttribute('data-dir-code')));
+      })()`;
+      // 断言的对象是**渲染出来的第一个兄弟**，而不是"我刚建的那个"。
+      // 第一次写的是后者，于是库里只要还有别的探针目录，它就落在中间，
+      // "上移"本来就该可用 —— 断言失败的原因与产品行为无关。
+      // 要守的不变量是：列表首项没有可交换的上邻居，所以它的「上移」必须禁用。
+      const firstSibling = await evalIn(`(() => {
+        const row = document.querySelector('[data-dir-code="${fA.code}"]');
+        if (!row) return null;
+        let p = row.parentElement;
+        while (p && ![...p.children].some((ch) => ch.hasAttribute && ch.hasAttribute('data-dir-code') && ch !== row)) p = p.parentElement;
+        if (!p) return null;
+        const first = [...p.children].filter((ch) => ch.hasAttribute && ch.hasAttribute('data-dir-code'))[0];
+        return first ? first.getAttribute('data-dir-code') : null;
+      })()`);
+      const upDisabled = firstSibling
+        ? await evalIn(`document.querySelector('[data-dir-move-up="' + ${JSON.stringify(firstSibling)} + '"]')?.disabled`)
+        : null;
+      if (upDisabled === true) ok('同级列表首项的「上移」被禁用（没有可交换的上邻居）', firstSibling);
+      else bad('同级列表首项的「上移」被禁用', `first=${firstSibling} disabled=${upDisabled}`);
+
+      const before = await evalIn(sibExpr);
+      const moved = await clickSel(`[data-dir-move-down="${fA.code}"]`);
+      await sleep(2200);
+      const after = await evalIn(sibExpr);
+      if (before && after && before !== after) ok('点「下移」真的改变了同级顺序', `${before} -> ${after}`);
+      else bad('点「下移」真的改变了同级顺序', `before=${before} after=${after} click=${moved}`);
+
+      // 排序必须**持久**：只在前端内存里换位置等于骗人
+      await hardReload(`!!document.querySelector('[data-testid="directory-tree"]')`);
+      await expandUntil(`[data-dir-code="${fA.code}"]`, 12);
+      const afterReload = await evalIn(sibExpr);
+      if (after && afterReload && after === afterReload) ok('排序在 F5 硬刷新后仍然生效', afterReload);
+      else bad('排序在 F5 硬刷新后仍然生效', `after=${after} reload=${afterReload}`);
+
+      // (c) 停用 → 从普通树上消失 → 打开「显示已停用」→ 找得回来 → 再启用
+      const off = await clickSel(`[data-dir-toggle-enabled="${fA.code}"]`);
+      await sleep(2200);
+      const gone = !(await evalIn(`!!document.querySelector('[data-dir-code="${fA.code}"]')`));
+      if (gone) ok('停用后该节点从普通目录树上消失', off);
+      else bad('停用后该节点从普通目录树上消失', '仍然在树上');
+
+      await clickSel('[data-testid="directory-show-disabled"]');
+      await sleep(2200);
+      await expandUntil(`[data-dir-code="${fA.code}"]`, 12);
+      const back = await evalIn(`!!document.querySelector('[data-dir-code="${fA.code}"]')`);
+      if (back) ok('打开「显示已停用」后节点重新可见（停用不是单向门）');
+      else bad('打开「显示已停用」后节点重新可见', '仍然找不到 —— 那就是单向门');
+
+      const badge = await evalIn(`!!document.querySelector('[data-dir-disabled-badge="${fA.code}"]')`);
+      if (badge) ok('已停用节点带「已停用」徽标');
+      else bad('已停用节点带「已停用」徽标', '没有 badge');
+
+      const attr = await evalIn(`document.querySelector('[data-dir-code="${fA.code}"]')?.getAttribute('data-dir-enabled')`);
+      if (attr === 'false') ok('行上标出 data-dir-enabled=false');
+      else bad('行上标出 data-dir-enabled=false', String(attr));
+
+      await clickSel(`[data-dir-toggle-enabled="${fA.code}"]`);
+      await sleep(2200);
+      const reEnabled = await evalIn(`document.querySelector('[data-dir-code="${fA.code}"]')?.getAttribute('data-dir-enabled')`);
+      if (reEnabled === 'true') ok('重新启用后该节点恢复可用');
+      else bad('重新启用后该节点恢复可用', String(reEnabled));
+
+      // (d) 中英文名：改名时两个都要能改，且英文名要真的落库
+      const newZh = `排序探针A改 ${stamp}`;
+      const newEn = `SortProbeA2-${stamp}`;
+      await clickSel(`[data-dir-rename="${fA.code}"]`);
+      await sleep(600);
+      await fill(`[data-dir-name-input="${fA.code}"]`, newZh);
+      await fill(`[data-dir-name-en-input="${fA.code}"]`, newEn);
+      await clickSel(`[data-dir-submit="${fA.code}"]`);
+      await sleep(2200);
+
+      // 服务端复查：两个字段都要是对的。只看界面等于只看渲染结果。
+      const nodeResp = await c.req('GET', `/api/directories/node?code=${encodeURIComponent(fA.code)}`);
+      const nodeRow = nodeResp.d?.node ?? nodeResp.d ?? {};
+      if (nodeRow.name === newZh) ok('中文名已落库', newZh);
+      else bad('中文名已落库', `got=${nodeRow.name} want=${newZh}`);
+      if (nodeRow.nameEn === newEn) ok('英文名已落库', newEn);
+      else bad('英文名已落库', `got=${nodeRow.nameEn} want=${newEn}`);
+    }
   } else {
     skip('目录页查到该目录资源', '未成功创建目录');
   }
@@ -497,10 +619,10 @@ try {
           const n = await sql`DELETE FROM resources WHERE id = ${rid}`;
           console.log(`清理：硬删除探针资源 ${rid} → ${n.count} 行`);
         }
-        if (createdFolderCode) {
-          // 兜底：把任何仍指向该目录的行解除归属，避免残留挡住目录删除。
-          const u = await sql`UPDATE resources SET directory_id = NULL WHERE directory_id = (SELECT id FROM directories WHERE code = ${createdFolderCode})`;
-          if (u.count > 0) console.log(`      解除 ${u.count} 行对探针目录的归属`);
+        const allProbeCodes = [createdFolderCode, ...extraFolderCodes.map((f) => f.code)].filter(Boolean);
+        for (const code of allProbeCodes) {
+          const u = await sql`UPDATE resources SET directory_id = NULL WHERE directory_id = (SELECT id FROM directories WHERE code = ${code})`;
+          if (u.count > 0) console.log(`      解除 ${u.count} 行对探针目录 ${code} 的归属`);
         }
         await sql.end();
       } else {
@@ -508,11 +630,13 @@ try {
       }
     }
 
-    if (createdFolderCode) {
-      const del = await c.req('DELETE', `/api/directories/node/${encodeURIComponent(createdFolderCode)}`);
-      console.log(`清理：删除探针目录 ${createdFolderCode} → HTTP ${del.s}`);
+    const codesToDelete = [createdFolderCode, ...extraFolderCodes.map((f) => f.code)].filter(Boolean);
+    // 倒序删：先删子节点再删父节点，否则"必须无子节点才能删"会把父节点挡住。
+    for (const code of codesToDelete.reverse()) {
+      const del = await c.req('DELETE', `/api/directories/node/${encodeURIComponent(code)}`);
+      console.log(`清理：删除探针目录 ${code} → HTTP ${del.s}`);
       if (del.s >= 400) {
-        console.error(`  ⚠️  目录未删除，请手动清理：${createdFolderCode}`);
+        console.error(`  ⚠️  目录未删除，请手动清理：${code}`);
       }
     }
   } catch (e) {

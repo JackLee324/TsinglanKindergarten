@@ -429,6 +429,14 @@ export const translations = {
     'directory.resourcesCount': '显示 {shown} / 共 {total} 条',
     'directory.resourcesEmpty': '该目录（含子目录）下暂时没有资源。',
     'directory.resourcesFailed': '该目录的资源加载失败',
+    'directory.showDisabled': '显示已停用',
+    'directory.disabled': '已停用',
+    'directory.enable': '启用',
+    'directory.disable': '停用',
+    'directory.moveUp': '上移',
+    'directory.moveDown': '下移',
+    'directory.nameEnPlaceholder': '英文名（可选）',
+    'directory.nameEnLabel': '英文名',
 
     // === 账号安全 / 两步验证（§12）===
     'security.title': '账号安全',
@@ -890,6 +898,14 @@ export const translations = {
     'directory.resourcesCount': 'Showing {shown} of {total}',
     'directory.resourcesEmpty': 'No resources in this folder (or its subfolders) yet.',
     'directory.resourcesFailed': 'Failed to load resources for this folder',
+    'directory.showDisabled': 'Show disabled',
+    'directory.disabled': 'Disabled',
+    'directory.enable': 'Enable',
+    'directory.disable': 'Disable',
+    'directory.moveUp': 'Move up',
+    'directory.moveDown': 'Move down',
+    'directory.nameEnPlaceholder': 'English name (optional)',
+    'directory.nameEnLabel': 'English name',
 
     // === Account security / two-factor (§12) ===
     'security.title': 'Account security',

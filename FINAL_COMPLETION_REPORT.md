@@ -74,7 +74,7 @@
   resource-versions     pass=22  fail=0      account-permissions pass=27 fail=0
   storage-s3            pass=22  fail=0      storage-upload   pass=1   fail=0
   browser-e2e           pass=37  fail=0      mfa-web          pass=17  fail=0
-  upload-web            pass=13  fail=0      directory-web    pass=20  fail=0
+  upload-web            pass=13  fail=0      directory-web    pass=31  fail=0
   admin-bootstrap       pass=26  fail=0
   storage-sigv4  未运行（未设置 S3_SIGV4_ENDPOINT）—— 这一项**不算通过**
   business-e2e   未运行（UPLOAD_WEB_EXPECT_STORAGE=off）—— 这一项**不算通过**
@@ -82,7 +82,7 @@
   ✅ 全部通过
 ```
 
-**断言合计：276 单元 + 561 HTTP/浏览器 = 837 项。**
+**断言合计：276 单元 + 572 HTTP/浏览器 = 848 项。**
 
 两条"未运行"是**刻意**的诚实标注：它们的前提（"本进程没有对象存储后端"）
 在本模式下不成立或不适用，所以**明确说没跑**，而不是让它跑出
@@ -98,6 +98,7 @@
   storage-sigv4         pass=16  fail=0      ← §4 的 8 个签名用例
   upload-web            pass=38  fail=0      ← 浏览器上传闭环
   business-e2e          pass=37  fail=0      ← §9 业务全链路，零跳过
+  directory-web         pass=31  fail=0      ← §1 目录九项能力（含排序/启停/中英文名）
   files-http            FAIL                 ← 见下
   naming-http           FAIL                 ← 见下
 ```
@@ -119,7 +120,7 @@
 
 | 位置 | 主题 | 状态 | 关键证据 |
 |---|---|---|---|
-| §1 | 可编辑目录系统 + 目录归属 + 目录下钻 | **完成** | migration `0012`（`resources.directory_id` + `ON DELETE RESTRICT` + 348/348 回填 + 迁移内自检）；新增/改中英文名/新建子目录/排序/启用停用/删除保护/`allowCustomFolders`/权限 scope 全部有接口与界面；**目录名可点开看该目录下资源**（复用 `ResourceCard`，未重做 UI）。浏览器实测 `directory-web` **20/0/0**，含"F5 硬刷新后目录仍在""新增目录无需改代码即出现在上传页""面板里列出归属该目录的资源" |
+| §1 | 可编辑目录系统 + 目录归属 + 目录下钻 + 排序/启停/中英文名 | **完成** | migration `0012`（`resources.directory_id` + `ON DELETE RESTRICT` + 348/348 回填 + 迁移内自检）。九个能力**逐个在界面上点得到**：新建 / 改中英文名（两个输入框）/ 新建子目录 / 排序（上移·下移，F5 后仍在）/ 启用停用（+「显示已停用」开关，停用**不是**单向门）/ 删除保护 / `allowCustomFolders` / 权限 scope / 资源关联；**目录名可点开看该目录下资源**（复用 `ResourceCard`，未重做 UI）。浏览器实测 `directory-web` **31/0/0** |
 | §2 | Pre-K English → `prek_head`；K 中文美育 → `k_head`；不新建 Specialist 角色 | **完成** | `shared/curriculum.ts` 加 `prek:english`、`k:chinese:arts`；`directory-vocabulary.ts` 补映射；角色侧**无需新映射**（`prek_head`/`k_head` 的 scope 是**整个 program**，新科目自动覆盖）。2 条 goldens 已按 §2 更新 |
 | §3 | 权限统一走 AuthorizationService；不得再有 `ROLE_AUTO_PERMISSIONS` / 页面自维护角色权限 / 页面自维护课程数组 | **完成** | 前端：`ROLE_AUTO_PERMISSIONS`、`PREK_SUBJECTS`/`K_SUBJECTS`/`PROGRAMS`、`Layout.tsx` 的 6 个角色数组**全部删除**，改为 `shared/rbac` + `/api/auth/me/permissions`。**服务端本轮又清掉 3 份重复实现**：`checkSubjectPermission`、`hasPermissionInDb`（与 `hasSubjectPermission` 逐行等价）、`buildPermissionCondition` 内的 `subject_permissions` 直查 → 全部收敛到 `AuthorizationService.canAccessSubject / isPlatformAdminAccount / subjectScopeOf / subjectPermissionRowsFor`。`resource.view/create`、`storage.upload`、`review.*` 在权限目录里都是 `dataScoped: true`，受 `scopeSatisfies` 的 (program, subject, subSubject) 约束；目录维度通过 `resolveDirectoryAssignment` 与资源自身的 program/subject **强制对齐**（跨班型/跨科目归属 → 400） |
 | §4 | 用**真校验签名**的后端跑 8 个用例 | **完成** | `scripts/test-s3-sigv4-server.mjs` 从零重算 canonical request → stringToSign → 签名并定长比较；`storage-sigv4` **16/0**，覆盖正确 PUT/GET、错误签名、过期、篡改 key、篡改过期、错 bucket、错凭据。**本轮把应用也指向了这个后端**，于是浏览器上传/下载链路**每一步都在验签** |
@@ -379,7 +380,7 @@ PASS  状态：已绑定且仍为强制  -> {"enabled":true,"recoveryCodesRemain
 
 ## 9. 一句话总结
 
-**代码侧、本机门禁（837 项）、生产上的强制 MFA、对象存储往返、以及本轮新增的
+**代码侧、本机门禁（848 项）、生产上的强制 MFA、对象存储往返、以及本轮新增的
 目录下钻与回收站在生产浏览器里都已实测通过，上线版本也已确认为本次收口的版本；
 但"老师在生产浏览器里点保存草稿、字节真的传到 R2"这一条**实测是失败的**
 （CORS 预检被拒，`PreflightMissingAllowOriginHeader`），而那是上传的唯一路径 ——

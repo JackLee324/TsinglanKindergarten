@@ -46,11 +46,15 @@ export class DirectoriesController {
   async getTree(
     @CurrentTeacherRoles() roles: RoleCode[],
     @CurrentAuthz() authz: EffectivePermissions,
+    @Query('includeDisabled') includeDisabled?: string,
   ): Promise<DirectoryTreeResponse> {
     // 用**生效权限**（含按账号的授予/拒绝）而不是 roles 去算 canManage：
     // 前端据此显示/隐藏"新建文件夹"入口，必须与写接口的真实判定一致。
     const canManage = (authz?.permissions ?? []).includes('curriculum.manage');
-    return this.directoriesService.getTree(roles, canManage);
+    // 只有管理权才允许看到已停用节点。非管理员传了这个参数也拿不到 ——
+    // 否则它会变成"绕过停用"的入口，而停用本身是一种管理动作。
+    const wantsDisabled = includeDisabled === 'true' || includeDisabled === '1';
+    return this.directoriesService.getTree(roles, canManage, wantsDisabled);
   }
 
   /**
