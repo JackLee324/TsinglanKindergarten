@@ -325,6 +325,23 @@ FAIL  浏览器在生产 origin 上直传成功（CORS 预检通过）  -> error
 > 应用不该有能力修改桶策略。要修必须用一个有 R2 管理权限的凭据
 > （Cloudflare 控制台里配，或换一个带 bucket 配置权限的 API Token）。
 
+**怎么修**（推荐用仓库里的脚本，它把「禁止通配符」做成了硬拒绝）：
+
+```bash
+# 1) 只读：看当前策略 + 打印将要应用的 XML（默认 dry-run，不改任何东西）
+S3_ENDPOINT=… S3_BUCKET=… S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… \
+CORS_ALLOWED_ORIGIN=https://tsinglankindergarten.zeabur.app \
+  node scripts/apply-bucket-cors.mjs
+
+# 2) 应用（需要**桶管理权限**的凭据，且必须显式确认）
+… CONFIRM_APPLY_BUCKET_CORS=yes node scripts/apply-bucket-cors.mjs --apply
+```
+
+脚本会：拒绝含 `*` 的 origin（**直接退出 2**，不是警告）、拒绝带路径的 origin、
+应用后**回读校验**服务端实际保存的策略。
+它需要的是有桶配置权限的凭据 —— 应用的运行时凭据跑它只会得到
+`403 AccessDenied`，那是**正确的最小权限**，不要为了省事去放宽应用凭据。
+
 **怎么验有没有修好**（幂等、跑完自查残留）：
 
 ```bash

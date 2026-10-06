@@ -38,7 +38,7 @@
 
 | # | 阻塞项 | 为什么它单独就能挡住上线 | 谁能解 |
 |---|---|---|---|
-| **B-1** | **生产浏览器直传实测失败**（CORS 预检被拒）—— **已在生产上复现并精确定位**，`PreflightMissingAllowOriginHeader` | 这是老师点「保存草稿」时**唯一**的上传路径。现在它**是坏的**：预检返回 403 且**一个 `Access-Control-*` 响应头都没有**，Chromium 直接拦掉请求，而**服务端一行日志都没有**。也就是说，即使代码全对，老师在浏览器里也传不上去 | 一个有 **R2 桶管理权限**的凭据（控制台操作，或带 bucket 配置权限的 API Token）。应用的 S3 凭据**故意**没有这个权限（`GetBucketCors` → 403 AccessDenied），这是正确的最小权限 |
+| **B-1** | **生产浏览器直传实测失败**（CORS 预检被拒）—— **已在生产上复现并精确定位**，`PreflightMissingAllowOriginHeader` | 这是老师点「保存草稿」时**唯一**的上传路径。现在它**是坏的**：预检返回 403 且**一个 `Access-Control-*` 响应头都没有**，Chromium 直接拦掉请求，而**服务端一行日志都没有**。也就是说，即使代码全对，老师在浏览器里也传不上去 | 一个有 **R2 桶管理权限**的凭据（控制台操作，或带 bucket 配置权限的 API Token）。应用的 S3 凭据**故意**没有这个权限（`GetBucketCors` → 403 AccessDenied），这是正确的最小权限。**本轮已把修复做成一条带守卫的命令**：`node scripts/apply-bucket-cors.mjs`（dry-run 先行；含 `*` 的 origin 直接退出 2），见 §7.1 |
 | ~~B-2~~ | ~~生产运行的代码版本 ≠ 本次收口后的代码~~ | **本轮已关闭**：推送后 Zeabur 自动构建并部署（`BUILDING → DEPLOYING → RUNNING`），随后在生产产物里核对了本轮新增的标记（`directory-browse` / `directory-resources` / `recycle-restore` / `/admin/recycle-bin` 各 1 处，`ROLE_AUTO_PERMISSIONS` **0 处**），并用真实浏览器在生产上走通了新界面（见 §7.2） | — |
 
 > B-1 **不是**"我再写点代码就能解决"的：它需要一个对生产 R2 bucket
@@ -71,6 +71,7 @@
   mfa                   pass=55  fail=0      security-headers pass=20  fail=0
   files-http            pass=80  fail=0      naming-http      pass=49  fail=0
   directories           pass=56  fail=0      directories-write pass=31 fail=0
+  curriculum-scope      pass=17  fail=0      ← §2/§3 的**行为**验证
   resource-versions     pass=22  fail=0      account-permissions pass=27 fail=0
   storage-s3            pass=22  fail=0      storage-upload   pass=1   fail=0
   browser-e2e           pass=37  fail=0      mfa-web          pass=17  fail=0
@@ -82,7 +83,7 @@
   ✅ 全部通过
 ```
 
-**断言合计：276 单元 + 572 HTTP/浏览器 = 848 项。**
+**断言合计：280 单元 + 589 HTTP/浏览器 = 869 项。**
 
 两条"未运行"是**刻意**的诚实标注：它们的前提（"本进程没有对象存储后端"）
 在本模式下不成立或不适用，所以**明确说没跑**，而不是让它跑出
@@ -121,12 +122,12 @@
 | 位置 | 主题 | 状态 | 关键证据 |
 |---|---|---|---|
 | §1 | 可编辑目录系统 + 目录归属 + 目录下钻 + 排序/启停/中英文名 | **完成** | migration `0012`（`resources.directory_id` + `ON DELETE RESTRICT` + 348/348 回填 + 迁移内自检）。九个能力**逐个在界面上点得到**：新建 / 改中英文名（两个输入框）/ 新建子目录 / 排序（上移·下移，F5 后仍在）/ 启用停用（+「显示已停用」开关，停用**不是**单向门）/ 删除保护 / `allowCustomFolders` / 权限 scope / 资源关联；**目录名可点开看该目录下资源**（复用 `ResourceCard`，未重做 UI）。浏览器实测 `directory-web` **31/0/0** |
-| §2 | Pre-K English → `prek_head`；K 中文美育 → `k_head`；不新建 Specialist 角色 | **完成** | `shared/curriculum.ts` 加 `prek:english`、`k:chinese:arts`；`directory-vocabulary.ts` 补映射；角色侧**无需新映射**（`prek_head`/`k_head` 的 scope 是**整个 program**，新科目自动覆盖）。2 条 goldens 已按 §2 更新 |
+| §2 | Pre-K English → `prek_head`；K 中文美育 → `k_head`；不新建 Specialist 角色 | **完成（行为实测，不是推理）** | 词汇侧：`shared/curriculum.ts` 加 `prek:english`、`k:chinese:arts`，`directory-vocabulary.ts` 补映射。**归属侧本轮从"推理"改成"测量"**：`curriculum-scope` **17/0/0** —— 让 `prek_head` 真的在 `prek/english` 建资源（201）、`k_head` 真的在 `k/chinese/arts` 建资源（201），并验证**越界被拒**（两边各 403）、对照账号被拒、角色目录里唯一的 specialist 仍是 `pe_specialist` |
 | §3 | 权限统一走 AuthorizationService；不得再有 `ROLE_AUTO_PERMISSIONS` / 页面自维护角色权限 / 页面自维护课程数组 | **完成** | 前端：`ROLE_AUTO_PERMISSIONS`、`PREK_SUBJECTS`/`K_SUBJECTS`/`PROGRAMS`、`Layout.tsx` 的 6 个角色数组**全部删除**，改为 `shared/rbac` + `/api/auth/me/permissions`。**服务端本轮又清掉 3 份重复实现**：`checkSubjectPermission`、`hasPermissionInDb`（与 `hasSubjectPermission` 逐行等价）、`buildPermissionCondition` 内的 `subject_permissions` 直查 → 全部收敛到 `AuthorizationService.canAccessSubject / isPlatformAdminAccount / subjectScopeOf / subjectPermissionRowsFor`。`resource.view/create`、`storage.upload`、`review.*` 在权限目录里都是 `dataScoped: true`，受 `scopeSatisfies` 的 (program, subject, subSubject) 约束；目录维度通过 `resolveDirectoryAssignment` 与资源自身的 program/subject **强制对齐**（跨班型/跨科目归属 → 400） |
 | §4 | 用**真校验签名**的后端跑 8 个用例 | **完成** | `scripts/test-s3-sigv4-server.mjs` 从零重算 canonical request → stringToSign → 签名并定长比较；`storage-sigv4` **16/0**，覆盖正确 PUT/GET、错误签名、过期、篡改 key、篡改过期、错 bucket、错凭据。**本轮把应用也指向了这个后端**，于是浏览器上传/下载链路**每一步都在验签** |
 | §5 | 最小权限 CORS 写入部署文档；禁止 wildcard origin | **文档完成；生产未应用 —— 已实测证明它现在是坏的** | `DEPLOYMENT_PRODUCTION.md` §2.5：origin 钉死 `https://tsinglankindergarten.zeabur.app`、方法限 PUT/GET/HEAD、header 仅 `content-type`、**无通配符**；并在同节写明生产**尚未应用**及其确切症状。实测证据：`scripts/verify-prod-browser-upload.mjs` → 预检 `status=403`、`CORS 响应头={}`、`corsErrorStatus=PreflightMissingAllowOriginHeader` |
 | §6 | 生产 MFA 强制 + 完整引导链 + 收尾清掉引导口令 | **完成（生产实测）** | 见 §4 详述：`MFA_ENFORCE_SUPER_ADMIN=true`、未绑定时业务接口 403、改强密码、enroll/confirm/恢复码、重登第二因子、恢复码一次性；`INITIAL_ADMIN_PASSWORD` 已删除并复验 |
-| §7 | NULL-username 主账号：先查引用，不得直接 DELETE | **完成** | 已按"查引用 → 若无引用则置 `inactive` 并保留记录 → 记证据"处理；`seed-curriculum.mjs` 的 user-owner 账号改为 `inactive` |
+| §7 | NULL-username 主账号：先查引用，不得直接 DELETE | **完成（并已钉成永久不变量）** | 实测：1 行 `username IS NULL` 的 `principal`（`系统初始化`），`status='inactive'`、`password_hash` 为 NULL（结构性不可登录），**`resources.uploader_id` 引用它 346 条**（正是"必须先查引用"的原因）。本轮新增 `tests/null-username-principal.test.mjs` 四条不变量：必须是 `inactive`、不得有可用口令、**数据库必须拒绝删除它**（`ON DELETE NO ACTION` + 真的试删一次必须报外键错）、名下引用不得为 0。独立确认过删除确实被 `resources_uploader_fkey` 拒绝、该行与 346 条归属都还在 |
 | §8 | 报告必须声明"18 项"是位置级重建 | **完成** | 本报告开头第一节 |
 | §9 | 全命令复跑 + 真实浏览器业务 E2E（含编辑刷新/回收站恢复/授权重登/撤销旧 Session） | **完成** | `business-e2e` **37/0/0（零跳过）**。回收站已从 API 级升为**真实点击**级：侧边栏「管理后台 → 回收站」→ 该行「恢复」→ 确认；并用"界面点完后二次调接口应被 404 拒绝"**反证**界面那一跳确实生效 |
 | §10 | 真正执行 `docker compose config/build/up -d/ps/logs/restart/down/up -d` | **完成（本轮翻案）** | 八个子命令**全部 exit=0**，两容器 `healthy`，并在**容器内**验证 `/api/health`、`/api/health/ready`、SPA + 静态资源、`schema_migrations=12`、真实登录 201 + `mustChangePassword` 把业务接口挡在 403 |
@@ -278,15 +279,30 @@ docs: 部署手册 §0/§2 重写 + 两份生产验证脚本（§5/§6）
 loadingFailed corsErrorStatus = {"corsError":"PreflightMissingAllowOriginHeader"}
 ```
 
-**第二步：用有 R2 桶管理权限的凭据配置策略**
-
-按 `DEPLOYMENT_PRODUCTION.md` §2.5 的 XML（origin 钉死生产域名、
-方法仅 PUT/GET/HEAD、header 仅 `content-type`、**禁止通配符**）在
-Cloudflare 控制台配置，或换一个带 bucket 配置权限的 API Token 后：
+**第二步：用有 R2 桶管理权限的凭据应用策略（本轮已做成一条命令）**
 
 ```bash
-# 只读地看一眼当前策略（需要桶管理权限；应用的凭据会得到 403，那是对的）
+# 1) 只读：看当前策略 + 打印将要应用的 XML（默认 dry-run，不改任何东西）
+S3_ENDPOINT=… S3_BUCKET=… S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… \
+CORS_ALLOWED_ORIGIN=https://tsinglankindergarten.zeabur.app \
+  node scripts/apply-bucket-cors.mjs
+
+# 2) 应用（需要桶管理权限，且必须显式确认）
+… CONFIRM_APPLY_BUCKET_CORS=yes node scripts/apply-bucket-cors.mjs --apply
 ```
+
+`scripts/apply-bucket-cors.mjs` 把 §5 的要求做成了**代码而不是文档**：
+
+| 守卫 | 行为 | 实测 |
+|---|---|---|
+| origin 含 `*` | **直接退出 2**，不是警告 | exit=2 ✓ |
+| origin 带路径 | 退出 2（预检里永远匹配不上） | exit=2 ✓ |
+| `--apply` 未确认 | 退出 2 | exit=2 ✓ |
+| 应用后 | **回读校验**服务端实际保存的策略 | 读不到就 exit 1 |
+| 网络不可达 | 干净一行说明 + exit 1（不抛栈） | exit=1 ✓ |
+
+也可在 Cloudflare 控制台按 `DEPLOYMENT_PRODUCTION.md` §2.5 的 XML 手动配置
+（同一份内容；改一处要改另一处）。
 
 **第三步：重跑同一条命令确认修好（幂等，跑完自查残留 0）**
 
@@ -385,7 +401,7 @@ PASS  状态：已绑定且仍为强制  -> {"enabled":true,"recoveryCodesRemain
 
 ## 9. 一句话总结
 
-**代码侧、本机门禁（848 项）、生产上的强制 MFA、对象存储往返、以及本轮新增的
+**代码侧、本机门禁（869 项）、生产上的强制 MFA、对象存储往返、以及本轮新增的
 目录下钻与回收站在生产浏览器里都已实测通过，上线版本也已确认为本次收口的版本；
 但"老师在生产浏览器里点保存草稿、字节真的传到 R2"这一条**实测是失败的**
 （CORS 预检被拒，`PreflightMissingAllowOriginHeader`），而那是上传的唯一路径 ——

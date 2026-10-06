@@ -203,6 +203,12 @@ run "directories-write"   node scripts/verify-directories-write.mjs
 # 资源版本生命周期（§15）：新建/编辑是否真的产生版本、无实质变化是否**不**产生版本、
 # 以及迁移回填是否覆盖了每一个既有资源。
 run "resource-versions"   node scripts/verify-resource-versions.mjs
+# §2/§3 的**行为**验证（不是结构断言）：让 prek_head / k_head 真的去动
+# 「Pre-K English」「K Chinese Arts」，并验证越界被拒、?directory= 不是越权入口。
+# 此前 §2 只有"树里有这个节点 + 角色 scope 覆盖整个班型"这两条证据，
+# 后者是**推理**：一旦某个 head 的范围被写成逐科目白名单，新科目会落到无人可见，
+# 而结构断言照样全绿。所以这里改成测量。
+run "curriculum-scope"  node scripts/verify-curriculum-scope.mjs
 # §11 按账号授权（追加/禁止/清除覆盖）+ `role.assign` 的**行为**验证 ——
 # 构造"有 account.update、无 role.assign"的账号，真的去改角色，看它是否被挡住。
 run "account-permissions" node scripts/verify-account-permissions.mjs

@@ -2049,3 +2049,110 @@ INITIAL_ADMIN_PASSWORD 0                   cloudflarestorage.com 0
 
 以及最近 6 个提交的 diff 里没有任何密钥形状的字符串。
 生产凭据只在 `credentials/`（gitignored、mode 600）。
+
+### 第 14 轮追加：§2 从**推理**改成**测量**；§7 钉成永久不变量
+
+这一轮不是加功能，是**把两处"其实是推断"的证据补成实测**。
+
+#### 14.1 §2 的旧证据不够（这是我自己之前的疏漏）
+
+§2 要求「Pre-K English → prek_head；K Chinese Arts → k_head」。此前支撑它的只有两类证据：
+
+1. **结构**：目录树里确实有 `prek:english` / `k:chinese:arts`，`subject` token 正确
+   （`verify-directories.mjs` 用一个管理员账号查的）；
+2. **推理**：`prek_head` 的角色 scope 是**整个 prek 班型**，`k_head` 是整个 k，
+   所以新科目"自动被覆盖"。
+
+第 2 条是推理。推理错在权限系统里后果很重：如果某个 head 的范围哪天真被写成
+**逐科目白名单**，新科目就会落到**无人能动**，而上面那两条结构断言**照样全绿** ——
+节点在树里、token 也对，只是没有任何角色能碰它。
+"看起来验证过"和"验证过"的差别，就在这种地方。
+
+#### 14.2 新增 `scripts/verify-curriculum-scope.mjs`：让两个 head 真的去动那两个科目
+
+用 `reset-fixtures` 造三个探针账号（`prek_head` / `k_head` / `prek_assistant`），
+**同一套动作分别跑**：
+
+```
+PASS  三个角色账号登录成功（探针账号，跑完删除）
+PASS  prek_head 持有 resource.create / storage.upload / resource.view  -> 9 项
+PASS  k_head 持有 resource.create / storage.upload / resource.view  -> 9 项
+PASS  对照账号 prek_assistant：有 view、无 create（拒绝分支的对照）
+PASS  prek_head 的树里有 prek:english
+PASS  k_head 的树里有 k:chinese:arts
+PASS  prek_head 在 prek/english 建资源 → 201（§2 归属成立）
+PASS  k_head 在 k/chinese/arts 建资源 → 201（§2 归属成立）
+PASS  prek_head 在 k/chinese/arts 建资源被拒 → 403
+PASS  k_head 在 prek/english 建资源被拒 → 403
+PASS  prek_assistant 建资源被拒 → 403（对照：拒绝来自权限，不是 scope 巧合）
+PASS  prek_head 对自己的资源取直传地址 → 503（授权已通过，仅未配存储）
+PASS  prek_head 对 k 科目资源取直传地址被拒（403/404）
+PASS  prek_head 按 prek:english 查资源 → 200
+PASS  k_head 用 prek:english 作为目录过滤拿不到任何 prek 资源
+PASS  角色目录里唯一的 specialist 仍是 pe_specialist（未新增 Specialist 角色）
+PASS  没有为 prek:english / k:chinese:arts 引入任何专属角色
+=== RESULT ===  pass=17 fail=0 skipped=0
+```
+
+三个设计要点，都是为了避免"假绿"：
+
+* **越界必须被拒**。"能建"只证明了一半；如果 prek_head 在 k 上也能建，
+  那不是"归属正确"，而是"所有人都有权" —— 同样不满足要求。
+* **`403` 与 `503` 必须分开看**。本套件跑在未配存储的进程上，
+  取直传地址会得到 503（授权已通过、只是后端没配）。若把 503 当成"通过"，
+  一条真实的越权也会被一起算成通过 —— 所以自己的资源期望 2xx/503，
+  **越界资源只接受 403/404**。
+* **有对照组**。`prek_assistant` 有 `resource.view` 但没有 `resource.create`，
+  它的 403 说明"拒绝来自权限判定"，而不是"这个账号碰巧什么都做不了"。
+
+套件已接进门禁（`run "curriculum-scope"`），不再是一次性探针。
+
+#### 14.3 §7 的证据本来就扎实，但它是**死文本**
+
+复查了 §7（`username IS NULL` 的 principal），台账里的记录是**准确**的，
+我重新实测逐项吻合：
+
+```
+username IS NULL 的行数: 1
+  {"name":"系统初始化","roles":["principal"],"status":"inactive","username":null}
+resources.uploader_id 引用它: 346 条      ← 台账里写的就是 346
+password_hash: NULL（结构性不可登录）
+未删除资源总数: 349
+```
+
+也就是说：**它挂着 346 条资源的归属**。当初如果"顺手 DELETE 一下这条脏数据"，
+按外键语义会被拒；但如果有人把外键改成 `CASCADE`，那 346 条会**一起消失**，
+而且没有任何报错。台账是死文本，拦不住这件事。
+
+所以新增 `tests/null-username-principal.test.mjs`，把 §7 钉成**四条永久不变量**：
+
+1. 任何 `username IS NULL` 的账号必须是 `inactive`（既不是 active 的影子账号，也不能被删掉）；
+2. 它们**没有任何可用口令**（`password_hash IS NULL`）—— 结构性不可登录；
+3. **数据库自己拒绝删除它**：`resources.uploader_id` 必须是 `ON DELETE NO ACTION`，
+   且真的试删一次必须报外键错误（在事务里试、回滚，无副作用）；
+4. 名下资源引用数 > 0 —— 归属没有被切断。
+
+独立确认过第 3 条不是空断言（绕过测试直接删）：
+
+```
+✅ 被拒绝: update or delete on table "teachers" violates
+          foreign key constraint "resources_uploader_fkey" ...
+删除尝试后该行仍在: true
+归属资源仍为: 346
+```
+
+#### 14.4 §5 的修复路径做成了**一条带守卫的命令**
+
+B-1（生产浏览器直传失败）需要**桶管理权限**才能修，而应用的 S3 凭据故意没有
+（`GetBucketCors` → 403 AccessDenied，这是正确的最小权限）。
+为了让这一步对运维是"一条命令而不是一段文档"，新增 `scripts/apply-bucket-cors.mjs`：
+
+* **默认 dry-run**：只读取现状 + 打印将要应用的 XML，不改任何东西；
+* **含 `*` 的 origin 直接退出 2**（不是警告）—— 这就是 §5「禁止 wildcard origin」
+  的**代码化**：写在脚本里就不可能被"临时放一下"绕过；
+* 带路径的 origin 也拒绝（预检里永远匹配不上）；
+* `--apply` 必须同时设 `CONFIRM_APPLY_BUCKET_CORS=yes`；
+* 应用后**回读校验**服务端实际保存的策略，而不是"我以为写进去了"。
+
+三条守卫都实测过退出码（2 / 2 / 2），网络不可达时给干净的一行 + 退出 1，
+不再抛栈。策略内容与 `DEPLOYMENT_PRODUCTION.md` §2.5 是同一份，部署文档已加上调用示例。

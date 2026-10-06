@@ -107,6 +107,14 @@ export const ACCOUNT_ROLES = {
   /** An ordinary teaching account: the legitimate reset TARGET for a principal. */
   head: ['prek_head'],
   /**
+   * K 主教。§2 要求「K Chinese Arts → k_head」，而验证"归属正确"的唯一办法
+   * 是**让他真的去动那个科目**：能建、能上传；同时不能越到 prek 去。
+   * 只断言"目录树里有这个 token"是结构性的，证明不了归属。
+   */
+  khead: ['k_head'],
+  /** 只读配班：用来做"有 resource.view 但没有 resource.create"的对照。 */
+  readonly: ['prek_assistant'],
+  /**
    * A system super administrator. Created directly (there is no BEFORE INSERT
    * trigger on `teachers`, only BEFORE UPDATE/DELETE, so `ensureKeeper()` is what
    * makes this reversible). Suites that only need it as a TARGET never log into
