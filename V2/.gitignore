@@ -1,0 +1,30 @@
+# ---- 依赖与构建产物 ----
+node_modules/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+
+# ---- 环境与密钥（绝不进 Git）----
+.env
+.env.*
+!.env.example
+credentials/
+secrets/
+*.pem
+*.key
+
+# ---- 本地数据与备份（绝不进 Git）----
+.devdata/
+backups/
+*.ndjson
+*.dump
+*.sql.gz
+storage-local/
+
+# ---- 测试与探针产物 ----
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+*.log
