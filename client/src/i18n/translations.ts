@@ -30,6 +30,7 @@ export const translations = {
     'nav.admin': '管理后台',
     'nav.admin.teachers': '教师管理',
     'nav.admin.permissions': '权限管理',
+    'nav.admin.recycleBin': '回收站',
     'nav.admin.audit': '审计日志',
     'nav.changePassword': '修改密码',
 
@@ -61,6 +62,7 @@ export const translations = {
     'common.success': '操作成功',
     'common.failed': '操作失败',
     'common.confirmDelete': '确认删除？',
+    'common.close': '关闭',
     'common.total': '共',
     'common.items': '条',
     'common.page': '第',
@@ -421,6 +423,12 @@ export const translations = {
     'directory.namePlaceholder': '文件夹名称',
     'directory.nameRequired': '文件夹名称不能为空',
     'directory.confirmDelete': '确认删除自建文件夹「{name}」？',
+    'directory.browseHint': '点击目录名可查看该目录下的资源',
+    'directory.resourcesTitle': '「{name}」下的资源',
+    'directory.resourcesSubtreeNote': '包含该目录及其所有子目录中的资源。',
+    'directory.resourcesCount': '显示 {shown} / 共 {total} 条',
+    'directory.resourcesEmpty': '该目录（含子目录）下暂时没有资源。',
+    'directory.resourcesFailed': '该目录的资源加载失败',
 
     // === 账号安全 / 两步验证（§12）===
     'security.title': '账号安全',
@@ -483,6 +491,7 @@ export const translations = {
     'nav.admin': 'Administration',
     'nav.admin.teachers': 'Teachers',
     'nav.admin.permissions': 'Permissions',
+    'nav.admin.recycleBin': 'Recycle Bin',
     'nav.admin.audit': 'Audit Logs',
     'nav.changePassword': 'Change Password',
 
@@ -514,6 +523,7 @@ export const translations = {
     'common.success': 'Success',
     'common.failed': 'Failed',
     'common.confirmDelete': 'Confirm delete?',
+    'common.close': 'Close',
     'common.total': 'Total',
     'common.items': 'items',
     'common.page': 'Page',
@@ -874,6 +884,12 @@ export const translations = {
     'directory.namePlaceholder': 'Folder name',
     'directory.nameRequired': 'Folder name cannot be empty',
     'directory.confirmDelete': 'Delete the folder “{name}”?',
+    'directory.browseHint': 'Click a folder name to see the resources in it',
+    'directory.resourcesTitle': 'Resources in “{name}”',
+    'directory.resourcesSubtreeNote': 'Includes resources in this folder and all of its subfolders.',
+    'directory.resourcesCount': 'Showing {shown} of {total}',
+    'directory.resourcesEmpty': 'No resources in this folder (or its subfolders) yet.',
+    'directory.resourcesFailed': 'Failed to load resources for this folder',
 
     // === Account security / two-factor (§12) ===
     'security.title': 'Account security',

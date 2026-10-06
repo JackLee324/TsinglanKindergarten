@@ -17,6 +17,7 @@ import ReviewPage from './pages/Review/ReviewPage';
 import TeacherAdminPage from './pages/TeacherAdmin/TeacherAdminPage';
 import PermissionAdminPage from './pages/PermissionAdmin/PermissionAdminPage';
 import AuditLogPage from './pages/AuditLog/AuditLogPage';
+import RecycleBinPage from './pages/RecycleBin/RecycleBinPage';
 import LoginPage from './pages/Login/LoginPage';
 import UnauthorizedPage from './pages/Unauthorized/UnauthorizedPage';
 import ChangePasswordPage from './pages/ChangePassword/ChangePasswordPage';
@@ -124,6 +125,16 @@ const RoutesComponent = () => {
                 element={
                   <ProtectedRoute requiredRoles={ADMIN_ROLES}>
                     <PermissionAdminPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="admin/recycle-bin"
+                element={
+                  // 用**服务端同一个权限码**守卫（该路由服务端要求 resource.restore）。
+                  // 不再写角色数组：角色数组是第二份真相，与服务端分叉时不会报错。
+                  <ProtectedRoute requiredPermission="resource.restore">
+                    <RecycleBinPage />
                   </ProtectedRoute>
                 }
               />

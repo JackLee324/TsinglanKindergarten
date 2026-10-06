@@ -11,10 +11,11 @@ import {
   X,
 } from 'lucide-react';
 
-import { directories as directoriesApi } from '../../api';
+import { directories as directoriesApi, resources as resourcesApi } from '../../api';
 import { useTranslation } from '../../i18n/useTranslation';
 import type { TranslationKey } from '../../i18n/translations';
-import type { DirectoryNode, DirectoryTreeResponse } from '@shared/api.interface';
+import { ResourceCard } from '../../components/resource-card';
+import type { DirectoryNode, DirectoryTreeResponse, Resource } from '@shared/api.interface';
 
 /**
  * 目录页（§1/§2/§20/§24/§25/§26）—— PDF《教师平台》权威目录树的渲染器。
@@ -35,6 +36,12 @@ export default function DirectoryPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /**
+   * 当前**选中**的目录节点（§1：目录页要能查到该目录下的资源）。
+   * 存整节而不是只存 code：面板标题要显示名字，只存 code 就得再遍历一次树，
+   * 而且刷新后名字变了会对不上。
+   */
+  const [selected, setSelected] = useState<DirectoryNode | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -178,6 +185,9 @@ export default function DirectoryPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-[#2D2A3E]">{t('directory.title')}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('directory.subtitle')}</p>
+        <p className="mt-1 text-sm text-[#6B6878]" data-testid="directory-browse-hint">
+          {t('directory.browseHint')}
+        </p>
         <p className="mt-2 text-sm text-[#6B6878]">
           {t('directory.summary')
             .replace('{nodes}', String(totalNodes))
@@ -222,6 +232,7 @@ export default function DirectoryPage() {
             label={label}
             t={t}
             canManage={tree.canManage}
+            onSelect={setSelected}
             editing={editing}
             draftName={draftName}
             busy={busy}
@@ -245,12 +256,136 @@ export default function DirectoryPage() {
           />
         ))}
       </div>
+
+      {/*
+        §1「目录页能查到该目录下资源」。
+        用目录页**已有**的卡片组件渲染（ResourceCard），不另造一套列表 UI ——
+        整站 UI 不重做是明确要求。
+      */}
+      {selected && (
+        <DirectoryResourcesPanel
+          node={selected}
+          label={label(selected)}
+          onClose={() => setSelected(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * 某个目录下的资源列表。
+ *
+ * 口径说明（容易误解，所以写在代码里）：
+ *   服务端 `?directory=` 过滤的是**子树**，不只是这一个节点 —— 选「蒙特梭利」
+ *   会看到它下面四个资料夹的全部资源。面板上明确写出这一点，否则用户会以为
+ *   数字对不上（父节点 0 条、点开却有 20 条）。
+ */
+function DirectoryResourcesPanel({
+  node,
+  label,
+  onClose,
+}: {
+  node: DirectoryNode;
+  label: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [items, setItems] = useState<Resource[]>([]);
+  const [total, setTotal] = useState<number>(0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void (async () => {
+      try {
+        const resp = await resourcesApi.getResources({ directory: node.code, pageSize: 24 });
+        if (cancelled) return;
+        setItems(resp.items ?? []);
+        setTotal(resp.total ?? 0);
+      } catch (err) {
+        if (cancelled) return;
+        // 失败就说失败。把 403/500 渲染成"暂无数据"正是这一轮要消灭的误导。
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [node.code]);
+
+  return (
+    <section
+      className="mt-6 rounded-xl border border-[#E8E4F0] bg-white p-6 shadow-sm"
+      data-testid="directory-resources"
+      data-dir-resources={node.code}
+    >
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-[#2D2A3E]">
+            {t('directory.resourcesTitle').replace('{name}', label)}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t('directory.resourcesSubtreeNote')}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          data-testid="directory-resources-close"
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg text-[#6B6878] hover:bg-[#FAF8FF]"
+          aria-label={t('common.close')}
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      {loading && (
+        <div className="flex items-center gap-2 py-6 text-muted-foreground">
+          <Loader2 className="size-5 animate-spin text-primary" />
+          <span className="text-sm">{t('common.loading')}</span>
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="rounded-lg border border-[#D98B8B] bg-[#FFF7F7] p-4" data-testid="directory-resources-error">
+          <p className="text-sm text-[#2D2A3E]">{t('directory.resourcesFailed')}</p>
+          <p className="mt-1 break-all text-xs text-muted-foreground">{error}</p>
+        </div>
+      )}
+
+      {!loading && !error && total === 0 && (
+        <p className="py-6 text-sm text-muted-foreground" data-testid="directory-resources-empty">
+          {t('directory.resourcesEmpty')}
+        </p>
+      )}
+
+      {!loading && !error && total > 0 && (
+        <>
+          <p className="mb-3 text-sm text-[#6B6878]">
+            {t('directory.resourcesCount')
+              .replace('{shown}', String(items.length))
+              .replace('{total}', String(total))}
+          </p>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {items.map((r) => (
+              <ResourceCard key={r.id} resource={r} />
+            ))}
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
 interface TreeNodeActions {
   canManage: boolean;
+  onSelect: (node: DirectoryNode) => void;
   editing: { mode: 'create' | 'rename'; code: string } | null;
   draftName: string;
   busy: boolean;
@@ -319,17 +454,28 @@ function TreeNode({
           <span className="size-5 shrink-0" />
         )}
 
-        <span
-          className={
-            isRoot
-              ? 'text-xl font-semibold text-[#2D2A3E]'
-              : node.type === 'program' || node.type === 'subject' || node.type === 'growth_level'
+        {/*
+          目录名本身是**按钮**：§1 要求"目录页能查到该目录下资源"，所以要有一个
+          明确的、可点的入口。根节点不可点（根下面就是班型，列资源没有意义）。
+        */}
+        {isRoot ? (
+          <span className="text-xl font-semibold text-[#2D2A3E]">{label(node)}</span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => actions.onSelect(node)}
+            data-testid="directory-browse"
+            data-dir-browse={node.code}
+            className={
+              'rounded text-left hover:underline ' +
+              (node.type === 'program' || node.type === 'subject' || node.type === 'growth_level'
                 ? 'text-lg font-semibold text-[#2D2A3E]'
-                : 'text-base text-[#2D2A3E]'
-          }
-        >
-          {label(node)}
-        </span>
+                : 'text-base text-[#2D2A3E]')
+            }
+          >
+            {label(node)}
+          </button>
+        )}
 
         {/* 「允许自建文件夹」是 PDF 的明确标注，必须在页面上看得见 */}
         {node.allowCustomFolders && (

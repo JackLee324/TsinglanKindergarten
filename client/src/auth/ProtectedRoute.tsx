@@ -9,14 +9,24 @@ import { useAuth } from './useAuth';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
+  /** @deprecated 优先用 `requiredPermission`：角色数组是第二份真相。 */
   requiredRoles?: RoleCode[];
+  /**
+   * 需要的**能力**，与服务端 `@RequirePermission('…')` 同一套权限码。
+   *
+   * 服务端每个路由都声明了自己要什么能力；客户端守卫照同一套判断即可，
+   * 不必再维护"哪些角色能进哪个页面"的映射 —— 那种映射一旦与服务端分叉，
+   * 既不会报错也不会被测试发现。
+   */
+  requiredPermission?: string;
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   children,
   requiredRoles = [],
+  requiredPermission,
 }) => {
-  const { user, loading } = useAuth();
+  const { user, loading, hasPermission, permissionsLoading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -47,6 +57,24 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   // doing a bare intersection made a super_admin-only account — the account a
   // fresh deployment gets — land on 「无权访问」 for every route, while the API
   // returned 200 for the same user. See `hasAnyRole` in shared/rbac.ts.
+  // 能力守卫：与服务端同一权限码。
+  //
+  // ⚠️ 权限还没加载完时**不能**判"没有" —— 那是把"还没到"当成"没有"，
+  //    表现为刷新页面时闪一下「无权访问」。`permissions` 为空且仍在加载时先等着。
+  if (requiredPermission !== undefined && !hasPermission(requiredPermission)) {
+    // "还没有" 与 "确实没有" 必须分开：权限是**另一个请求**拉回来的，
+    // 在这个窗口里 permissions 是空数组 —— 直接判"无权限"会让刷新页面时
+    // 必然闪一下「无权访问」（实测：有 resource.restore 的账号也照样被跳走）。
+    if (loading || permissionsLoading) {
+      return (
+        <div className="flex h-screen w-full items-center justify-center bg-background">
+          <Spinner className="size-8" />
+        </div>
+      );
+    }
+    return <Navigate to="/unauthorized" replace />;
+  }
+
   if (!hasAnyRole(user.roles, requiredRoles)) {
     return <Navigate to="/unauthorized" replace />;
   }

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -29,45 +29,40 @@ import { LanguageToggle } from '@client/src/i18n/LanguageToggle';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import { useIsMobile } from '@client/src/hooks/use-mobile';
 import { useAuth } from '@client/src/auth/useAuth';
-import type { RoleCode } from '@shared/api.interface';
+import type { ProgramCode } from '@shared/api.interface';
+// 单一真相：班型/科目可见性直接问 shared/rbac.ts，页面不再维护角色数组。
+import { programsVisibleForStructure, roleScopeCovers, roleSubjectScope } from '@shared/rbac';
 
-const UPLOAD_ROLES: RoleCode[] = [
-  'principal',
-  'curriculum_director',
-  'prek_head',
-  'k_head',
-  'pe_specialist',
-];
-
-const REVIEW_ROLES: RoleCode[] = ['principal', 'curriculum_director'];
-const ADMIN_ROLES: RoleCode[] = ['principal'];
-const PREK_ROLES: RoleCode[] = [
-  'principal',
-  'curriculum_director',
-  'prek_head',
-  'prek_assistant',
-  'pe_specialist',
-];
-const K_ROLES: RoleCode[] = [
-  'principal',
-  'curriculum_director',
-  'k_head',
-  'k_assistant',
-  'pe_specialist',
-];
-const PE_ONLY_ROLES: RoleCode[] = ['pe_specialist'];
-
+/**
+ * 导航项按**能力**声明可见性，而不是按角色字面量。
+ *
+ * 以前这里有 6 张手写的角色数组（UPLOAD_ROLES / REVIEW_ROLES / ADMIN_ROLES /
+ * PREK_ROLES / K_ROLES / PE_ONLY_ROLES）。它们是**第二份真相**：服务端已经用
+ * `@RequirePermission('…')` 声明了每个路由要什么能力，`shared/rbac.ts` 也已经
+ * 定义了"哪个角色能看哪个班型/科目"。界面再抄一份，只会与它们悄悄分叉 ——
+ * 而且这类分叉既不报错、也不被现有测试发现。
+ *
+ * 现在三种声明方式，全部指向单一真相：
+ *   · `permission`  —— 服务端同一个权限码（capability）
+ *   · `program`     —— 班型结构可见性（programsVisibleForStructure）
+ *   · `subject`     —— 科目访问范围（roleSubjectScope / roleScopeCovers）
+ */
 interface MenuItem {
   path: string;
   labelKey: string;
   icon?: React.ReactNode;
   children?: MenuItem[];
-  roles?: RoleCode[];
+  /** 服务端同一套权限码；例：`resource.create`、`review.view`、`account.view`。 */
+  permission?: string;
+  /** 只看"这个班型的结构"（不含科目数据权限）——与 shared/rbac 的判定一致。 */
+  program?: ProgramCode;
+  /** 需要对该班型下的这个科目有访问范围。 */
+  subject?: { program: ProgramCode; subject: string };
 }
 
 const Layout: React.FC = () => {
   const { t } = useTranslation();
-  const { user, logout, hasRole } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(!isMobile);
@@ -82,17 +77,32 @@ const Layout: React.FC = () => {
     setExpanded((prev: Record<string, boolean>) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const hasAnyRole = (roles: RoleCode[] | undefined): boolean => {
-    if (!roles || roles.length === 0) return true;
-    return hasRole(roles);
-  };
+  /**
+   * 一个导航项是否可见 —— 全部问单一真相，页面不再持有角色字面量。
+   */
+  const isItemVisible = useCallback(
+    (item: MenuItem): boolean => {
+      const roles = user?.roles ?? [];
+      // 能力：与服务端同权限码
+      if (item.permission && !hasPermission(item.permission)) return false;
+      // 班型结构可见性：与 shared/rbac 的 programsVisibleForStructure 一致
+      if (item.program && !programsVisibleForStructure(roles).includes(item.program)) return false;
+      // 科目访问范围：与 roleSubjectScope / roleScopeCovers 一致
+      if (item.subject) {
+        const scope = roleSubjectScope(roles);
+        if (!roleScopeCovers(scope, item.subject.program, item.subject.subject)) return false;
+      }
+      return true;
+    },
+    [user, hasPermission],
+  );
 
-  const filterMenuByRoles = (items: MenuItem[]): MenuItem[] => {
+  const filterMenu = (items: MenuItem[]): MenuItem[] => {
     return items
-      .filter((item: MenuItem) => hasAnyRole(item.roles))
+      .filter(isItemVisible)
       .map((item: MenuItem) => {
         if (item.children && item.children.length > 0) {
-          const filteredChildren = filterMenuByRoles(item.children);
+          const filteredChildren = filterMenu(item.children);
           if (filteredChildren.length === 0) return null;
           return { ...item, children: filteredChildren };
         }
@@ -116,7 +126,7 @@ const Layout: React.FC = () => {
 
   const displayName = user?.name || user?.username || '';
 
-  const roleLabels = user?.roles?.map((r: RoleCode) =>
+  const roleLabels = user?.roles?.map((r) =>
     t(`role.${r}` as Parameters<typeof t>[0]),
   ) || [];
 
@@ -126,30 +136,30 @@ const Layout: React.FC = () => {
       path: '/prek',
       labelKey: 'nav.prek',
       icon: <BookOpen className="size-5" />,
-      roles: PREK_ROLES,
+      program: 'prek',
       children: [
-        { path: '/prek/virtue', labelKey: 'nav.virtue', roles: PREK_ROLES.filter((r) => !PE_ONLY_ROLES.includes(r)) },
-        { path: '/prek/montessori', labelKey: 'nav.montessori', roles: PREK_ROLES.filter((r) => !PE_ONLY_ROLES.includes(r)) },
-        { path: '/prek/pe', labelKey: 'nav.pe', roles: PREK_ROLES },
+        { path: '/prek/virtue', labelKey: 'nav.virtue', subject: { program: 'prek', subject: 'virtue' } },
+        { path: '/prek/montessori', labelKey: 'nav.montessori', subject: { program: 'prek', subject: 'montessori' } },
+        { path: '/prek/pe', labelKey: 'nav.pe', subject: { program: 'prek', subject: 'physical_education' } },
       ],
     },
     {
       path: '/k',
       labelKey: 'nav.k',
       icon: <BookOpen className="size-5" />,
-      roles: K_ROLES,
+      program: 'k',
       children: [
-        { path: '/k/virtue', labelKey: 'nav.virtue', roles: K_ROLES.filter((r) => !PE_ONLY_ROLES.includes(r)) },
-        { path: '/k/chinese', labelKey: 'nav.chinese', roles: K_ROLES.filter((r) => !PE_ONLY_ROLES.includes(r)) },
-        { path: '/k/english', labelKey: 'nav.english', roles: K_ROLES.filter((r) => !PE_ONLY_ROLES.includes(r)) },
-        { path: '/k/pe', labelKey: 'nav.pe', roles: K_ROLES },
+        { path: '/k/virtue', labelKey: 'nav.virtue', subject: { program: 'k', subject: 'virtue' } },
+        { path: '/k/chinese', labelKey: 'nav.chinese', subject: { program: 'k', subject: 'chinese' } },
+        { path: '/k/english', labelKey: 'nav.english', subject: { program: 'k', subject: 'english' } },
+        { path: '/k/pe', labelKey: 'nav.pe', subject: { program: 'k', subject: 'physical_education' } },
       ],
     },
     {
       path: '/upload',
       labelKey: 'nav.upload',
       icon: <Upload className="size-5" />,
-      roles: UPLOAD_ROLES,
+      permission: 'resource.create',
     },
     {
       path: '/my-resources',
@@ -173,22 +183,24 @@ const Layout: React.FC = () => {
       path: '/review',
       labelKey: 'nav.review',
       icon: <ClipboardCheck className="size-5" />,
-      roles: REVIEW_ROLES,
+      permission: 'review.view',
     },
     {
       path: '/admin',
       labelKey: 'nav.admin',
       icon: <Settings className="size-5" />,
-      roles: ADMIN_ROLES,
+      permission: 'account.view',
       children: [
-        { path: '/admin/teachers', labelKey: 'nav.admin.teachers' },
-        { path: '/admin/permissions', labelKey: 'nav.admin.permissions' },
-        { path: '/admin/audit', labelKey: 'nav.admin.audit' },
+        { path: '/admin/teachers', labelKey: 'nav.admin.teachers', permission: 'account.view' },
+        { path: '/admin/permissions', labelKey: 'nav.admin.permissions', permission: 'permission.view' },
+        { path: '/admin/audit', labelKey: 'nav.admin.audit', permission: 'audit.view' },
+        // §回收站：唯一入口，按服务端同一权限码 resource.restore 显示。
+        { path: '/admin/recycle-bin', labelKey: 'nav.admin.recycleBin', permission: 'resource.restore' },
       ],
     },
   ];
 
-  const visibleMenuItems = filterMenuByRoles(menuItems);
+  const visibleMenuItems = filterMenu(menuItems);
 
   const renderMenuItem = (item: MenuItem, depth = 0): React.ReactNode => {
     const hasChildren = item.children && item.children.length > 0;
@@ -199,6 +211,9 @@ const Layout: React.FC = () => {
         <div key={item.path} className="mb-1">
           <button
             onClick={() => toggleExpanded(item.path.replace('/', ''))}
+            data-testid="nav-group-toggle"
+            data-nav={item.path}
+            aria-expanded={isExpanded}
             className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm text-white/90 transition-colors hover:bg-white/10 hover:text-white"
           >
             <span className="flex items-center gap-3">
@@ -217,6 +232,8 @@ const Layout: React.FC = () => {
                 <NavLink
                   key={child.path}
                   to={child.path}
+                  data-testid="nav-link"
+                  data-nav={child.path}
                   onClick={() => {
                     if (isMobile) setSidebarOpen(false);
                   }}
@@ -242,6 +259,8 @@ const Layout: React.FC = () => {
         key={item.path}
         to={item.path}
         end={item.path === '/'}
+        data-testid="nav-link"
+        data-nav={item.path}
         onClick={() => {
           if (isMobile) setSidebarOpen(false);
         }}

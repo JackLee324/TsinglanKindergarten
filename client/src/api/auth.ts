@@ -1,11 +1,5 @@
-import type {
-  AuthUser,
-  LoginRequest,
-  ChangePasswordRequest,
-  ResetPasswordRequest,
-  ResetPasswordResponse,
-  AuthConfigResponse,
-} from '@shared/api.interface';
+import type { AuthConfigResponse, AuthUser, ChangePasswordRequest, LoginRequest, ResetPasswordRequest, ResetPasswordResponse } from '@shared/api.interface';
+import type { EffectivePermissions } from '@shared/rbac';
 
 import { axiosForBackend, handleApiError, handleSilentUnauthorized } from './client';
 
@@ -147,6 +141,17 @@ export async function resetPassword(teacherId: string): Promise<ResetPasswordRes
   } catch (error) {
     return handleApiError(error, 'resetPassword');
   }
+}
+
+/**
+ * 当前账号的**生效权限**（角色默认 ∪ 追加授权 − 显式禁止，服务端算好）。
+ *
+ * 界面用它决定"显示什么、能进哪个页面"，从而不必再自己维护角色→能力的映射。
+ * 注意这**不是**安全边界：服务端每个路由仍然独立校验（客户端隐藏入口只是体验）。
+ */
+export async function getMyPermissions(): Promise<EffectivePermissions> {
+  const resp = await axiosForBackend.get('/api/auth/me/permissions');
+  return resp.data;
 }
 
 export async function getMe(): Promise<AuthUser | null> {

@@ -7,7 +7,7 @@ import type {
   UpdateResourceRequest,
 } from '@shared/api.interface';
 
-import { axiosForBackend, handleApiError } from './client';
+import { axiosForBackend, handleApiError, readListResponse } from './client';
 
 export async function getResources(params: ResourceListParams = {}): Promise<ResourceListResponse> {
   try {
@@ -72,6 +72,40 @@ export async function submitReview(id: string): Promise<Resource> {
     return resp.data;
   } catch (error) {
     return handleApiError(error, 'submitReview');
+  }
+}
+
+/**
+ * 回收站列表（**管理员能力**：服务端在该路由上要求 `resource.restore`）。
+ *
+ * 与"我的资源"不是一回事：这里列出的是**已被软删除**的行，可以由具备
+ * `resource.restore` 的人恢复。没有这个界面之前，老师误删之后只能由管理员
+ * 直接调接口恢复 —— 界面上无路可走。
+ */
+export async function getRecycleBin(params: ResourceListParams = {}): Promise<ResourceListResponse> {
+  try {
+    const resp = await axiosForBackend.get('/api/resources/recycle-bin', { params });
+    // 与 `getMyResources` 同一套读法：服务端返回 { items, total, page, pageSize }。
+    // 用 readListResponse 兜住"403 被当成空列表"的情况，避免把无权限渲染成"回收站是空的"。
+    const { items, total } = readListResponse<Resource>(resp.data, 'getRecycleBin');
+    const body = (resp.data ?? {}) as { page?: number; pageSize?: number };
+    return {
+      items,
+      total,
+      page: typeof body.page === 'number' ? body.page : (params.page ?? 1),
+      pageSize: typeof body.pageSize === 'number' ? body.pageSize : (params.pageSize ?? 20),
+    };
+  } catch (error) {
+    return handleApiError(error, 'getRecycleBin');
+  }
+}
+
+/** 从回收站恢复一条资源（服务端审计动作 `resource_restore`）。 */
+export async function restoreResource(id: string): Promise<void> {
+  try {
+    await axiosForBackend.post(`/api/resources/${id}/restore`);
+  } catch (error) {
+    return handleApiError(error, 'restoreResource');
   }
 }
 
