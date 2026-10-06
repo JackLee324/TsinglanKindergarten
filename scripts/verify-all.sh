@@ -203,6 +203,11 @@ run "directories-write"   node scripts/verify-directories-write.mjs
 # 资源版本生命周期（§15）：新建/编辑是否真的产生版本、无实质变化是否**不**产生版本、
 # 以及迁移回填是否覆盖了每一个既有资源。
 run "resource-versions"   node scripts/verify-resource-versions.mjs
+# 按需永久删除（`resource.purge`）的三道闸：只接受已在回收站中的行、
+# reason 必填、审计留下"谁/何时/为什么/原 purge_after"。
+# 它同时还是一条**回归防线**：本套件第一版就抓到 `DELETE` 在 `anon_` 角色下
+# 静默影响 0 行、而审计照样写"已永久删除"—— 一条**假审计**。
+run "resource-purge"    node scripts/verify-resource-purge.mjs
 # §2/§3 的**行为**验证（不是结构断言）：让 prek_head / k_head 真的去动
 # 「Pre-K English」「K Chinese Arts」，并验证越界被拒、?directory= 不是越权入口。
 # 此前 §2 只有"树里有这个节点 + 角色 scope 覆盖整个班型"这两条证据，

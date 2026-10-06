@@ -13,7 +13,16 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ResourcesService } from './resources.service';
-import {CreateResourceDto, CreateUploadUrlDto, RecycleBinQueryDto, RegisterFileDto, ResourceIdParamDto, ResourceListQueryDto, UpdateResourceDto} from './resources.dto';
+import {
+  CreateResourceDto,
+  CreateUploadUrlDto,
+  PurgeResourceDto,
+  RecycleBinQueryDto,
+  RegisterFileDto,
+  ResourceIdParamDto,
+  ResourceListQueryDto,
+  UpdateResourceDto,
+} from './resources.dto';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
 import { RequirePermission } from '@server/modules/authz/permission.decorator';
 import { getClientIp } from '@server/common/http/client-ip';
@@ -164,6 +173,38 @@ export class ResourcesController {
    * sub-resource with its own audit action (`resource_restore`), mirroring
    * `:id/submit-review`.
    */
+  /**
+   * Permanently delete a resource that is ALREADY in the recycle bin.
+   *
+   * Why this route exists: `resource.purge` was declared in the permission
+   * catalog and referenced in a service comment, but **no route or guard ever
+   * checked it** — it was a ghost permission, and the practical consequence was
+   * an operations gap: a mistakenly uploaded file could only wait out the
+   * 30-day retention. This route consumes the permission for real.
+   *
+   * The service applies two further gates that the route alone cannot express:
+   * only rows with `deleted_at IS NOT NULL` may be purged (so this can never
+   * become a shortcut past the recycle bin), and a `reason` is mandatory and
+   * ends up in the audit record.
+   */
+  @Post(':id/purge')
+  @RequirePermission('resource.purge')
+  async purgeResource(
+    @CurrentTeacher() teacher: AuthUser,
+    @Param() params: ResourceIdParamDto,
+    @Body() dto: PurgeResourceDto,
+    @Req() req: Request,
+  ): Promise<{ success: boolean; hadFile: boolean }> {
+    const ip = this.getIp(req);
+    const result = await this.resourcesService.purgeResource(
+      params.id,
+      teacher.id,
+      dto.reason,
+      ip,
+    );
+    return { success: result.purged, hadFile: result.hadFile };
+  }
+
   @Post(':id/restore')
   @RequirePermission('resource.restore')
   async restoreResource(

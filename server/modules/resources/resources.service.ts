@@ -73,6 +73,7 @@ import {
 } from '@shared/curriculum';
 import { roleScopeCovers } from '@shared/rbac';
 import { AuthorizationService } from '@server/modules/authz/authorization.service';
+import { withRbacWriteContext } from '@server/database/rbac-write-context';
 import {
   describeCoverAssetsResolution,
   describeMissingCoverAsset,
@@ -2024,6 +2025,119 @@ export class ResourcesService {
       `purgeExpiredResources: permanently deleted ${resourceIds.length} resource(s) past retention`,
     );
     return { purged: resourceIds.length, resourceIds, dryRun: false };
+  }
+
+  /**
+   * 按需永久删除**回收站里**的一条资源（§12 收口：`resource.purge` 从幽灵权限变成真能力）。
+   *
+   * WHY THIS EXISTS
+   *   `purgeExpiredResources()` 只在"保留期到期"时清理，而**没有任何入口**
+   *   能立刻永久删除一条指定资源 —— `resource.purge` 声明在权限目录里、
+   *   服务层注释还提到它，却从来没有被任何路由或守卫检查过（幽灵权限）。
+   *   后果是一个真实的运维缺口：误传的文件只能等 30 天。
+   *
+   * 三道闸，都是为了让"清理"不可能变成"误删业务数据"：
+   *   1. 路由要求 `resource.purge` —— 权限目录里**只有 super_admin** 持有它；
+   *   2. 只接受**已经在回收站里**的行（`deleted_at IS NOT NULL`）。
+   *      正常资源必须先走"删除 → 回收站"，这条路径不能成为绕过回收站的近道；
+   *   3. 必须写明 `reason`，与操作者、原来的 purge_after 一起进审计。
+   *
+   * 诚实的限制（写在这里，不藏）：本仓库的 `ObjectStorage` 抽象**只有**
+   * `isConfigured()` 与 `createSignedUrl()`，**没有删除对象的能力**。
+   * 所以本方法只删数据库行；桶里的对象会变成孤儿。这与既有的到期清理
+   * （`purgeExpiredResources`）行为一致，那里也在审计里明写了同一句。
+   * 要真正连对象一起删，需要先给存储抽象加一个 delete —— 那是另一件事。
+   */
+  async purgeResource(
+    id: string,
+    currentTeacherId: string,
+    reason: string,
+    ip?: string,
+  ): Promise<{ purged: boolean; hadFile: boolean }> {
+    const trimmed = (reason ?? '').trim();
+    if (trimmed.length < 4) {
+      throw new BadRequestException('必须写明清理原因（至少 4 个字），它会进审计记录');
+    }
+
+    const rows = await this.db
+      .select()
+      .from(resources)
+      .where(eq(resources.id, id))
+      .limit(1);
+
+    if (rows.length === 0) {
+      throw new NotFoundException('资源不存在');
+    }
+    const resource = rows[0];
+
+    // 闸 2：只允许清理**已进回收站**的行。
+    if (resource.deletedAt === null) {
+      throw new BadRequestException(
+        '只能永久删除已在回收站中的资源。请先执行删除（移入回收站），再 purge —— ' +
+          '这条路径不允许绕过回收站直接销毁正常资源。',
+      );
+    }
+
+    const hadFile = Boolean(resource.fileBucketId && resource.filePath);
+
+    // ⚠️ 这一步**必须**在 `authenticated_` 角色下做。
+    //
+    // `resources` 启用了 RLS，而策略里**没有**给 `anon_` 授予 DELETE
+    // （只有 SELECT / INSERT / UPDATE）。每个 HTTP 请求默认以 `anon_` 执行 SQL，
+    // 于是 `DELETE FROM resources` **静默影响 0 行** —— 不报错、不回滚，
+    // 而紧接着写的审计却会说"已永久删除"。那是一条**假的审计记录**，
+    // 比没有审计更糟：事后复核会以为删干净了。
+    //
+    // 实测（本机，同一行）：
+    //     set local role anon_;          DELETE -> 影响 0 行，行仍在
+    //     set local role authenticated_; DELETE -> 影响 1 行，行消失
+    //
+    // 这一点是我自己的行为测试抓出来的（`verify-resource-purge.mjs` 里
+    // "数据库里那一行确实不存在了" 那条先红），不是靠读代码发现的。
+    // 顺带确认：**到期清扫没有这个问题** —— 调度器跑在属主连接上
+    // （不 SET ROLE），RLS 对属主不生效，所以它真的删得掉。
+    // 回调拿到的是**裸**事务（只有 unsafe），不是 drizzle 查询对象 ——
+    // 这是 rbac-write-context 的设计：只有裸 client 发出的语句才不会被打上
+    // `SET LOCAL ROLE 'anon_'` 前导，显式切角色才有可能。
+    const affected = await withRbacWriteContext(this.db, currentTeacherId, async (tx) => {
+      const res = (await tx.unsafe('DELETE FROM resources WHERE id = $1', [id])) as unknown as {
+        count?: number;
+        length?: number;
+      };
+      return typeof res?.count === 'number' ? res.count : res?.length ?? 0;
+    });
+    if (affected === 0) {
+      // 影响 0 行 = 没删掉。**必须抛错**，否则审计会记下一件没发生的事。
+      throw new ServiceUnavailableException(
+        `永久删除未生效（影响 0 行）。这通常意味着执行角色缺少 DELETE 权限 —— ` +
+          `请检查 resources 表上的 RLS 策略是否覆盖 authenticated_。资源 ${id} 未被删除。`,
+      );
+    }
+
+    const teacherInfo = await this.getTeacherById(currentTeacherId);
+    await this.logAudit({
+      action: 'resource_purge',
+      teacherId: currentTeacherId,
+      teacherName: teacherInfo?.name,
+      resourceId: resource.id,
+      resourceTitle: resource.title,
+      program: resource.program,
+      subject: resource.subject,
+      success: true,
+      ipAddress: ip,
+      detail:
+        `按需永久删除（操作者=${teacherInfo?.name ?? currentTeacherId}；原因=${trimmed}；` +
+        `原 purge_after=${resource.purgeAfter ? new Date(resource.purgeAfter).toISOString() : '未知'}；` +
+        `deleted_at=${new Date(resource.deletedAt).toISOString()}）` +
+        (hadFile
+          ? '；⚠ 对象存储中的文件未删除（ObjectStorage 抽象无 delete 能力），已变为孤儿对象'
+          : '；该资源没有文件'),
+    });
+
+    this.logger.warn(
+      `purgeResource: permanently deleted ${resource.id} by ${currentTeacherId} (reason=${trimmed})`,
+    );
+    return { purged: true, hadFile };
   }
 
   // ========== 文件元数据登记（服务端校验边界） ==========

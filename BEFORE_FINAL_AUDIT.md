@@ -2234,3 +2234,85 @@ server/modules/resources/resources.service.ts:2008:        action: 'resource_pur
 本轮我自己就踩了一次，而且是在"最终复核"这种最该稳的步骤上。
 （这也是我为什么把两条"未运行"保持成**大声跳过**而不是静默 PASS ——
 至少那种情况下我能立刻看出"这一项没跑"，而不是对着一片红去猜。）
+
+### 第 15 轮追加：为"清理生产探针"补上 `resource.purge`，并在过程中抓到一个**假审计**
+
+用户要求清理留在生产回收站里的 9 条探针，且"清理动作必须保留审计证据"。
+但生产上**没有**按需永久删除的入口（第 14 轮查到的：`resource.purge` 是幽灵权限），
+所以我把它实现成一个受控路由。
+
+#### 15.1 新增 `POST /api/resources/:id/purge`（三道闸）
+
+| 闸 | 规则 | 为什么 |
+|---|---|---|
+| 权限 | `@RequirePermission('resource.purge')`，权限目录里**只有 super_admin** 持有 | 不可逆操作不该"有审核权就能做" |
+| 状态 | **只接受 `deleted_at IS NOT NULL`** 的行，否则 400 | 否则它会变成绕过回收站销毁正常资源的近道 |
+| 留痕 | `reason` 必填（≥4 字），与操作者、原 `purge_after`、`deleted_at` 一起进 `resource_purge` 审计 | 没有理由的永久删除事后无法复核 |
+
+幽灵权限基线随之从 **19 收紧到 18**（`resource.purge` 被真正消费了）。
+收紧而不是保持不变是刻意的：保持 19 等于允许再冒出一个幽灵权限。
+
+#### 15.2 ⚠️ 我自己的测试抓到一个**假审计**（这条最重要）
+
+第一版实现里我写的是：
+
+```ts
+await this.db.delete(resources).where(eq(resources.id, id));
+// 紧接着写审计："按需永久删除（…）"
+```
+
+行为测试里"**数据库里那一行确实不存在了**"这一条**先红了**：接口返回 201、
+审计也写下了"已永久删除"，而**行还在库里**。
+
+根因（实测确认，不是猜的）：
+
+```
+resources 表 RLS enabled=true, force=false
+策略里给 anon_ 的只有 SELECT / INSERT / UPDATE —— **没有 DELETE**
+每个 HTTP 请求默认以 anon_ 执行 SQL
+
+set local role anon_;          DELETE -> 影响 0 行，行仍在
+set local role authenticated_; DELETE -> 影响 1 行，行消失
+```
+
+`DELETE` 在 `anon_` 下**静默影响 0 行**：不报错、不回滚，而代码接着写了一条
+**"已永久删除"的审计** —— 比没有审计更糟，事后复核会以为删干净了。
+
+修法两步：
+1. 改走 `withRbacWriteContext`（在 `authenticated_` 角色下执行），
+   与 `setPermissionOverride` / 密码重置用的是同一套机制；
+2. **影响 0 行就抛错**，绝不写审计 —— 审计只能记录真正发生的事。
+
+顺带确认了一件容易误判的事：**到期清扫没有这个问题**。
+调度器跑在属主连接上（不 `SET ROLE`），而 `force RLS=false` 意味着 RLS 对属主不生效，
+所以它真的删得掉。实测：造一条 `purge_after` 已过期的行 → 重启服务 →
+日志 `PurgeScheduler 回收站到期清理完成（trigger=bootstrap）：永久删除 1 条资源`，
+数据库里那行确实消失。
+
+#### 15.3 `scripts/verify-resource-purge.mjs`（22/0/0，已进门禁）
+
+一个设计上的关键点：**三条闸必须在"确实持有权限"的操作者身上验**。
+第一版我拿 `curriculum_director`（默认没有 `resource.purge`）去验"绕过回收站被拒"，
+它返回 403 —— 那是**权限不足**，不是闸门在起作用，而我的断言会把 403 当成"通过"。
+改成：先证明无权限时是 403，再由 principal **按账号授予** `resource.purge`
+（§11），重登后让同一个账号去撞三条闸 —— 这时得到的 400 才真正证明是闸门挡的。
+
+```
+PASS  curriculum_director 默认不持有 resource.purge
+PASS  无 purge 权的账号被 403 拒绝（且此时资源连回收站都没进）
+PASS  那次 403 没有产生任何副作用（资源仍是正常状态）
+PASS  principal 授予 director resource.purge
+PASS  director 重新登录（权限变更作废旧会话）
+PASS  对**未删除**的资源 purge 被 400 拒绝（权限足够，是闸门挡住的）
+PASS  不带 reason 被 400 拒绝 / reason 过短被 400 拒绝
+PASS  先移入回收站（软删除）/ 此刻它确实在回收站里
+PASS  purge 成功 / 回收站里不再有它 / 数据库里那一行确实不存在了
+PASS  写入了 resource_purge 审计记录
+PASS  审计里带原因 / 带原 purge_after / 带操作者 id
+PASS  越权尝试没有产生成功的 purge 审计
+=== RESULT ===  pass=22 fail=0 skipped=0
+```
+
+#### 15.4 门禁
+
+**280 单元 + 611 HTTP/浏览器 = 891 项，✅ 全部通过**（第 14 轮为 869）。

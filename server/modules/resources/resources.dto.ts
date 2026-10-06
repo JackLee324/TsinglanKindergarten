@@ -339,3 +339,17 @@ export class CreateUploadUrlDto {
   @MaxLength(255)
   fileName!: string;
 }
+
+/**
+ * 按需永久删除（purge）的请求体。
+ *
+ * `reason` 是**必填**的：这条操作不可逆，而审计记录里必须能回答
+ * "谁、什么时候、为什么把一个资源永久删掉了"。没有理由的永久删除
+ * 事后无法复核 —— 那种记录等于没记。
+ */
+export class PurgeResourceDto {
+  @IsString()
+  @MinLength(4, { message: '必须写明清理原因（至少 4 个字）' })
+  @MaxLength(500)
+  reason!: string;
+}

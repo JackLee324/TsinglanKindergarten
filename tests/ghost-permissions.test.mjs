@@ -172,7 +172,17 @@ const unconsumed = PERMISSION_CODES.filter(
 // 22 → 21：`role.assign` 接上消费点（teachers.service 的 `assertCanAssignRoles`）。
 // 21 → 19：§11 的按账号授权接口让 `permission.view` 与 `permission.revoke` 也有了消费点。
 // 棘轮只能往下走；每次下降都要能指出是哪条权限、被哪个位置消费。
-const KNOWN_GHOST_BASELINE = 19;
+/**
+ * 基线是**棘轮**：只许变小，不许变大。
+ *
+ * 19 → 18（本轮）：`resource.purge` 原先只声明、从未被任何路由或守卫检查，
+ * 于是回收站里的资源只能等 30 天保留期到期，运维**没有按需永久删除的入口**。
+ * 加上 `POST /api/resources/:id/purge`（要求 `resource.purge`，且只接受
+ * 已在回收站中的行 + 必填 reason 进审计）之后，它被真正消费了，所以基线收紧到 18。
+ *
+ * 收紧而不是保持不变是刻意的：保持 19 等于允许再冒出一个幽灵权限。
+ */
+const KNOWN_GHOST_BASELINE = 18;
 
 check('幽灵权限没有比已知基线更多（新增权限必须接上消费点）',
   unconsumed.length <= KNOWN_GHOST_BASELINE ? 0 : unconsumed.length - KNOWN_GHOST_BASELINE, 0);
