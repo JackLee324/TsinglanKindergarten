@@ -12,6 +12,41 @@
 > - §8 是一份必须在**上线前**完成的演练清单，未完成即视为不具备灾难恢复能力。
 >
 > 任何声称"备份已完成/恢复已演练"的说法，在当前证据下都是不成立的。
+
+### 更新（GO-LIVE 当日，v1.3.0-golive）
+
+上线当天我尝试执行"备份后上线"。**结论：生产数据库的备份仍未完成，而且我做不到** ——
+不是选择不做，是环境上不可能：
+
+```
+$ command -v pg_dump pg_dumpall pg_restore psql
+（全部无 —— 本机嵌入式 PostgreSQL 只含 initdb / pg_ctl / postgres）
+$ nslookup service-6ab5c7d72fe460a98568c131
+** server can't find service-6ab5c7d72fe460a98568c131: NXDOMAIN   ← Zeabur 内网主机名
+$ grep -c '^DATABASE_URL=' .env.deploy
+0                                                              ← 本机没有生产连接串
+```
+
+**已做（不能替代备份）**：`scripts/prod-census.mjs` 对生产做了 **API 级数据普查**，
+产物在 `backups/prod-census-<时间戳>.json`（mode 600，`backups/` 已在 `.gitignore`）。
+它记录每张业务表**通过应用接口**能读到的行数与逐表内容 sha256，用于上线后对比"有没有丢/少/变"：
+
+| 表 | 报告总数 | 实际取到 | 内容 sha256（前 16） |
+|---|---|---|---|
+| `resources`（全部） | 347 | 347 | `44d4724ddc606e7f` |
+| `resources`（published） | 347 | 347 | `44d4724ddc606e7f` |
+| `resources`（draft / pending） | 0 / 0 | 0 / 0 | — |
+| `recycle_bin` | 1 | 1 | `3f172eb2f206e79f` |
+| `teachers` | 24 | 24 | `947949af345e4379` |
+| `audit_logs` | 464 | 464 | `da14d01151f91a8b` |
+| `directories_tree` / `curriculum_*` | HTTP 200 | — | 见文件 |
+
+**它明确不是备份**：恢复不了外键、序列、RLS 策略、角色/授权、索引、触发器，
+也不含接口不暴露的列。**不要**把它当成"生产已有备份"的证据。
+
+**仍未做且必须由你（或能连到该集群的环境）做**：§3 的 `pg_dump` /
+`pg_dumpall --roles-only`。上线前没有完成这一步，意味着**当前不具备灾难恢复能力** ——
+这是一条仍然存在的、真实的风险，本文档不掩饰它。
 >
 > **证据标记**：**[已证实]** 本次实测或源码逐行确证 · **[推断]** 由代码/配置互推 ·
 > **[无法验证]** 需要部署环境（连接串 / `pg_dump` 客户端 / 对象存储凭据）才能确认。
