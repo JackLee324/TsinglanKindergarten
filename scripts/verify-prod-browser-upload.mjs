@@ -81,9 +81,11 @@ async function req(m, p, b) {
     redirect: 'manual',
   });
   store(r);
+  // 下载接口是 `302 + Location`；不把响应头带出去就只能拿到 body。
+  const h2 = { get: (n) => r.headers.get(n) };
   const t = await r.text();
   let d; try { d = JSON.parse(t); } catch { d = t.slice(0, 200); }
-  return { s: r.status, d };
+  return { s: r.status, d, h: h2 };
 }
 
 let resourceId = null;
@@ -189,8 +191,19 @@ try {
       out.steps.push('raw-OPTIONS:' + res.status);
     } catch (e) { out.steps.push('raw-OPTIONS-threw:' + (e && e.message)); }
     try {
-      const bytes = new Uint8Array(1024);
-      for (let i = 0; i < bytes.length; i += 1) bytes[i] = i % 251;
+      // 字节必须是合法 PDF：服务端会做魔数校验（registerFile 的 head 校验），
+      // 一串递增字节会被正确地拒成 400 —— 那是产品的正确行为。
+      // 第一版这里用 i%251 造字节，于是"登记失败"这条红是测试自己造的，不是产品问题。
+      // 注意：本段会被拼进浏览器执行，所以转义要写成双反斜杠。
+      const head = new TextEncoder().encode('%PDF-1.4\\n%\\xE2\\xE3\\xCF\\xD3\\n');
+      const body = new Uint8Array(1024);
+      for (let i = 0; i < body.length; i += 1) body[i] = i % 251;
+      const tail = new TextEncoder().encode('\\n%%EOF\\n');
+      const bytes = new Uint8Array(head.length + body.length + tail.length);
+      bytes.set(head, 0); bytes.set(body, head.length); bytes.set(tail, head.length + body.length);
+      out.size = bytes.length;
+      out.sha = await crypto.subtle.digest('SHA-256', bytes).then((b) =>
+        [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, '0')).join(''));
       const file = new File([bytes], ${JSON.stringify(fileName)}, { type: 'application/pdf' });
       const r = await fetch(${JSON.stringify(putUrl)}, { method: 'PUT', body: file });
       out.put = r.status;
@@ -246,11 +259,16 @@ try {
 
   // 取回字节比对 —— Node 侧走"服务端代理下载"，确认对象确实落盘且内容正确。
   if (putOk) {
+    const pdfHead = Buffer.concat([
+      Buffer.from('%PDF-1.4\n%\xE2\xE3\xCF\xD3\n', 'binary'),
+      Buffer.from(Array.from({ length: 1024 - 15 }, (_, i) => i % 251)),
+      Buffer.from('\n%%EOF\n', 'utf8'),
+    ]);
     const reg = await req('POST', `/api/resources/${resourceId}/file`, {
       fileName,
       mimeType: 'application/pdf',
-      sizeBytes: 1024,
-      head: Buffer.from(Array.from({ length: 16 }, (_, i) => i % 251)).toString('base64'),
+      sizeBytes: parsed?.size ?? pdfHead.length,
+      head: pdfHead.subarray(0, 4096).toString('base64'),
       fileBucketId: urlResp.d?.bucketId,
       filePath: urlResp.d?.filePath,
     });
@@ -263,11 +281,15 @@ try {
       let raw = await fetch(new URL(loc, BASE).toString(), { headers: { cookie: cookie() }, redirect: 'manual' });
       if (raw.status === 302) raw = await fetch(new URL(raw.headers.get('location'), BASE).toString(), { redirect: 'manual' });
       const got = Buffer.from(await raw.arrayBuffer());
-      const expectSha = createHash('sha256')
-        .update(Buffer.from(Array.from({ length: 1024 }, (_, i) => i % 251))).digest('hex');
+      // 判据用**浏览器自己算出的** sha256，而不是本地重建一份字节 ——
+      // 本地重建的话，"一致"只证明了两段本地代码一致，证明不了云端那份对。
       const gotSha = createHash('sha256').update(got).digest('hex');
-      if (got.length === 1024 && gotSha === expectSha) ok('浏览器直传的字节可被逐字节取回', `${got.length} bytes`);
-      else bad('浏览器直传的字节可被逐字节取回', `len=${got.length} sha=${gotSha.slice(0, 12)} vs ${expectSha.slice(0, 12)}`);
+      if (parsed?.sha && gotSha === parsed.sha && got.length === parsed.size) {
+        ok('浏览器直传的字节可被逐字节取回（sha256 与浏览器端一致）', `${got.length} bytes`);
+      } else {
+        bad('浏览器直传的字节可被逐字节取回',
+          `len=${got.length}/${parsed?.size} sha=${gotSha.slice(0, 12)} vs ${String(parsed?.sha).slice(0, 12)}`);
+      }
     } else {
       bad('浏览器直传后可下载', `HTTP ${dl.s}`);
     }

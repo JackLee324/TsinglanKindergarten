@@ -137,6 +137,10 @@ async function main() {
   if (probeId) {
     const urlProbe = await c.req('POST', `/api/resources/${probeId}/upload-url`, { fileName: 'probe.pdf' });
     storageConfigured = urlProbe.s !== 503;
+    // 这个前置探测资源也必须进清理清单。
+    // 之前只登记了"链路探针"，漏了它 —— 于是**每跑一次就软删除一行留在回收站里**
+    // （本地实测积了 9 行，生产上 2 行）。这正是我在生产回收站里发现残留的原因。
+    createdResourceIds.push(probeId);
     // 503 之外的非 2xx 也要说出来。原来只看"是不是 503"，
     // 于是 401（会话不完整）/403（权限）会被归到下面的"没有配置存储"里 ——
     // **原因写错**比不写更糟，它会让人去查存储而真正的问题在别处。
@@ -144,6 +148,12 @@ async function main() {
       probeFailure = `upload-url HTTP ${urlProbe.s}：${String(urlProbe.d?.error?.message ?? '').slice(0, 80)}`;
     }
     await c.req('DELETE', `/api/resources/${probeId}`);
+    // 软删除之后必须 purge，否则行会留在回收站。本地用 super_admin 之外的账号
+    // 跑时 purge 会 403（只有 super_admin 持有 resource.purge），
+    // 那种情况下由下面的 SQL 硬删兜底。
+    await c.req('POST', `/api/resources/${probeId}/purge`, {
+      reason: `业务全链路前置探测清理（${stamp}）`,
+    }).catch(() => {});
   } else {
     probeFailure = `前置探测资源没建出来（POST /api/resources -> HTTP ${probeRes.s}：${String(probeRes.d?.error?.message ?? '').slice(0, 80)}）`;
   }
@@ -805,7 +815,7 @@ try {
       // 只按 id 删是不够的 —— 如果脚本在"资源已建好、但 id 还没查出来"时失败，
       // createdResourceIds 里什么都没有，那一行就永久留在库里（实测积了 4 行）。
       if (runStamp) {
-        const stray = await sql`DELETE FROM resources WHERE title LIKE ${'全链路探针%' + runStamp + '%'}`;
+        const stray = await sql`DELETE FROM resources WHERE title LIKE ${'全链路探针%' + runStamp + '%'} OR title LIKE ${'链路前置探测 ' + runStamp}`;
         if (stray.count > 0) console.log(`清理：按 stamp 兜底删除探针资源 → ${stray.count} 行`);
         const strayT = await sql`DELETE FROM teachers WHERE username = ${'biz_probe_' + runStamp}`;
         if (strayT.count > 0) console.log(`清理：按 stamp 兜底删除探针账号 → ${strayT.count} 行`);

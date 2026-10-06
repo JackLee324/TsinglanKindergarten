@@ -2392,3 +2392,88 @@ PASS  MFA 状态 {"enabled":true,"recoveryCodesRemaining":9,"required":true}
 ```
 `INITIAL_ADMIN_PASSWORD` 已从生产环境变量里删除（第 9 轮），
 且多次重新部署都没有把口令打回 bootstrap 值 —— 上面"当前口令仍有效 + 原口令 401"就是这条的证据。
+
+### 第 17 轮：**CORS 已应用，生产全链路 38/0/0** —— 阻塞项全部关闭
+
+#### 17.1 CORS 应用后的生产实测（§5）
+
+用户在 Cloudflare R2 → bucket Settings 里把策略换成了最小权限那份
+（原先是 `AllowedOrigins: ["http://localhost:3000"]` + 只有 `GET`，
+那是本地开发留下的 origin —— 端口 3000 正是本应用的默认监听端口，
+而浏览器直传用的是 `PUT`，所以那条规则从来没能允许过上传）。
+
+应用后 `node scripts/verify-prod-cors.mjs`：
+
+```
+PASS  预检返回 2xx                                    -> HTTP 204
+PASS  Access-Control-Allow-Origin 精确等于生产 origin  -> https://tsinglankindergarten.zeabur.app
+PASS  Access-Control-Allow-Methods 含 PUT             -> PUT, GET, HEAD
+PASS  Access-Control-Allow-Headers 覆盖 content-type  -> content-type
+PASS  非白名单 origin 被拒：https://evil.example.com              -> HTTP 403 无 CORS 头
+PASS  非白名单 origin 被拒：http://tsinglankindergarten.zeabur.app -> HTTP 403 无 CORS 头
+PASS  预检不声明允许 DELETE
+信息：Access-Control-Max-Age = "3000"
+=== RESULT ===  pass=7 fail=0
+```
+
+注意第 6 条：**http 版本的同一个域名也被拒**，说明不是"看起来像同站就放行"。
+`AllowedOrigins` 里没有 `*`。
+
+浏览器直传（`verify-prod-browser-upload.mjs`，在**生产 origin 的页面上下文里**发那次 PUT）：
+
+```
+PASS  浏览器在生产 origin 上直传成功（CORS 预检通过）  -> PUT HTTP 200
+      ETag: "45c187e9c7341df3aa5ce9de4f734bb2"
+PASS  登记浏览器直传的文件元数据  -> HTTP 201
+PASS  浏览器直传的字节可被逐字节取回（sha256 与浏览器端一致）  -> 1050 bytes
+=== RESULT ===  pass=7 fail=0
+```
+
+最后一条的判据是**浏览器自己算出的 sha256**，不是本地重建一份字节 ——
+本地重建的话，"一致"只证明两段本地代码一致，证明不了云端那份对。
+
+#### 17.2 用户点名的整条链路，在生产上 **38/0/0，零跳过**
+
+```
+1) 浏览器登录                     PASS（含生产强制 MFA 第二因子）
+2) 新建 → 选班型 Pre-K → 选科目 美德 → 选资料夹 周次教案 → 选学期 第一学期
+   → 选目录归属 Pre-K/美德 → 选中真实文件（真实字节）
+   → **保存草稿 → “资源与文件均已保存”**   ← 上一轮这一步是红的
+3) 编辑 → 保存 → F5 刷新 → 数据仍在        PASS
+4) 我的资源 → 详情                          PASS
+5) 提交审核 → pending_review                PASS
+6) 审核工作台 → 通过 → published             PASS
+7) 目录页面：该目录下能看到这条资源            PASS
+8) **下载 → 逐字节一致**                     PASS
+9) 删除 → 回收站 → 恢复 → 再出现             PASS（含侧边栏入口、真实点击）
+10) 授权重登生效；撤销后旧 Session 失效        PASS
+清理：DELETE=200 purge=201（回收站 0 残留）
+=== RESULT ===  pass=38 fail=0 skipped=0
+```
+
+同一份套件在**本机**（存储模式）同样 37/0/0 —— 本地与生产用的是同一条链。
+
+#### 17.3 又清掉两处**我自己**留下的残留（同一个根因，第二次）
+
+生产回收站复查发现还活着 3 行，其中 2 行是 `链路前置探测 <stamp>` ——
+那是 `verify-business-e2e.mjs` 在开头用来**探测"进程有没有配对象存储"**的临时资源。
+它只做了 `DELETE`（软删除），而清理清单里**没有登记它**，
+于是**每跑一次就留一行**。本地实测积了 9 行，生产上 2 行。
+
+这与第 14 轮那次是**同一个根因的第二次出现**：只 DELETE 不 purge。
+修法：
+* 把前置探测资源也 push 进 `createdResourceIds`（本地 SQL 兜底就能硬删）；
+* 没有 `DATABASE_URL`（即对生产跑）时，`DELETE` 之后紧跟 `purge`；
+* SQL 兜底的标题匹配补上 `链路前置探测 <stamp>`；
+* `purge-prod-probes.mjs` 的白名单补上 `^链路前置探测 \d+$`。
+
+实测：再跑一次本地全链路 → 清理日志确认硬删 → 复查
+`链路前置探测 残留: 0`、`全链路探针 残留: 0`。
+生产那 2 行已 purge（dry-run 显示 2 条命中 + 1 条 `test` **不动**）；
+**生产回收站现在 total=1，只剩那条非探针行**。
+
+#### 17.4 门禁
+
+基线：**280 单元 + 611 HTTP/浏览器 = 891 项，✅ 全部通过。**
+存储模式（本机，指向真正校验 SigV4 的测试后端）：
+`storage-sigv4` 16/0、`storage-upload` 20/0、`upload-web` 38/0、`business-e2e` 37/0。
