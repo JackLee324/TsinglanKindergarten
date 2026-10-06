@@ -33,17 +33,19 @@
 # **NOT READY FOR GO-LIVE**
 
 不是"没做完所以不给结论"。代码侧与本机门禁是**全绿**的，
-生产上的 MFA 强制链与对象存储往返还**在生产上真的跑通了**。
-剩下挡上线的是一条**具体、单向、可判定**的项：
+生产上的 MFA 强制链、对象存储往返、以及本轮新增的目录下钻与回收站
+都**在生产上真的跑通了**。剩下挡上线的是一条**具体、可判定**的项：
 
 | # | 阻塞项 | 为什么它单独就能挡住上线 | 谁能解 |
 |---|---|---|---|
 | **B-1** | **生产浏览器直传实测失败**（CORS 预检被拒）—— **已在生产上复现并精确定位**，`PreflightMissingAllowOriginHeader` | 这是老师点「保存草稿」时**唯一**的上传路径。现在它**是坏的**：预检返回 403 且**一个 `Access-Control-*` 响应头都没有**，Chromium 直接拦掉请求，而**服务端一行日志都没有**。也就是说，即使代码全对，老师在浏览器里也传不上去 | 一个有 **R2 桶管理权限**的凭据（控制台操作，或带 bucket 配置权限的 API Token）。应用的 S3 凭据**故意**没有这个权限（`GetBucketCors` → 403 AccessDenied），这是正确的最小权限 |
-| **B-2** | **生产运行的代码版本 ≠ 本次收口后的代码** | 本次要提交的改动（目录下钻、统一授权入口、回收站界面）**尚未推到 Git**，而 Zeabur 从 Git 构建。推送并重新部署后，§6 的生产证据需要在**新版本**上复跑一遍 | 本次提交后自动进入（见 §7.2） |
+| ~~B-2~~ | ~~生产运行的代码版本 ≠ 本次收口后的代码~~ | **本轮已关闭**：推送后 Zeabur 自动构建并部署（`BUILDING → DEPLOYING → RUNNING`），随后在生产产物里核对了本轮新增的标记（`directory-browse` / `directory-resources` / `recycle-restore` / `/admin/recycle-bin` 各 1 处，`ROLE_AUTO_PERMISSIONS` **0 处**），并用真实浏览器在生产上走通了新界面（见 §7.2） | — |
 
-> 这两条都**不是**"我再写点代码就能解决"的。B-1 需要一个对生产 R2 bucket
-> 有写权限的账号去配置/确认策略，B-2 需要一次部署。
-> 我**不会**为了让结论变成 READY 而把这两条降级成"已验证"。
+> B-1 **不是**"我再写点代码就能解决"的：它需要一个对生产 R2 bucket
+> 有**桶管理权限**的账号。应用的 S3 凭据故意没有这个权限
+> （`GetBucketCors` → `403 AccessDenied`），这是正确的最小权限，
+> 我也不会为让结论好看去找一把更大的凭据去动生产桶。
+> 我**不会**为了让结论变成 READY 而把这条降级成"已验证"。
 
 ---
 
@@ -251,6 +253,9 @@ docs: 部署手册 §0/§2 重写 + 两份生产验证脚本（§5/§6）
 | **`pg_dump` / `pg_restore` 备份恢复** | 本机**没有** `psql`/`pg_dump`/`pg_restore` 客户端；本地 PostgreSQL 只有三个服务端程序 | 装 PostgreSQL 客户端后按 `DISASTER_RECOVERY.md` 演练 |
 | **多副本 / 水平扩展** | 单实例是**硬性架构前提**（登录限流是进程内计数，迁移用 advisory lock 串行化） | 不是"待验证"，是**已声明的设计约束**；要扩必须先把限流外置 |
 
+> **Docker / compose 已不在这一栏**（第 6 轮它在这里，本轮八个子命令全部实测通过）；
+> **生产浏览器直传已完成实测**（结论是失败，见 B-1），所以它也从"验不了"里移出去了。
+
 > 注意：**Docker / compose 已不在这一栏**。第 6 轮它在这里（姑且算 UNVERIFIED），
 > 本轮八个子命令全部实测通过，已翻案；翻案理由见 §10.3。
 
@@ -298,19 +303,51 @@ ALLOW_PROD_WRITE=1 node scripts/verify-prod-browser-upload.mjs
 `403 AccessDenied`。这是**正确的最小权限** —— 运行时凭据不该有能力修改桶策略。
 我手上那把 Zeabur key 只能改**服务的环境变量**，不覆盖桶配置。
 
-### 7.2 B-2：推送并部署新版本，然后在**新版本**上复跑生产证据
+### 7.2 B-2：已关闭 —— 新版本已部署并在生产上复验
 
-生产目前跑的是 `46b1e2c`；本次收口的改动（§1 下钻、§3 收敛、§9 回收站界面）
-**尚未推送**。推送后 Zeabur 若自动重建，必须在新版本上复跑：
+推送 `46b1e2c..2481d1f`（3 个提交）后，Zeabur **自动**触发构建：
+`BUILDING → DEPLOYING → RUNNING`。随后在生产上做了三类核对：
 
-```bash
-export PROD_BASE_URL=https://tsinglankindergarten.zeabur.app
-export PROD_ADMIN_CREDENTIALS=$PWD/credentials/prod-super-admin.json
-node scripts/verify-prod-mfa.mjs                                  # 只读
-ALLOW_PROD_WRITE=1 node scripts/verify-prod-storage.mjs           # 会写生产、自带清理
+**① 产物核对**（新版本真的上线了，不是"推送成功"就当作部署成功）
+
+```
+/bundle/index-CqCXGeKJ.js  (1,426,609 字节)
+  directory-browse      1 处      directory-resources  1 处
+  recycle-restore       1 处      /admin/recycle-bin   1 处
+  ROLE_AUTO_PERMISSIONS 0 处   ← 本轮**删除**的东西确实不在了
 ```
 
-两条都是**幂等、跑完自查残留**的，可以反复跑。
+**② 生产强制 MFA 链复跑（只读）** —— `pass=8 fail=0 skipped=1`
+
+```
+PASS  登录要求第二因子（MFA_ENFORCE_SUPER_ADMIN 生效）  -> mfaRequired=true
+PASS  未过第二因子前拿不到业务数据（挑战态按未登录处理）  -> HTTP 401
+PASS  错误的 TOTP 被拒  -> HTTP 401 验证码不正确，还可尝试 4 次
+PASS  正确 TOTP 通过第二因子  -> HTTP 201
+PASS  通过后业务接口可用（强制 MFA 闭环成立）  -> HTTP 200
+PASS  状态：已绑定且仍为强制  -> {"enabled":true,"recoveryCodesRemaining":9,"required":true}
+```
+
+**③ 生产对象存储往返复跑** —— `pass=8 fail=0`，取回字节 sha256 与上传一致，
+篡改令牌 403，清理残留 0。
+
+**④ 真实浏览器在**生产**上走一遍本轮新增界面**
+
+```
+登录 + 第二因子 -> /
+侧边栏「回收站」入口: 回收站                 ← 权限门控正确（super_admin 可见）
+目录页提示: true
+可点目录名数: 67
+点第一个目录: prek -> CLICKED
+资源面板出现: true
+  面板对应目录: prek
+  面板标题: 「Pre-K」下的资源
+  卡片数: 24
+  错误块: false    空态块: false
+```
+
+也就是说：**本轮收口的界面改动在生产浏览器里是可用的**，
+唯一不通过的是 §7.1 那条浏览器**直传**的 CORS 预检。
 
 ---
 
@@ -342,7 +379,8 @@ ALLOW_PROD_WRITE=1 node scripts/verify-prod-storage.mjs           # 会写生产
 
 ## 9. 一句话总结
 
-**代码侧、本机门禁（837 项）、以及生产上的强制 MFA 与对象存储往返都已实测通过；
-但"老师在生产浏览器里点保存草稿、字节真的传到 R2"这一条，以及"上线版本
-就是本次收口的版本"这一条，都还没有证据 —— 所以结论是 NOT READY FOR GO-LIVE，
-剩余两条阻塞项见 §7。**
+**代码侧、本机门禁（837 项）、生产上的强制 MFA、对象存储往返、以及本轮新增的
+目录下钻与回收站在生产浏览器里都已实测通过，上线版本也已确认为本次收口的版本；
+但"老师在生产浏览器里点保存草稿、字节真的传到 R2"这一条**实测是失败的**
+（CORS 预检被拒，`PreflightMissingAllowOriginHeader`），而那是上传的唯一路径 ——
+所以结论是 NOT READY FOR GO-LIVE，剩余唯一阻塞项见 §7.1。**

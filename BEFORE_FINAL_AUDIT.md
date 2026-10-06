@@ -1873,3 +1873,52 @@ GetBucketCors -> 403
 * 失败时打印 Chromium 的 `corsErrorStatus` 与预检响应状态/响应头 ——
   不然"Failed to fetch"会被误判成"签名错了"或"网络不通"，那两种方向都很难查；
 * 修好策略后重跑同一个脚本即可得到结论（幂等）。
+
+### 第 12 轮追加：B-2 关闭 —— 推送、自动部署、在生产上复验
+
+推送 `46b1e2c..2481d1f`（3 个提交）后，Zeabur **自动**触发构建
+（`BUILDING → DEPLOYING → RUNNING`）。"推送成功"不等于"部署成功"，
+所以做了三类核对。
+
+#### 12.1 产物核对：新版本真的在线上
+
+```bash
+curl -s https://tsinglankindergarten.zeabur.app/            # 取 /bundle/index-*.js
+curl -s https://…/bundle/index-CqCXGeKJ.js                  # 1,426,609 字节
+```
+
+```
+directory-browse       1 处      directory-resources   1 处
+recycle-restore        1 处      /admin/recycle-bin    1 处
+该目录的资源加载失败     1 处
+ROLE_AUTO_PERMISSIONS  0 处   ← 本轮**删除**的东西确实不在了
+```
+
+> 只看"新增的在不在"是不够的 —— 那样无法区分"部署成功"与"部署到了旧产物"。
+> 同时核对"**该消失的消失了**"才有区分度。
+
+#### 12.2 生产复跑（只读 + 写而自查残留）
+
+* `verify-prod-mfa.mjs` → **8/0**，跳过 1（恢复码那组需显式开闸）
+* `verify-prod-storage.mjs` → **8/0**，sha256 逐字节一致，篡改令牌 403，残留 0
+
+#### 12.3 真实浏览器在**生产**上走一遍本轮新增界面
+
+```
+登录 + 第二因子 -> /
+侧边栏「回收站」入口: 回收站          ← 权限门控正确（super_admin 可见；非授权角色不可见）
+目录页提示: true
+可点目录名数: 67
+点第一个目录: prek -> CLICKED
+资源面板出现: true   面板对应目录: prek   标题:「Pre-K」下的资源   卡片数: 24
+错误块: false   空态块: false
+```
+
+#### 12.4 剩下的唯一阻塞项
+
+`verify-prod-browser-upload.mjs` 在生产上**失败**（CORS 预检，见第 11 轮）。
+它是浏览器直传的唯一路径，所以结论仍是 **NOT READY FOR GO-LIVE**。
+
+这一轮**没有**降低任何标准：§6 的 `MFA_ENFORCE_SUPER_ADMIN` 没有为了好看而关掉，
+门禁的两条"未运行"仍然是大声跳过而不是静默 PASS，
+浏览器直传这条仍然是红的 —— 尽管它是结论里唯一的那条红。
