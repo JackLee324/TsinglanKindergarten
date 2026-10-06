@@ -433,24 +433,148 @@ for await (const line of rl) {
 
 // One transaction: the restore either lands completely or not at all, which is
 // the property a restore procedure actually needs.
+// ---------------------------------------------------------------------------
+// IMPORT = "the source is the truth".
+//
+// WHY THE SCRATCH IS EMPTIED FIRST (a real regression, measured 2026-10-06):
+//   The scratch database is built by running the project's migrations from
+//   scratch — and two of them SEED rows:
+//       0009_directories.sql       -> 14 INSERT INTO directories
+//       0011_resource_versions.sql -> 1  INSERT INTO resource_versions
+//   A bare INSERT therefore collided with content the migration had already put
+//   there:
+//       PostgresError 23505: duplicate key ... "directories_code_key"
+//                            Key (code)=(root:edu) already exists.
+//   This tool STOPPED WORKING when 0009/0011 landed (backups/backup-rehearsal.ndjson
+//   is dated earlier and shows it used to pass) — i.e. the DR rehearsal had
+//   silently rotted. A backup tool that cannot run is worse than none: it implies
+//   a rehearsal capability that does not exist.
+//
+//   Fix: delete every table's rows in the scratch (children first), then import.
+//   That is the honest semantics — the migration-seeded content is a FIXTURE, the
+//   source rows are the TRUTH. Afterwards STEP 4 compares row counts and per-table
+//   content checksums, so if this import dropped or altered anything the round trip
+//   FAILS. An `ON CONFLICT` upsert was tried first and is NOT enough here: the
+//   collision is on a UNIQUE business key (`directories.code`), not on the primary
+//   key, so a PK-targeted ON CONFLICT does not intercept it.
+// ---------------------------------------------------------------------------
+const pkRows = await source`
+  SELECT kcu.table_name, kcu.column_name
+  FROM information_schema.table_constraints tc
+  JOIN information_schema.key_column_usage kcu
+    ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
+  WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = 'public'
+  ORDER BY kcu.table_name, kcu.ordinal_position
+`;
+const pkByTable = new Map();
+for (const r of pkRows) {
+  if (!pkByTable.has(r.table_name)) pkByTable.set(r.table_name, []);
+  pkByTable.get(r.table_name).push(r.column_name);
+}
+log(`  primary keys discovered for ${pkByTable.size} table(s)`);
+
+// Self-referencing foreign keys (table -> same table). Needed because a
+// table-level topological sort cannot order rows WITHIN a table: a child row
+// may legitimately appear before its parent in the export order.
+const selfFkRows = await source`
+  SELECT con.conrelid::regclass::text AS table_name,
+         att.attname AS column_name
+  FROM pg_constraint con
+  JOIN unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+  JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+  WHERE con.contype = 'f' AND con.conrelid = con.confrelid
+    AND con.connamespace = 'public'::regnamespace
+`;
+const selfFkByTable = new Map();
+for (const r of selfFkRows) {
+  const t = String(r.table_name).replace(/^public\./, '');
+  if (!selfFkByTable.has(t)) selfFkByTable.set(t, []);
+  selfFkByTable.get(t).push(r);
+}
+log(`  self-referencing FK column(s) in ${selfFkByTable.size} table(s)`);
+
+// Generated (computed) columns must NOT be written on import:
+//   resources.has_stored_file is `GENERATED ALWAYS AS (...) STORED`
+// and Postgres refuses an explicit value for it:
+//   428C9: cannot insert a non-DEFAULT value into column "has_stored_file"
+// They are recomputed from the imported data, so STEP 4's checksum still covers
+// them — the round trip is not weakened by skipping them here.
+const generatedRows = await source`
+  SELECT table_name, column_name
+  FROM information_schema.columns
+  WHERE table_schema = 'public' AND is_generated = 'ALWAYS'
+`;
+const generatedByTable = new Map();
+for (const r of generatedRows) {
+  if (!generatedByTable.has(r.table_name)) generatedByTable.set(r.table_name, new Set());
+  generatedByTable.get(r.table_name).add(r.column_name);
+}
+log(`  generated column(s) in ${generatedByTable.size} table(s)`);
+
 await scratch.begin(async (tx) => {
-  for (const table of insertOrder) {
-    if (SKIP_IMPORT.has(table)) continue;
-    const rows = rowsByTable.get(table) ?? [];
-    if (rows.length === 0) continue;
-    const cols = Object.keys(rows[0]);
+  // ① 先清空：逆 FK 顺序（先子后父），否则删父表会被外键拦住。
+  const toImport = insertOrder.filter((t) => !SKIP_IMPORT.has(t) && (rowsByTable.get(t) ?? []).length > 0);
+  for (const table of [...toImport].reverse()) {
+    await tx.unsafe(`DELETE FROM "${table}"`);
+  }
+  log(`  cleared ${toImport.length} table(s) before import`);
+
+  // ② 再按 FK 顺序（先父后子）导入。
+  for (const table of toImport) {
+    const rows = rowsByTable.get(table);
+    // 计算列不能显式写值（见上面的 generatedByTable 注释）。
+    const skip = generatedByTable.get(table) ?? new Set();
+    const cols = Object.keys(rows[0]).filter((c) => !skip.has(c));
+    if (skip.size > 0) log(`  ${table}: skipping generated column(s) ${[...skip].join(', ')}`);
     const colSql = cols.map((c) => `"${c}"`).join(', ');
     const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
     const stmt = `INSERT INTO "${table}" (${colSql}) VALUES (${placeholders})`;
-    for (const row of rows) {
-      await tx.unsafe(
-        stmt,
-        cols.map((c) => row[c]),
-      );
+    const run = async (row) => {
+      await tx.unsafe(stmt, cols.map((c) => row[c]));
       imported += 1;
+    };
+
+    // Self-referencing FK（例如 directories.parent_id -> directories.id）：
+    // 表级拓扑排序解决不了**表内**的父子顺序，而导出顺序是按主键/字母来的，
+    // 于是子行可能先于父行被插入 →
+    //   23503: Key (parent_id)=(…) is not present in table "directories"
+    // 这里按"波次"插入：先插父行为空的行，再插父行已就位的行，直到插完。
+    const selfFk = (selfFkByTable.get(table) ?? []).filter((r) => cols.includes(r.column_name));
+    if (selfFk.length === 0) {
+      for (const row of rows) await run(row);
+      continue;
     }
+    const idCol = (pkByTable.get(table) ?? ['id'])[0];
+    const pending = [...rows];
+    const placed = new Set();
+    let waves = 0;
+    while (pending.length > 0) {
+      const ready = pending.filter((row) =>
+        selfFk.every((fk) => row[fk.column_name] === null || row[fk.column_name] === undefined || placed.has(row[fk.column_name])),
+      );
+      if (ready.length === 0) {
+        // 没有任何一行可插 = 环或悬空引用。**必须报错**，不能跳过 ——
+        // 静默跳过会让"恢复成功"变成一个假结论。
+        throw new Error(
+          `self-referencing FK cycle or dangling parent in "${table}" ` +
+            `(${pending.length} row(s) cannot be placed; columns: ${selfFk.map((f) => f.column_name).join(', ')})`,
+        );
+      }
+      for (const row of ready) {
+        await run(row);
+        placed.add(row[idCol]);
+      }
+      pending.length = 0;
+      pending.push(
+        ...rows.filter((row) => !placed.has(row[idCol])),
+      );
+      waves += 1;
+      if (waves > 64) throw new Error(`self-referencing insert did not converge for "${table}"`);
+    }
+    log(`  ${table}: self-referencing FK resolved in ${waves} wave(s)`);
   }
 });
+
 ok(`imported ${imported} rows`);
 if (header) log(`  dump header: ${header.sourceDatabase} @ ${header.createdAt}`);
 
