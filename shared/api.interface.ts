@@ -100,6 +100,10 @@ export type AuditAction =
   | 'resource_delete'
   | 'resource_restore'
   | 'resource_purge'
+  // 全量逻辑导出（POST /api/admin/data-export）。
+  // 单独一个动作而不是复用 audit.export：后者导出的是**审计日志**，
+  // 前者把**整库**读走 —— 事后追查"谁在什么时候把整库拉走了"必须能单独筛出来。
+  | 'data_export'
   | 'resource_file_register'
   | 'resource_download_failed'
   | 'file_validation_rejected';

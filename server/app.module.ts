@@ -13,6 +13,7 @@ import { ResourcesModule } from './modules/resources/resources.module';
 import { FilesModule } from './modules/files/files.module';
 import { ReviewModule } from './modules/review/review.module';
 import { AuditModule } from './modules/audit/audit.module';
+import { BackupModule } from './modules/backup/backup.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { DirectoriesModule } from './modules/directories/directories.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -78,6 +79,10 @@ import { HealthModule } from './modules/health/health.module';
     FilesModule,
     ReviewModule,
     AuditModule,
+    // 全量逻辑导出（POST /api/admin/data-export，仅 super_admin）。
+    // 生产库在平台内网、本机也没有 pg_dump，这条路由是**拿到 pg_dump 通路之前**
+    // 唯一能产出可恢复备份的路径 —— 见 backup.service.ts 的能力边界说明。
+    BackupModule,
     CurriculumModule,
     // PDF《教师平台》目录树（migration 0009 落库，§1/§2）。
     // 与 CurriculumModule 并存：后者供既有页面渲染课程卡，前者是管理员可编辑的权威目录。
