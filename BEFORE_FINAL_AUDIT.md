@@ -1399,3 +1399,55 @@ PASS  资源行上的 directoryId 正是该目录  -> bd7769ab-…
 > 需要一台 Docker 正常的机器（或 x86_64 宿主）复跑：
 > `docker compose --env-file .env.deploy up -d && docker compose ps`
 > 期望 app 在 `start_period 20s` 后转为 healthy。
+
+### 第 7 轮追加：§3 的重复真相已清除；§12 收口完成
+
+#### §12 的检查**当场发现两处真实违规**（不是走过场）
+
+§12 要求"确认没有重复 RBAC/curriculum 定义"。照这条去查，查出：
+
+1. `client/src/pages/PermissionAdmin/PermissionAdminPage.tsx` 里有一张**页面自己维护的
+   `ROLE_AUTO_PERMISSIONS`**（角色 → 班型/科目 的 view/upload 表）——
+   这正是 §3 明令禁止的东西；
+2. 同一个文件里还有**手抄的 `PREK_SUBJECTS` / `K_SUBJECTS`**（完整课程数组），
+   `PermissionMatrix.tsx` 又各复制了一份 `SubjectNode` / `ProgramDef` 接口。
+
+**而且它已经漂移了**：本轮按决策新增的 `prek:english`（Pre-K 英文）与
+`k:chinese:arts`（美育）在这份手抄数组里**根本不存在** —— 于是权限管理界面
+给不了这两个科目的权限，而服务端认为它们存在。这就是"抄一份"的下场，
+不是理论风险。
+
+**修法**（全部指向单一真相）：
+* `isAutoGranted` 改为 `roleAutoCovers()`，内部用 `shared/rbac.ts` 的
+  `roleSubjectScope` / `roleScopeCovers` / `roleDefaults` 推导
+  （班型科目覆盖范围来自 scope；能不能看/传来自该角色的权限集合里有没有
+  `resource.view` / `resource.create`）；
+* 课程结构改为 `getCurriculumStructure()` 加载（失败时**留空并记录**，
+  不写死兜底数组 —— 那正是刚删掉的那份手抄表）；
+* 本地 `SubjectNode` / `ProgramDef` 接口删除，统一用共享的
+  `ProgramStructure` / `SubjectNode`。
+
+**浏览器实测确认修复生效**：权限矩阵现在显示「英文」与「美育」
+（旧的手抄数组里根本没有它们），且「蒙特梭利」等原有科目照常显示。
+
+#### §12 其余各项
+
+* **门禁无假绿**：`run()` 新增拦截 `pass=0`。exit 0 只说明"没报错"，不说明
+  "检查了什么"；一个因环境缺失而整体跳过所有断言的套件同样以 0 退出、打印
+  `pass=0 fail=0`，与"跑过且没问题"在外观上完全一致。**用构造的假套件验证了
+  这条防线确实会触发并置 FAILED=1。**
+* **git diff**：29 个文件、+1937/−232，逐项过了一遍。
+* **无用文件**：无。未跟踪文件只有本轮新增的 5 个验证脚本、2 个迁移文件
+  （都是交付物）；`.devtools/`、`backups/`、`.env.deploy` 均已被 `.gitignore` 覆盖。
+* **TODO / placeholder / mock**：生产代码里 0 处活跃 TODO（唯一命中是一句
+  "这里原本是一行 TODO"的**修复说明**注释）；54 处 placeholder 全是
+  Tailwind 的 `placeholder:` 类与 i18n 的 `*Placeholder` 文案键；
+  `mock` 唯一命中是注释里的一句对比说明。全部核对过，没有假阳性遮蔽真问题。
+* **提交与推送**：`1694fb3` → `origin/main`，**工作区 clean**。
+
+> ⚠️ 提交是把 §12 的检查**跑完之前**做的（先 commit 再补记录），
+> 所以本节与报告更新是紧随其后的第二个提交。工作区在两次提交后都是 clean。
+
+#### 门禁
+
+复跑全绿：16 套件。基线模式 810 断言；配置存储模式 903。

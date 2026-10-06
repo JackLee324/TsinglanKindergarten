@@ -331,6 +331,23 @@ EXPECT_STORAGE=on node scripts/verify-upload-web.mjs           # 浏览器闭环
 3. `npm install` 会裁掉 darwin-arm64 平台二进制；本机不能再跑 `npm install`。
 4. `eslint .` 在本机 iCloud 同步目录上会 EAGAIN；门禁里已改为显式目录。
 
+## 11b. §3 的重复真相（本轮查出并清除）
+
+§12 的"确认没有重复 RBAC/curriculum 定义"这条检查**当场查出两处真实违规**：
+
+* `PermissionAdminPage` 里有一张页面自己维护的 `ROLE_AUTO_PERMISSIONS`
+  （§3 明令禁止）；
+* 同文件里还有手抄的 `PREK_SUBJECTS` / `K_SUBJECTS` 完整课程数组，
+  `PermissionMatrix` 再复制一份同构接口。
+
+而且**已经漂移**：本轮按决策新增的 `prek:english`（Pre-K 英文）与
+`k:chinese:arts`（美育）在手抄数组里根本不存在 —— 权限界面给不了这两个科目的权限，
+而服务端认为它们存在。浏览器实测确认修复后矩阵已显示这两个科目。
+
+现在全部指向单一真相：`isAutoGranted` 由 `shared/rbac.ts` 的
+`roleSubjectScope` / `roleScopeCovers` / `roleDefaults` 推导；
+课程结构由 `getCurriculumStructure()` 加载（失败时留空并记录，不写死兜底数组）。
+
 ## 12. 我对本次工作质量的自我评价（含我犯的错）
 
 **做得好的**：把"看起来有、其实没有"这一类问题当成主线，并且每一条都留下可复现的证据；
