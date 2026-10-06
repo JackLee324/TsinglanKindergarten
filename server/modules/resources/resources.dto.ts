@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { ValidateIf, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { Type } from 'class-transformer';
 import type {
   ProgramCode,
@@ -42,6 +42,11 @@ export class ResourceListQueryDto implements ResourceListParams {
   @IsString()
   @IsIn(FOLDER_TYPES)
   folderType?: FolderType;
+
+  /** 只看归属在该目录（含子孙）下的资源，值是目录 code。见 ResourceListParams。 */
+  @IsOptional()
+  @IsString()
+  directory?: string;
 
   @IsOptional()
   @IsString()
@@ -167,6 +172,15 @@ export class CreateResourceDto implements CreateResourceRequest {
   @IsOptional()
   @IsString()
   fileType?: string;
+
+  /**
+   * 目录归属（可编辑目录树节点 id）。可选。
+   * 只做形状校验（UUID）；**存在性、是否启用、以及调用方对该目录的 scope
+   * 一律在服务层判** —— 那需要查库和权限上下文，DTO 层拿不到。
+   */
+  @IsOptional()
+  @IsUUID()
+  directoryId?: string;
 }
 
 export class UpdateResourceDto implements UpdateResourceRequest {
@@ -200,6 +214,18 @@ export class UpdateResourceDto implements UpdateResourceRequest {
   @IsOptional()
   @IsString()
   theme?: string;
+
+  /**
+   * 新目录归属。三态：
+   *   · 不传（undefined） = 不改动现有归属；
+   *   · 传 null           = 解除归属（留空）；
+   *   · 传 uuid           = 改到该目录。
+   * 用 `@ValidateIf` 而不是 `@IsOptional()`：后者会连同 null 一起放行，
+   * 虽然结果相同，但意图不清晰；这里明确"只有 null/undefined 例外，其余必须是 UUID"。
+   */
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsUUID()
+  directoryId?: string | null;
 
   @IsOptional()
   @IsString()

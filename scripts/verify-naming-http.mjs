@@ -274,6 +274,32 @@ try {
     true,
   );
 
+  // ---------------------------------------------------------------------
+  // ⚠️ 前提检查：本节断言的前提是"本进程**没有**对象存储后端"。
+  //
+  // 生产**要求**必须配置后端，所以一旦运维按文档配好 S3，这一节就会集体变红。
+  // 那是**环境模式不匹配，不是产品缺陷** —— 最危险的是有人为了"把门禁弄绿"
+  // 去关掉对象存储。所以这里先探测模式并大声说明。
+  //
+  // 用**另一条代码路径**（upload-url）探测，而不是拿被断言的接口自证。
+  // ---------------------------------------------------------------------
+  const storageProbe = await req('POST', `/api/resources/${resourceId}/upload-url`, {
+    fileName: 'storage-mode-probe.pdf',
+  });
+  if (storageProbe.status !== 503) {
+    console.log('');
+    console.log('='.repeat(78));
+    console.log('⚠️  前提不成立：本进程**已配置**对象存储后端（upload-url 返回 ' + storageProbe.status + '）。');
+    console.log('    本节断言的是"没有后端时必须 fail closed（503、且不写任何文件列）"。');
+    console.log('    在该前提下这些断言必然失败 —— 环境模式不匹配，**不是产品缺陷**。');
+    console.log('    正确做法：在不配 S3_* 的进程上跑本套件；配置模式下的等价行为由');
+    console.log('      node scripts/verify-storage-upload-flow.mjs   （接口链路，20 条）');
+    console.log('      node scripts/verify-upload-web.mjs            （浏览器闭环，21 条）');
+    console.log('    覆盖。**切勿为了变绿而关掉对象存储。**');
+    console.log('='.repeat(78));
+    console.log('');
+  }
+
   const registered = await req('POST', `/api/resources/${resourceId}/file`, {
     fileName: 'probe-lesson.pdf',
     mimeType: 'application/pdf',

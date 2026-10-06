@@ -189,13 +189,25 @@ const ReviewPage: React.FC = () => {
       title: t('common.operation'), key: 'action', fixed: 'right', width: 200,
       render: (_: unknown, record: Resource) => (
         <div className="flex gap-1">
-          <Button variant="ghost" size="sm" onClick={() => openApprove(record)} className="text-success">
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="review-approve"
+            onClick={() => openApprove(record)}
+            className="text-success"
+          >
             <Check className="size-4" />
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => openReject(record)} className="text-destructive">
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="review-reject"
+            onClick={() => openReject(record)}
+            className="text-destructive"
+          >
             <X className="size-4" />
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => openDetail(record)}>
+          <Button variant="ghost" size="sm" data-testid="review-detail-pending" onClick={() => openDetail(record)}>
             <Eye className="size-4" />
           </Button>
         </div>
@@ -238,7 +250,7 @@ const ReviewPage: React.FC = () => {
       title: t('common.operation'), key: 'action', fixed: 'right', width: 180,
       render: (_: unknown, record: Resource) => (
         <div className="flex gap-1">
-          <Button variant="ghost" size="sm" onClick={() => openDetail(record)}>
+          <Button variant="ghost" size="sm" data-testid="review-detail-history" onClick={() => openDetail(record)}>
             <Eye className="size-4" />
           </Button>
           <Button variant="ghost" size="sm" onClick={() => void openHistory(record)}>
@@ -328,6 +340,7 @@ const ReviewPage: React.FC = () => {
             </Button>
             <Button
               className="bg-success hover:bg-success/90"
+              data-testid="confirm-approve"
               onClick={() => doReview('approve')}
               disabled={reviewLoading}
             >

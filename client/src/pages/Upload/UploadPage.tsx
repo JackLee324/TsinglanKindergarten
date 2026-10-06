@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { logger } from '@client/src/lib/logger';
@@ -28,19 +28,11 @@ import {
 } from '@client/src/components/ui/select';
 import { Textarea } from '@client/src/components/ui/textarea';
 import { useTranslation } from '@client/src/i18n/useTranslation';
-import {
-  createResource,
-  getResource,
-  submitReview,
-  updateResource,
-} from '@client/src/api/resources';
+import { extractApiErrorCode } from '@client/src/api/client';
+import { createResource, getResource, getUploadUrl, putFileBytes, registerResourceFile, submitReview, updateResource } from '@client/src/api/resources';
 import { getCurriculumStructure } from '@client/src/api/curriculum';
-import type {
-  FolderType,
-  ProgramCode,
-  ProgramStructure,
-  Resource,
-} from '@shared/api.interface';
+import { getDirectoryTree } from '@client/src/api/directories';
+import type { DirectoryNode, FolderType, ProgramCode, ProgramStructure, Resource } from '@shared/api.interface';
 import { FOLDER_TYPES } from '@shared/api.interface';
 
 import { ResourceFileUpload } from './ResourceFileUpload';
@@ -52,6 +44,13 @@ const uploadSchema = z.object({
   subject: z.string().min(1, 'upload.subjectRequired'),
   subSubject: z.string().optional(),
   folderType: z.string().min(1, 'upload.folderRequired'),
+  /**
+   * §1 目录归属（可编辑目录树节点的 **id**）。
+   * 可选 —— 留空表示"尚未归属"，而不是由客户端猜一个默认目录。
+   * 注意它与上面 `folderType` 是**两个维度**：`folderType` 是 legacy 资料夹分类，
+   * 这一项才是"放进哪个可编辑目录"。
+   */
+  directoryId: z.string().optional(),
   semester: z.string().optional(),
   weekNumber: z.string().optional(),
   theme: z.string().optional(),
@@ -70,12 +69,23 @@ const UploadPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  /**
+   * 可编辑目录树（§1），拍平成"可选目录归属"的候选列表。
+   *
+   * 这是**页面自己不去维护课程数组**的另一半：候选目录全部来自
+   * `GET /api/directories/tree`（服务端已按角色 scope 剪枝），
+   * 因此老师只可能看到、也只可能选到他有权限的目录 ——
+   * 页面既不复刻权限规则，也不预置任何目录名。
+   */
+  const [directoryOptions, setDirectoryOptions] = useState<
+    Array<{ id: string; label: string; program: string | null; subject: string | null }>
+  >([]);
 
   const form = useForm<UploadFormData>({
     resolver: zodResolver(uploadSchema),
     defaultValues: {
       title: '', titleEn: '', program: '', subject: '', subSubject: '',
-      folderType: '', semester: '', weekNumber: '', theme: '', description: '',
+      folderType: '', directoryId: '', semester: '', weekNumber: '', theme: '', description: '',
     },
   });
 
@@ -88,6 +98,37 @@ const UploadPage: React.FC = () => {
         setStructures(await getCurriculumStructure());
       } catch (error) {
         logger.error('[Upload] load curriculum failed', String(error));
+      }
+    };
+    void load();
+  }, []);
+
+  // §1：拉一次目录树，拍平成下拉候选。
+  // 失败时**不写死任何兜底目录**（那会变成一个凭空的归属），只是让下拉为空。
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const tree = await getDirectoryTree();
+        const out: Array<{ id: string; label: string; program: string | null; subject: string | null }> = [];
+        const walk = (nodes: DirectoryNode[], prefix: string[]) => {
+          for (const node of nodes) {
+            // 根节点只用来提供路径前缀，本身不作为归属目标。
+            const path = node.code.startsWith('root:') ? prefix : [...prefix, node.name];
+            if (node.type !== 'root' && node.type !== 'section' && node.type !== 'program') {
+              out.push({
+                id: node.id,
+                label: `${prefix.join(' / ')}${prefix.length ? ' / ' : ''}${node.name}`,
+                program: node.program,
+                subject: node.subject,
+              });
+            }
+            walk(node.children ?? [], path);
+          }
+        };
+        walk(tree.roots ?? [], []);
+        setDirectoryOptions(out);
+      } catch (error) {
+        logger.error('[Upload] load directory tree failed', String(error));
       }
     };
     void load();
@@ -106,6 +147,7 @@ const UploadPage: React.FC = () => {
           subject: r.subject,
           subSubject: r.subSubject ?? '',
           folderType: r.folderType,
+          directoryId: r.directoryId ?? '',
           semester: r.semester ?? '',
           weekNumber: r.weekNumber ? String(r.weekNumber) : '',
           theme: r.theme ?? '',
@@ -126,12 +168,43 @@ const UploadPage: React.FC = () => {
     void load();
   }, [editId, form, t]);
 
-  // Reset subject/subject on program or subject change
+  // 班型/科目变化时清掉下级选择 —— 但**只在用户真的换了**、且原选择在新班型里
+  // 已不存在时才清。
+  //
+  // 这里以前是两段无条件清空：
+  //     useEffect(() => { form.setValue('subject',''); form.setValue('subSubject',''); }, [programValue])
+  //     useEffect(() => { form.setValue('subSubject',''); }, [subjectValue])
+  //
+  // 它们分不清"用户在换班型"和"编辑页刚把资源预填进来"：编辑页 `form.reset()`
+  // 会把 program 从 '' 变成资源真实的班型，这个变化同样触发第一段，于是刚填好的
+  // subject 立刻被清掉；第二段又把 subSubject 清掉。后果不是报错而是**点了没反应**：
+  // 提交时 `form.trigger` 校验失败，`submitResource` 直接 return，既不保存也不提示。
+  // 实测证据（编辑页，资源 prek/virtue）：点「保存草稿」后路径仍是 /upload?id=…，
+  // 页面只多出 `upload.subjectRequired`，没有任何 toast。
+  const prevProgramRef = useRef<string>(programValue);
   useEffect(() => {
-    form.setValue('subject', '');
-    form.setValue('subSubject', '');
-  }, [programValue, form]);
+    const prev = prevProgramRef.current;
+    if (prev === programValue) return;
+    prevProgramRef.current = programValue;
+    // 首次落值（含编辑页预填）不清空：此时还没有"用户的选择"可以作废。
+    if (!prev) return;
+    const program = structures.find((s) => s.program === programValue);
+    // 结构还没加载出来时不判断，避免把有效选择误清掉。
+    if (!program) return;
+    const stillValid = program.subjects.some((s) => s.key === subjectValue);
+    if (!stillValid) {
+      form.setValue('subject', '');
+      form.setValue('subSubject', '');
+    }
+  }, [programValue, subjectValue, structures, form]);
+
+  const prevSubjectRef = useRef<string>(subjectValue);
   useEffect(() => {
+    const prev = prevSubjectRef.current;
+    if (prev === subjectValue) return;
+    prevSubjectRef.current = subjectValue;
+    // 同上：首次落值（编辑页预填 subSubject）不清空。
+    if (!prev) return;
     form.setValue('subSubject', '');
   }, [subjectValue, form]);
 
@@ -154,8 +227,19 @@ const UploadPage: React.FC = () => {
       toast.error(L('请上传文件', 'Please upload a file'));
       return;
     }
-    const ok = await form.trigger(['title', 'program', 'subject', 'folderType']);
-    if (!ok) return;
+    const valid = await form.trigger(['title', 'program', 'subject', 'folderType']);
+    if (!valid) {
+      // 以前这里是无声 `return`：点了「保存草稿」既不保存也不提示，用户看到的是
+      // "点了没反应"，而日志里连一行都不会有。校验失败是**用户的输入问题**，
+      // 必须说出来，否则他只会反复点同一个按钮。
+      toast.error(
+        L(
+          '请先补全必填项（标题、班型、科目、资料夹）后再保存',
+          'Please complete the required fields (title, program, subject, folder type) before saving',
+        ),
+      );
+      return;
+    }
     const data = form.getValues();
     setSubmitLoading(true);
     try {
@@ -177,12 +261,52 @@ const UploadPage: React.FC = () => {
         semester: data.semester || undefined,
         weekNumber: data.weekNumber ? Number(data.weekNumber) : undefined,
         theme: data.theme || undefined,
+        // §1：只在真的选了目录时才传；空字符串会被服务端当作"没传"（不归属）。
+        directoryId: data.directoryId || undefined,
         fileName: selectedFile?.name,
         fileSize: selectedFile?.size,
         fileType: selectedFile?.type,
       };
+      // §4/§23 真实上传：三步分开，失败位置不同、提示也必须不同。
+      // 返回一个"上传结论"，最后由 toast 如实说清楚，而不是笼统的"成功/失败"。
+      // 结论由**返回值**给出，而不是写在外层变量上：写在闭包里 TS 无法在闭包外
+      // 收窄类型（实测报 TS2367 "no overlap"），而那种报错会诱使人用 as any 掩盖。
+      let fileOutcome: 'none' | 'uploaded' | 'not_configured' | 'failed' = 'none';
+      let fileError = '';
+
+      /** 拿到资源 id 后真正把字节送上去并登记。 */
+      const uploadSelectedFile = async (
+        targetId: string,
+      ): Promise<'none' | 'uploaded' | 'not_configured' | 'failed'> => {
+        if (!selectedFile) return 'none';
+        try {
+          const loc = await getUploadUrl(targetId, selectedFile.name);
+          await putFileBytes(loc.uploadUrl, selectedFile);
+          await registerResourceFile(targetId, selectedFile, loc);
+          return 'uploaded';
+        } catch (uploadError) {
+          // 存储未配置时服务端返回 503 —— 那是**能力边界**，不是错误操作。
+          // 两者要分开提示，否则用户会以为是自己传错了文件。
+          //
+          // 必须按服务端的**机器可读错误码**判断，不能按错误文本：axios 错误的
+          // `message` 只是 `Request failed with status code 503`，用文本匹配
+          // 那条 `not_configured` 分支永远进不去（实测：未接存储时老师看到的是
+          // 笼统的"文件上传失败：…503"，而不是"文件没有上传：服务端没有配置对象存储"）。
+          const code = extractApiErrorCode(uploadError);
+          const msg = uploadError instanceof Error ? uploadError.message : String(uploadError);
+          fileError = msg;
+          logger.warn('[Upload] file upload failed', `${code ?? '(no code)'} ${msg}`);
+          // 文本匹配只作为兜底：代理若剥掉了响应体，码就取不到，
+          // 但服务端那句"文件存储后端未接入"仍可能出现在消息里。
+          const notConfigured =
+            code === 'STORAGE_NOT_CONFIGURED' || /STORAGE_NOT_CONFIGURED|未接入|未配置/.test(msg);
+          return notConfigured ? 'not_configured' : 'failed';
+        }
+      };
+
       if (editId) {
         await updateResource(editId, { ...base, status });
+        fileOutcome = await uploadSelectedFile(editId);
       } else {
         const created = await createResource({
           ...base,
@@ -197,6 +321,8 @@ const UploadPage: React.FC = () => {
         // 而下面的 toast 却显示「已提交审核」—— API 没做成的事，UI 说做成了；
         // 审核台也永远看不到它。想真正提交审核，必须再调一次 submit-review（走
         // resource.submit_review 权限校验）。
+        fileOutcome = await uploadSelectedFile(created.id);
+
         if (status === 'pending_review') {
           try {
             await submitReview(created.id);
@@ -217,12 +343,17 @@ const UploadPage: React.FC = () => {
       }
       // 选了文件但**没有上传字节**时必须说清楚。
       //
-      // 这一版客户端不再伪造 bucket/path（见上面的注释），也还没有真实的对象存储
-      // 上传流程（服务端的登记接口在缺少存储后端时会 503 拒绝）。所以"选了文件"
-      // 与"文件已上传"是两件事，不能用一个绿色的「已保存」把区别盖掉 ——
-      // 老师会以为文件已经在平台上了。
-      if (selectedFile) {
+      // 现在客户端确实会走真实上传（取预签名 URL → PUT 字节 → 登记），但上传是
+      // 可能失败的：服务端没配对象存储时登记接口会 503 拒绝。所以"选了文件"与
+      // "文件已在平台上"仍然是两件事，不能用一个绿色的「已保存」把区别盖掉 ——
+      // 老师会以为文件已经在平台上了。四种结论分别如实播报。
+      if (selectedFile && fileOutcome === 'uploaded') {
+        toast.success(t('upload.fileUploaded'));
+      } else if (fileOutcome === 'not_configured') {
         toast.warning(t('upload.storageNotConfigured'));
+      } else if (fileOutcome === 'failed') {
+        // 资源存下来了、文件没上去 —— 必须同时说清楚两件事。
+        toast.warning(`${t('upload.fileUploadFailed')}${fileError ? '：' + fileError : ''}`);
       } else {
         toast.success(
           status === 'draft'
@@ -380,6 +511,42 @@ const UploadPage: React.FC = () => {
                   </FormItem>
                 )} />
               </div>
+
+              {/*
+                §1 目录归属 —— 与上面的「资料夹」是**两个维度**，不是二选一：
+                · 资料夹（folderType）是 legacy 分类，历史数据在用，保留；
+                · 目录归属（directoryId）决定这份资源出现在可编辑目录树的哪个节点下。
+                留空 = 尚未归属，服务端存 NULL，界面如实显示"未归属"。
+              */}
+              <FormField control={form.control} name="directoryId" render={({ field }) => (
+                <FormItem className="max-w-xl">
+                  <FormLabel>{L('目录归属', 'Directory')}</FormLabel>
+                  <Select
+                    onValueChange={field.onChange}
+                    value={field.value ?? ''}
+                    disabled={!programValue || directoryOptions.length === 0}
+                  >
+                    <FormControl><SelectTrigger className="w-full">
+                      <SelectValue placeholder={
+                        directoryOptions.length === 0
+                          ? L('暂无可选目录', 'No directory available')
+                          : L('请选择所属目录（可留空）', 'Select a directory (optional)')
+                      } />
+                    </SelectTrigger></FormControl>
+                    <SelectContent>
+                      {directoryOptions
+                        // 只列出与所选班型一致的目录。科目还不一致时也一并列出，
+                        // 由**服务端**做最终判定 —— 前端筛选只是减少误选，
+                        // 不是权限边界（服务端会 400 拒绝跨班型/跨科目的归属）。
+                        .filter((o) => !programValue || o.program === null || o.program === programValue)
+                        .map((o) => (
+                          <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )} />
 
               {/* Theme (only for English) */}
               {isEnglish && (

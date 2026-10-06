@@ -321,12 +321,22 @@ describe('canonical curriculum vocabulary', () => {
     );
 
     const prek = PROGRAM_STRUCTURES.find((p) => p.program === 'prek');
+    // ⚠️ 这条金标准在收官轮**按用户决策改过**，并在此说明理由（避免看起来像"为了变绿放宽断言"）：
+    //
+    // 原来 prek 只有 3 个科目。但目录表里一直存在 5 个 `prek:english*` 节点（PDF
+    // 要求 Pre-K 有独立「英文」科目），而规范词汇里没有它 —— 于是
+    // `canonicalSubjectOfDirectoryCode('prek:english')` 返回 null、目录树该节点
+    // 的 subject 为 null，既挂不上资源也不受 scope 约束。
+    //
+    // 用户决策：**Pre-K English → prek_head**。因此把 'english' 正式纳入 prek，
+    // 本金标准随之增加一行。这不是放宽，是把"未决策的缺口"按决策补上。
     assert.deepEqual(
       prek.subjects.map((s) => [s.key, s.path]),
       [
         ['virtue', 'virtue'],
         ['montessori', 'montessori'],
         ['physical_education', 'physical_education'],
+        ['english', 'english'],
       ],
     );
     const montessori = prek.subjects.find((s) => s.key === 'montessori');
@@ -605,6 +615,9 @@ describe('i18n keys live with the tokens', () => {
         ['rock_climbing', 'subject.rockClimbing'],
       ],
     );
+    // 同上：按用户决策新增「美育」子科（K Chinese Arts → k_head）。
+    // **刻意不把「美育」映射成已有的「戏剧」drama** —— 那是两门不同的课，
+    // 合并会篡改业务含义；因此这里新增一条而不是复用 drama。
     assert.deepEqual(
       subSubjectNodes('k', 'chinese').map((n) => [n.key, n.i18nNameKey]),
       [
@@ -612,6 +625,7 @@ describe('i18n keys live with the tokens', () => {
         ['picture_books', 'subject.pictureBooks'],
         ['drama', 'subject.drama'],
         ['stem', 'subject.stem'],
+        ['arts', 'subject.arts'],
       ],
     );
   });

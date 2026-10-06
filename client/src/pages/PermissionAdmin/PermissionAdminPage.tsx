@@ -11,110 +11,63 @@ import { Badge } from '@client/src/components/ui/badge';
 import { PageHeader } from '@client/src/components/ui/page-header';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import * as teachersApi from '@client/src/api/teachers';
+import { getCurriculumStructure } from '@client/src/api/curriculum';
+// 单一真相：角色、权限、班型/科目覆盖范围全部来自 shared/rbac.ts，页面不再自己抄一份。
+import { roleDefaults, roleScopeCovers, roleSubjectScope } from '@shared/rbac';
+import type { PermissionCode } from '@shared/rbac';
 import { readListResponse } from '@client/src/api/client';
 import PermissionMatrix from './PermissionMatrix';
 import { EffectivePermissionsPanel } from '@client/src/components/permissions/EffectivePermissionsPanel';
 
 import type {
   ProgramCode,
+  ProgramStructure,
   RoleCode,
   SubjectPermission,
   SubjectPermissionInput,
   Teacher,
 } from '@shared/api.interface';
 
-interface SubjectNode {
-  key: string;
-  name: string;
-  nameEn: string;
-  children?: SubjectNode[];
+/**
+ * 角色 → 该角色是否**自动**覆盖某个班型下的科目（§3：页面不得自维护角色权限）。
+ *
+ * 这里以前是一张页面自己维护的 `ROLE_AUTO_PERMISSIONS` 表。那是**第二份真相**：
+ * 服务端 `shared/rbac.ts` 里的 `ROLE_PERMISSIONS` / `roleSubjectScope` 已经定义了
+ * 同一件事，两处一旦分叉，界面就会显示与服务端判定不一致的"自动已授权"，
+ * 而管理员据此操作会得到看不懂的结果。
+ *
+ * 现在全部**从 shared/rbac.ts 推导**（前端直接 import 那份单一真相）：
+ *   · 班型/科目覆盖范围 ← roleSubjectScope + roleScopeCovers
+ *   · 能不能看/能不能传 ← 该角色的权限集合里有没有 resource.view / resource.create
+ * 页面不再持有任何角色或课程的字面量。
+ */
+function roleAutoCovers(
+  roles: readonly RoleCode[],
+  program: ProgramCode,
+  subject: string,
+  type: 'view' | 'upload',
+): boolean {
+  const scope = roleSubjectScope(roles);
+  if (!roleScopeCovers(scope, program, subject)) return false;
+  const needed: PermissionCode = type === 'view' ? 'resource.view' : 'resource.create';
+  return roleDefaults(roles).has(needed);
 }
-
-interface ProgramDef {
-  program: ProgramCode;
-  name: string;
-  nameEn: string;
-  subjects: SubjectNode[];
-}
-
-const PREK_SUBJECTS: SubjectNode[] = [
-  { key: 'virtue', name: '美德', nameEn: 'Virtue' },
-  {
-    key: 'montessori',
-    name: '蒙特梭利',
-    nameEn: 'Montessori',
-    children: [
-      { key: 'practical_life', name: '日常生活', nameEn: 'Practical Life' },
-      { key: 'sensorial', name: '感官', nameEn: 'Sensorial' },
-      { key: 'math', name: '数学', nameEn: 'Math' },
-      { key: 'english_language', name: '英文语言', nameEn: 'English Language' },
-      { key: 'chinese_language', name: '中文语言', nameEn: 'Chinese Language' },
-      { key: 'culture', name: '文化', nameEn: 'Culture' },
-    ],
-  },
-  { key: 'pe', name: '体能', nameEn: 'Physical Education' },
-];
-
-const K_SUBJECTS: SubjectNode[] = [
-  { key: 'virtue', name: '美德', nameEn: 'Virtue' },
-  {
-    key: 'chinese',
-    name: '中文',
-    nameEn: 'Chinese',
-    children: [
-      { key: 'poetry', name: '古诗', nameEn: 'Ancient Poetry' },
-      { key: 'picture_books', name: '绘本', nameEn: 'Picture Books' },
-      { key: 'drama', name: '戏剧', nameEn: 'Drama' },
-      { key: 'stem', name: '科学与工程', nameEn: 'STEM' },
-    ],
-  },
-  {
-    key: 'english',
-    name: '英文',
-    nameEn: 'English',
-    children: [
-      { key: 'reading_comprehension', name: '阅读理解', nameEn: 'Reading Comprehension' },
-      { key: 'language_skills', name: '语言技能', nameEn: 'Language Skills' },
-      { key: 'math', name: '数学', nameEn: 'Math' },
-    ],
-  },
-  {
-    key: 'pe',
-    name: '体能',
-    nameEn: 'Physical Education',
-    children: [
-      { key: 'pe_special', name: '体能专项', nameEn: 'PE Special' },
-      { key: 'sports', name: '体育', nameEn: 'Sports' },
-      { key: 'rock_climbing', name: '攀岩', nameEn: 'Rock Climbing' },
-    ],
-  },
-];
-
-const PROGRAMS: ProgramDef[] = [
-  { program: 'prek', name: 'Pre-K', nameEn: 'Pre-K', subjects: PREK_SUBJECTS },
-  { program: 'k', name: 'K', nameEn: 'K', subjects: K_SUBJECTS },
-];
-
-const ROLE_AUTO_PERMISSIONS: Record<string, { program: ProgramCode; canView: boolean; canUpload: boolean }[]> = {
-  principal: [
-    { program: 'prek', canView: true, canUpload: true },
-    { program: 'k', canView: true, canUpload: true },
-  ],
-  curriculum_director: [
-    { program: 'prek', canView: true, canUpload: false },
-    { program: 'k', canView: true, canUpload: false },
-  ],
-  prek_head: [{ program: 'prek', canView: true, canUpload: true }],
-  k_head: [{ program: 'k', canView: true, canUpload: true }],
-  pe_specialist: [],
-  prek_assistant: [{ program: 'prek', canView: true, canUpload: false }],
-  visitor: [],
-};
 
 const PermissionAdminPage: React.FC = () => {
   const { t } = useTranslation();
   const [searchParams] = useSearchParams();
   const urlTeacherId = searchParams.get('teacherId');
+
+  /**
+   * 课程结构（班型 → 科目 → 子科）**来自服务端规范接口**，
+   * 页面不再自维护一份数组。
+   *
+   * 以前这里有两份写死的 `PREK_SUBJECTS` / `K_SUBJECTS`。它不仅违反 §3，
+   * 而且**已经漂移了**：本轮按决策新增的 `prek:english`（Pre-K 英文）与
+   * `k:chinese:arts`（美育）在这份手抄数组里根本不存在 —— 于是权限管理界面
+   * 给不了这两个科目的权限，而服务端认为它们存在。抄一份的下场就是这样。
+   */
+  const [programs, setPrograms] = useState<ProgramStructure[]>([]);
 
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [teachersLoading, setTeachersLoading] = useState(false);
@@ -138,6 +91,20 @@ const PermissionAdminPage: React.FC = () => {
   }, [teachers, teacherSearch]);
 
   const selectedTeacher = teachers.find((t) => t.id === selectedTeacherId) ?? null;
+
+  // 课程结构只加载一次：它是规范词汇，不随界面状态变化。
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setPrograms(await getCurriculumStructure());
+      } catch (error) {
+        // 失败时**不写死兜底数组**（那正是刚删掉的那份手抄表）。
+        // 留空 + 记录错误：界面会因此没有科目可勾，而不是给出一份可能过时的假列表。
+        logger.error('[PermissionAdmin] load curriculum structure failed', String(error));
+      }
+    };
+    void load();
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -185,14 +152,10 @@ const PermissionAdminPage: React.FC = () => {
   }, [selectedTeacherId, loadPermissions]);
 
   const isAutoGranted = useCallback(
-    (program: ProgramCode, _subject: string, type: 'view' | 'upload'): boolean => {
+    (program: ProgramCode, subject: string, type: 'view' | 'upload'): boolean => {
       if (!selectedTeacher) return false;
-      const perms = selectedTeacher.roles.flatMap(
-        (role) => ROLE_AUTO_PERMISSIONS[role] ?? [],
-      );
-      return perms.some(
-        (p) => p.program === program && (type === 'view' ? p.canView : p.canUpload),
-      );
+      // 直接问单一真相（shared/rbac.ts），页面不再持有任何角色→权限的字面量。
+      return roleAutoCovers(selectedTeacher.roles, program, subject, type);
     },
     [selectedTeacher],
   );
@@ -240,7 +203,7 @@ const PermissionAdminPage: React.FC = () => {
     setDirty(true);
     setSaved(false);
     const next: SubjectPermission[] = [];
-    for (const prog of PROGRAMS) {
+    for (const prog of programs) {
       for (const subj of prog.subjects) {
         const targets = subj.children?.length
           ? subj.children.map((c) => ({ subKey: c.key }))
@@ -462,7 +425,7 @@ const PermissionAdminPage: React.FC = () => {
                 </div>
 
                 <PermissionMatrix
-                  programs={PROGRAMS}
+                  programs={programs}
                   permissions={permissions}
                   isAutoGranted={isAutoGranted}
                   onPermChange={handlePermChange}

@@ -153,6 +153,42 @@ export function readListResponse<T>(
   };
 }
 
+/**
+ * 取出服务端**机器可读**的错误码。
+ *
+ * 为什么必须有这个函数
+ * --------------------
+ * `handleApiError` 对非 401/403 的分支是 `throw error`（原样抛 axios 错误），
+ * 于是调用方拿到的 `error.message` 只是 `Request failed with status code 503` ——
+ * **服务端给的 code 完全丢失**。
+ *
+ * 这直接导致过一个"分支永远进不去"的缺陷：UploadPage 里判断"存储未配置"是拿
+ * 错误**文本**去匹配 `/STORAGE_NOT_CONFIGURED|未接入|未配置/`，而那段文本永远
+ * 是 `Request failed with status code 503`，所以那条 `not_configured` 分支从写下来
+ * 的那天起就不可能被触发，老师看到的永远是笼统的"文件上传失败：…503"。
+ *
+ * 服务端把具体的码放在 `error.details`（JSON 字符串）里，信封上的
+ * `error.code` 更泛（`SERVICE_UNAVAILABLE`）。具体的那个更有用，优先取它。
+ */
+export function extractApiErrorCode(error: unknown): string | null {
+  const data = (error as AxiosError)?.response?.data as
+    | { error?: { code?: string; details?: unknown } }
+    | undefined;
+  const details = data?.error?.details;
+  if (typeof details === 'string') {
+    try {
+      const parsed = JSON.parse(details) as { code?: unknown };
+      if (typeof parsed?.code === 'string' && parsed.code) return parsed.code;
+    } catch {
+      // details 不是 JSON —— 不是所有错误都带结构化 details，回落到信封。
+    }
+  } else if (details && typeof details === 'object' && typeof (details as { code?: unknown }).code === 'string') {
+    return (details as { code: string }).code;
+  }
+  const envelope = data?.error?.code;
+  return typeof envelope === 'string' && envelope ? envelope : null;
+}
+
 export const handleApiError = (error: unknown, context: string): never => {
   const err = error as AxiosError;
   const status = err.response?.status;

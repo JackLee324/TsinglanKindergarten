@@ -150,6 +150,93 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 > 日志采集**不要**依赖 `LOG_DIR`。本应用没有文件日志配置，
 > Nest `Logger` 全部写 stdout/stderr。见 §10。
 
+### 2.5 对象存储（S3 兼容）—— 上传/下载的前提
+
+| 变量 | 必填 | 用途 | 证据 |
+|---|---|---|---|
+| `S3_ENDPOINT` | ✅（要上传/下载时） | 端点，如 `https://s3.us-east-1.amazonaws.com` 或自建 MinIO 地址 | `server/modules/files/s3-object-storage.ts:36-44` |
+| `S3_BUCKET` | ✅ | bucket 名 | 同上 |
+| `S3_ACCESS_KEY_ID` | ✅ | 访问密钥 ID | 同上 |
+| `S3_SECRET_ACCESS_KEY` | ✅ | 访问密钥 | 同上 |
+| `S3_REGION` | 建议 | 默认 `us-east-1`；**必须与桶所在区域一致**，否则签名被端点拒绝 | 同上（`readS3Config`） |
+| `S3_SESSION_TOKEN` | 可选 | 用 STS 临时凭据时必填 | 同上 |
+| `S3_FORCE_PATH_STYLE` | 可选 | 自建 MinIO / 部分 S3 兼容服务通常需要 path-style | 同上 |
+
+四项（endpoint / bucket / accessKeyId / secretAccessKey）**缺任何一项**，进程就回退到
+`UnconfiguredObjectStorage`（`server/modules/files/object-storage.module.ts:35-45`）：
+上传与下载都返回 503 `STORAGE_NOT_CONFIGURED`。这是**有意的 fail closed** ——
+宁可明确拒绝，也不返回任何无效或伪造的地址。启动日志会打印实际选择的后端：
+
+```
+[ObjectStorageModule] object storage backend: s3 (endpoint=…, bucket=…, region=…)
+```
+
+看到这行才说明 S3 生效；只看到 `ObjectStorageModule dependencies initialized`
+而没有 `backend: s3`，就说明四个必填项没配齐。 [已证实：本机实测]
+
+#### ⚠️ bucket 必须配置 CORS —— 否则浏览器直传必然失败
+
+**这是实测出来的、最容易漏掉的一条。** 客户端上传是**浏览器直接 PUT 到对象存储**
+（`client/src/api/resources.ts` 的 `putFileBytes`），属于**跨域**请求；又因为带
+`Content-Type`，浏览器会先发 `OPTIONS` 预检。bucket 没有 CORS 策略时：
+
+- 预检响应缺少 `Access-Control-Allow-Origin`；
+- 浏览器直接拦掉请求，**页面上的表现是 `Failed to fetch`**（老师只看到"文件上传失败"）；
+- 服务端**不会有任何错误日志**（请求根本没到对象存储），
+  排查时极易误判成"签名算错了"或"网络不通"。
+
+实测证据（Chromium 的 `corsErrorStatus`）：`PreflightMissingAllowOriginHeader`。
+
+**最终策略（最小权限，照抄即可）**。AWS S3 / MinIO / 阿里云 OSS / Cloudflare R2
+语义相同；尖括号处替换成你的站点域名（当前生产为
+`https://tsinglankindergarten.zeabur.app`）：
+
+```xml
+<CORSConfiguration>
+  <CORSRule>
+    <!-- 只允许**正式应用域名**，不用 * -->
+    <AllowedOrigin>https://tsinglankindergarten.zeabur.app</AllowedOrigin>
+
+    <!-- 只开放**实际用到**的三个方法：
+         PUT  = 浏览器直传（客户端 putFileBytes）
+         GET  = 浏览器直接跟随签名直链下载
+         HEAD = 上传前/下载前探测对象是否存在与大小 -->
+    <AllowedMethod>PUT</AllowedMethod>
+    <AllowedMethod>GET</AllowedMethod>
+    <AllowedMethod>HEAD</AllowedMethod>
+
+    <!-- 只允许**实际需要**的请求头。
+         预签名 URL 只签 host（X-Amz-SignedHeaders=host），因此 content-type
+         **不参与签名**，放开它不会破坏签名校验。 [已证实] -->
+    <AllowedHeader>content-type</AllowedHeader>
+
+    <ExposeHeader>ETag</ExposeHeader>
+    <MaxAgeSeconds>3000</MaxAgeSeconds>
+  </CORSRule>
+</CORSConfiguration>
+```
+
+**为什么是这一组最小权限**
+
+| 项 | 取值 | 理由 |
+|---|---|---|
+| `AllowedOrigin` | 写死站点域名，**禁止 `*`** | 预签名 URL 本身是有时效的凭据；再把来源放开成 `*`，等于允许任意站点把拿到的直传地址用在自己的页面上。生产不这么做。 |
+| `AllowedMethod` | `PUT` / `GET` / `HEAD` | 应用只有这三种跨域请求。`DELETE`、`POST` 用不到，开了就是多余的攻击面。 |
+| `AllowedHeader` | 仅 `content-type` | 浏览器直传只带这一个自定义头（见 `putFileBytes`：`fetch(url, {method:'PUT', body: file})` 会自动带 `content-type`）。放开 `*` 会让预检通过任何自造头。 |
+| `ExposeHeader` | `ETag` | 便于前端做完整性/去重校验；不暴露其它响应头。 |
+
+> ⚠️ **没有配 CORS 的症状极具误导性**：预检响应缺少 `Access-Control-Allow-Origin`
+> 时，浏览器直接拦掉请求，页面显示 `Failed to fetch`，而**对象存储侧一行日志都没有**
+> （请求根本没到）。排查时极易误判成"签名算错了"或"网络不通"。
+> 本机严格校验签名的测试后端（`scripts/test-s3-sigv4-server.mjs`）用的就是**上面这份
+> 最小权限策略**（只允许 `http://127.0.0.1:3200`），并且已被
+> `scripts/verify-upload-web.mjs` 在真实浏览器里验证通过 —— 也就是说这份策略是
+> **实测可用**的，不是照文档抄的。 [已证实]
+
+**怎么判断是不是 CORS 没配**：门禁里 `storage-upload`（纯接口，Node 发请求、
+不受 CORS 约束）通过，而 `upload-web`（真实浏览器）失败 —— 最可能就是 CORS。
+两者一起跑才有区分度，只跑接口套件永远发现不了这个问题。
+
 ---
 
 ## 3. 密钥生成
@@ -922,6 +1009,11 @@ authz-http 24/24 · hardening 10/10 · mfa 36/36 · security-headers 20/20 · fi
 - [ ] **伪造 `X-Forwarded-For` 后审计记录的是真实 IP**（§9.1）
 - [ ] `MFA_ENCRYPTION_KEY` 已配置且**已与数据库备份分开备份**
 - [ ] `DOWNLOAD_TOKEN_SECRET` 已配置（≥32 字节），且**与 MFA 密钥分开管理**
+- [ ] **对象存储七项已配齐**（§2.5），且启动日志出现
+      `object storage backend: s3 (endpoint=…, bucket=…, region=…)`
+- [ ] **bucket CORS 策略已生效**（§2.5）—— 在浏览器里真的传一次文件，
+      走完"选文件 → 直传 → 登记 → 下载"；服务端日志干净不代表成功，
+      CORS 被拦时服务端一行日志都没有。门禁 `upload-web` 一项即为该验证
 - [ ] 超级管理员已完成 MFA 绑定并能成功登录（含恢复码验证一次）
 - [ ] 回滚方案已写明：**上一个产物版本 + 备份文件位置 + 恢复责任人**
 - [ ] 明确知道 **`down` 到零在活库上不可行**（`0002` 按设计拒绝）→ DR 走 `pg_restore`（§5.4）

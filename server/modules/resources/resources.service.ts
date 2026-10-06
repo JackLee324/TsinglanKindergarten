@@ -49,7 +49,9 @@ import {
   teachers,
   subjectPermissions,
   auditLogs,
+  directories,
 } from '@server/database/schema';
+import { canonicalSubjectOfDirectoryCode } from '@server/modules/directories/directory-vocabulary';
 import {
   signDownloadToken,
   downloadTokenConfigurationError,
@@ -801,6 +803,16 @@ export class ResourcesService {
         conditions.push(eq(resources.subSubject, scope.subSubject));
       }
     }
+    // §1 目录过滤：把 code 解析成"该节点 + 全部子孙"的 id 集合。
+    // 放在权限条件之后意味着它**只能进一步收窄**结果，永远不会放宽 ——
+    // 因此"目录归属"不可能被用来绕过科目权限。
+    if (params.directory) {
+      const subtreeIds = await this.resolveDirectorySubtreeIds(params.directory);
+      if (subtreeIds.length === 0) {
+        throw new NotFoundException(`目录节点不存在：${params.directory}`);
+      }
+      conditions.push(inArray(resources.directoryId, subtreeIds));
+    }
     if (params.folderType) {
       conditions.push(eq(resources.folderType, params.folderType));
     }
@@ -904,6 +916,8 @@ export class ResourcesService {
         subject: item.subject,
         subSubject: item.subSubject ?? undefined,
         folderType: item.folderType as Resource['folderType'],
+        // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+        directoryId: item.directoryId ?? null,
         semester: item.semester ?? undefined,
         weekNumber: item.weekNumber ?? undefined,
         theme: item.theme ?? undefined,
@@ -964,6 +978,16 @@ export class ResourcesService {
       if (scope.subSubject) {
         conditions.push(eq(resources.subSubject, scope.subSubject));
       }
+    }
+    // §1 目录过滤：把 code 解析成"该节点 + 全部子孙"的 id 集合。
+    // 放在权限条件之后意味着它**只能进一步收窄**结果，永远不会放宽 ——
+    // 因此"目录归属"不可能被用来绕过科目权限。
+    if (params.directory) {
+      const subtreeIds = await this.resolveDirectorySubtreeIds(params.directory);
+      if (subtreeIds.length === 0) {
+        throw new NotFoundException(`目录节点不存在：${params.directory}`);
+      }
+      conditions.push(inArray(resources.directoryId, subtreeIds));
     }
     if (params.folderType) {
       conditions.push(eq(resources.folderType, params.folderType));
@@ -1031,6 +1055,8 @@ export class ResourcesService {
       subject: item.subject,
       subSubject: item.subSubject ?? undefined,
       folderType: item.folderType as Resource['folderType'],
+      // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+      directoryId: item.directoryId ?? null,
       semester: item.semester ?? undefined,
       weekNumber: item.weekNumber ?? undefined,
       theme: item.theme ?? undefined,
@@ -1087,6 +1113,8 @@ export class ResourcesService {
       subject: resource.subject,
       subSubject: resource.subSubject ?? undefined,
       folderType: resource.folderType as Resource['folderType'],
+      // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+      directoryId: resource.directoryId ?? null,
       semester: resource.semester ?? undefined,
       weekNumber: resource.weekNumber ?? undefined,
       theme: resource.theme ?? undefined,
@@ -1293,6 +1321,8 @@ export class ResourcesService {
       subject: resource.subject,
       subSubject: resource.subSubject ?? undefined,
       folderType: resource.folderType as Resource['folderType'],
+      // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+      directoryId: resource.directoryId ?? null,
       semester: resource.semester ?? undefined,
       weekNumber: resource.weekNumber ?? undefined,
       theme: resource.theme ?? undefined,
@@ -1320,6 +1350,113 @@ export class ResourcesService {
 
   // ========== 创建资源 ==========
 
+  /**
+   * 解析并校验一个目录归属（§1 / §3）。
+   *
+   * 规则（每一条都有明确理由，不是"顺手加的校验"）：
+   *   1. `undefined` → 返回 null：不归属。**不猜默认目录** —— 把资源悄悄塞进
+   *      "某个默认目录"会让用户以为是自己选的。
+   *   2. 目录不存在 → 400（不是 404）：出错的是请求体里的一个字段，
+   *      不是被请求的那条资源。
+   *   3. `enabled = false` → 400：已停用的目录不接受新归属。
+   *   4. 目录节点的 program 与资源的 program 不一致 → 400。
+   *   5. 目录节点的规范 subject 与资源的 subject 不一致 → 400。
+   *      4/5 合起来就是 §3 的"目录权限与 program/subject scope 同受约束"：
+   *      资源本身的写入权限已经判过，归属又被钉在同一个 program+subject 上，
+   *      因此**无法通过挑一个别的目录来绕开科目授权**。
+   *
+   * 子科与资料夹节点继承其所属科目，所以判定用的是 `subject` 列上记录的
+   * 「所属科目 code」而不是节点自己的 code —— 与 directories.service 的
+   * `subjectOwnerCodeFor` 同一套语义。
+   */
+  /**
+   * 目录 code → 「该节点 + 全部子孙」的 id 列表（§1）。
+   *
+   * 为什么不递归 SQL：目录表只有几十行（实测 69 个节点、最深 4 层），
+   * 一次全表读进来在内存里走一遍比递归 CTE 更好读、也更容易解释；
+   * 真到了几千节点再换 CTE，那时这个函数的签名不用变。
+   *
+   * 返回空数组表示"没有这个 code" —— 调用方据此抛 404。
+   * **绝不返回"全部"**：code 拼错时必须什么都查不到，而不是把整个库倒出来。
+   */
+  private async resolveDirectorySubtreeIds(code: string): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: directories.id, parentId: directories.parentId, code: directories.code })
+      .from(directories);
+
+    const target = rows.find((r) => r.code === code);
+    if (!target) return [];
+
+    const childrenOf = new Map<string, string[]>();
+    for (const row of rows) {
+      if (row.parentId === null) continue;
+      const list = childrenOf.get(row.parentId);
+      if (list) list.push(row.id);
+      else childrenOf.set(row.parentId, [row.id]);
+    }
+
+    const out: string[] = [];
+    const stack: string[] = [target.id];
+    while (stack.length > 0) {
+      const id = stack.pop() as string;
+      out.push(id);
+      for (const child of childrenOf.get(id) ?? []) stack.push(child);
+    }
+    return out;
+  }
+
+  private async resolveDirectoryAssignment(
+    directoryId: string | undefined | null,
+    program: string,
+    subject: string,
+  ): Promise<string | null> {
+    if (directoryId === undefined || directoryId === null || directoryId === '') return null;
+
+    const rows = await this.db
+      .select({
+        id: directories.id,
+        code: directories.code,
+        name: directories.name,
+        type: directories.type,
+        program: directories.program,
+        subject: directories.subject,
+        enabled: directories.enabled,
+      })
+      .from(directories)
+      .where(eq(directories.id, directoryId))
+      .limit(1);
+
+    const node = rows[0];
+    if (!node) {
+      throw new BadRequestException('指定的目录不存在');
+    }
+    if (node.enabled === false) {
+      throw new BadRequestException('该目录已停用，不能作为资源归属');
+    }
+    if (node.program !== null && node.program !== program) {
+      throw new BadRequestException('资源与所选目录不属于同一班型');
+    }
+
+    // 节点的所属科目 code（科目节点是自己；子科/资料夹是其科目前缀）。
+    const ownerCode =
+      node.type === 'subject' || node.type === 'sub_subject'
+        ? node.code
+        : (node.subject ?? null);
+    if (ownerCode !== null && ownerCode !== '') {
+      const nodeSubject =
+        canonicalSubjectOfDirectoryCode(ownerCode) ??
+        // 未登记进目录词汇表的 code（用户自建文件夹的 code 形如
+        // `prek:virtue.custom_xxx`）走前缀匹配：取第一段 program、
+        // 第二段 subject，避免"自建文件夹一律不能归属"。
+        canonicalSubjectOfDirectoryCode(ownerCode.split('.').slice(0, 2).join(':'));
+      if (nodeSubject !== null && nodeSubject !== subject) {
+        throw new BadRequestException('资源与所选目录不属于同一科目');
+      }
+    }
+
+    return node.id;
+  }
+
   async createResource(
     dto: CreateResourceRequest,
     currentTeacherId: string,
@@ -1331,6 +1468,21 @@ export class ResourcesService {
     // producing the unreachable rows this phase removes. Unknown values throw 400
     // rather than being written.
     const scope = resolveScope(dto);
+
+    // §1 目录归属：校验并解析 directoryId（不传 = 不归属）。
+    //
+    // 为什么校验放在这里而不是 DTO：需要查库、并且要**与资源自身的 program/subject 对齐**。
+    //
+    // 这个对齐就是 §3 要求的"目录权限必须同时受 directory/program/subject scope 约束"：
+    // 资源能不能建，刚刚已经被 `checkSubjectPermission(..., 'upload')` 判过；
+    // 而目录归属只允许落在**同一 program、同一 subject**的目录节点上，
+    // 因此不可能用"选一个别的目录"来绕开科目授权。
+    // 另外 `enabled = false`（已停用）的目录**不接受新归属** —— 停用就该是停用。
+    const directoryId = await this.resolveDirectoryAssignment(
+      dto.directoryId,
+      scope.program ?? dto.program,
+      scope.subject ?? dto.subject,
+    );
 
     // 科目上传权限校验
     const canUpload = await this.checkSubjectPermission(
@@ -1366,7 +1518,10 @@ export class ResourcesService {
         program: scope.program ?? dto.program,
         subject: scope.subject ?? dto.subject,
         subSubject: scope.subSubject,
+        // legacy 资料夹分类照旧写入，**不因目录归属而改动**（两个维度并存）。
         folderType: dto.folderType,
+        // §1 新的目录归属维度。
+        directoryId,
         semester: dto.semester,
         weekNumber: dto.weekNumber,
         // The STORED spelling, so a resource created through the UI lands in the
@@ -1417,6 +1572,8 @@ export class ResourcesService {
         subject: newResource.subject,
         subSubject: newResource.subSubject ?? undefined,
         folderType: newResource.folderType as Resource['folderType'],
+        // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+        directoryId: newResource.directoryId ?? null,
         semester: newResource.semester ?? undefined,
         weekNumber: newResource.weekNumber ?? undefined,
         theme: newResource.theme ?? undefined,
@@ -1646,6 +1803,8 @@ export class ResourcesService {
         subject: updatedResource.subject,
         subSubject: updatedResource.subSubject ?? undefined,
         folderType: updatedResource.folderType as Resource['folderType'],
+        // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+        directoryId: updatedResource.directoryId ?? null,
         semester: updatedResource.semester ?? undefined,
         weekNumber: updatedResource.weekNumber ?? undefined,
         theme: updatedResource.theme ?? undefined,
@@ -1876,6 +2035,8 @@ export class ResourcesService {
         subject: item.subject,
         subSubject: item.subSubject ?? undefined,
         folderType: item.folderType as Resource['folderType'],
+        // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+        directoryId: item.directoryId ?? null,
         semester: item.semester ?? undefined,
         weekNumber: item.weekNumber ?? undefined,
         theme: item.theme ?? undefined,
@@ -2383,6 +2544,8 @@ export class ResourcesService {
         subject: updatedResource.subject,
         subSubject: updatedResource.subSubject ?? undefined,
         folderType: updatedResource.folderType as Resource['folderType'],
+        // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+        directoryId: updatedResource.directoryId ?? null,
         semester: updatedResource.semester ?? undefined,
         weekNumber: updatedResource.weekNumber ?? undefined,
         theme: updatedResource.theme ?? undefined,
@@ -2466,6 +2629,8 @@ export class ResourcesService {
         subject: item.subject,
         subSubject: item.subSubject ?? undefined,
         folderType: item.folderType as Resource['folderType'],
+        // §1 目录归属（与 folderType 是两个维度，两者都返回）。
+        directoryId: item.directoryId ?? null,
         semester: item.semester ?? undefined,
         weekNumber: item.weekNumber ?? undefined,
         theme: item.theme ?? undefined,

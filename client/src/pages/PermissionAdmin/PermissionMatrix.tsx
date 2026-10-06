@@ -8,24 +8,11 @@ import {
 } from '@client/src/components/ui/tooltip';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 
-import type { ProgramCode, SubjectPermission } from '@shared/api.interface';
-
-interface SubjectNode {
-  key: string;
-  name: string;
-  nameEn: string;
-  children?: SubjectNode[];
-}
-
-interface ProgramDef {
-  program: ProgramCode;
-  name: string;
-  nameEn: string;
-  subjects: SubjectNode[];
-}
+// 类型一律用共享定义，页面不再各自声明一份同构接口（§3）。
+import type { ProgramCode, ProgramStructure, SubjectNode, SubjectPermission } from '@shared/api.interface';
 
 interface PermissionMatrixProps {
-  programs: ProgramDef[];
+  programs: ProgramStructure[];
   permissions: SubjectPermission[];
   isAutoGranted: (program: ProgramCode, subject: string, type: 'view' | 'upload') => boolean;
   onPermChange: (

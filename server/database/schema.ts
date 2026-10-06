@@ -213,6 +213,16 @@ export const resources = pgTable("resources", {
   subject: varchar("subject", { length: 50 }).notNull(),
   subSubject: varchar("sub_subject", { length: 50 }),
   folderType: varchar("folder_type", { length: 30 }).notNull(),
+  /**
+   * §1 目录归属 —— 指向 `directories.id`（migration 0012）。
+   *
+   * **与 `folderType` 是两个维度，并存**：`folder_type` 是历史数据在用的
+   * 资料夹分类（6 值，不因本列而改写）；本列是资源在可编辑目录树上的归属，
+   * 可为任意节点（科目 / 子科 / 资料夹 / 用户自建文件夹）。NULL = 尚未归属。
+   *
+   * 数据库侧外键是 `ON DELETE RESTRICT`：只要还有资源挂在这个节点上，就删不掉它。
+   */
+  directoryId: uuid("directory_id"),
   semester: varchar("semester", { length: 10 }),
   weekNumber: integer("week_number"),
   theme: varchar("theme", { length: 100 }),

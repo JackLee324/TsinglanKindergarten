@@ -748,3 +748,654 @@ TTL 夹到 [1, 7 天]、**bucket 不匹配拒绝签名**。`ObjectStorageModule`
 ① tab 交互 —— 根因是 Radix Tabs 在 `onMouseDown` 切换、不看 `click`（详见 `bfb48ca` 提交信息）；
 ② skip 策略 —— §16 的 SKIP 已换成可判定断言，现在 **18/18、0 SKIP**。
 Chrome 仍是环境依赖，所以门禁在未配置账号时**明确打印"未运行、不算通过"**，而不是打印 PASS。
+
+---
+
+### 追加（第 31 轮）：把"客户端上传"真正跑通 —— 途中挖出 4 个真实缺陷
+
+本轮起点：上一轮把**服务端**三步接口（申请直传地址 → PUT 字节 → 登记）跑通了，
+但**客户端**（老师真正点的那个按钮）一行都没有被验证过。补上浏览器闭环后，
+连续暴露出 4 个此前完全没有被发现的问题。全部已修并验证。
+
+#### 缺陷 1：编辑页**永远存不了档**，而且一声不吭（严重）
+
+`UploadPage` 里两段"清空下级选择"的 effect 是无条件的：
+
+```tsx
+useEffect(() => { form.setValue('subject',''); form.setValue('subSubject',''); }, [programValue])
+useEffect(() => { form.setValue('subSubject',''); }, [subjectValue])
+```
+
+编辑页加载时 `form.reset()` 会把 `program` 从 `''` 变成资源真实的班型，这个**变化**
+同样触发第一段，于是刚预填进去的 `subject` 立刻被清空。后果不是报错，而是：
+
+    点「保存草稿」→ form.trigger 校验失败 → `if (!ok) return;` → 既不保存也不提示
+
+实测证据（编辑 prek/virtue 的资源，点保存后）：路径仍停在 `/upload?id=…`，
+页面只多出一行 `upload.subjectRequired`，**没有任何 toast**。也就是说
+「编辑资源」这个功能此前是不可用的，且完全静默。
+
+修复：只在"用户真的换了班型、且原科目在新班型里不存在"时才清空（用 ref 记录前值，
+首次落值不清）；并且**校验失败必须说出来**（新增 toast，原来是无条件 `return`）。
+
+#### 缺陷 2：`not_configured` 分支从写下那天起就不可能进入（死分支）
+
+`UploadPage` 里判断"服务端没接对象存储"用的是**错误文本**匹配：
+
+```ts
+/STORAGE_NOT_CONFIGURED|未接入|未配置/.test(msg)
+```
+
+但 `handleApiError` 对非 401/403 是 `throw error`（原样抛 axios 错误），
+于是 `msg` 永远是 `Request failed with status code 503` —— 那段正则**永不匹配**。
+实测：服务端未配存储时，老师看到的是笼统的「资源已保存，但文件上传失败：…503」，
+而不是那条专门写好、双语齐全的「文件没有上传：服务端当前没有配置对象存储」。
+
+修复：新增 `extractApiErrorCode()`（`client/src/api/client.ts`）从
+`error.details`（服务端把具体的码放在这里）取**机器可读**的 code，
+按 code 判定；文本匹配只作为响应体被代理剥掉时的兜底。
+
+#### 缺陷 3（真实部署前提）：bucket 没配 CORS，浏览器直传必然 "Failed to fetch"
+
+客户端上传是**浏览器直接 PUT 到对象存储**（跨域，且带 `Content-Type` ⇒ 有预检）。
+bucket 没有 CORS 策略时：
+
+* Chromium 的 `corsErrorStatus` 实测为 `PreflightMissingAllowOriginHeader`；
+* 浏览器拦掉请求，页面显示 `Failed to fetch`；
+* **服务端一行错误日志都没有**（请求根本没到对象存储）—— 极易误判成"签名算错了"。
+
+这不是代码缺陷（预签名 URL 本身正确：实测 201 + 带 `X-Amz-Signature`），
+而是**部署前提**，已写入 `DEPLOYMENT_PRODUCTION.md` §2.5 与 §12 发布前检查清单。
+同时本机测试 bucket 已配 CORS（`/tmp/qls-s3server/cors.xml`）。
+
+#### 缺陷 4：`DELETE /api/teachers/:id` 是"停用"语义，而清理代码以为它删了
+
+`verify-directories.mjs` 用该接口清理临时 visitor 探针，并把 200/204 当成"已删除"。
+但服务端执行的是 `UPDATE teachers SET status='inactive'`（有意的软删除，保留审计）。
+于是每跑一次门禁就在库里留下一个 `dirprobe_visitor`，而输出一直宣称"删除…HTTP 200"。
+
+修复：输出如实说明该接口是"停用"语义；真正的清理由 SQL 完成，并**复查残留为 0**。
+实测：`SQL 硬删除完成（影响 1 行；复查残留 0 行）`，复查 `dirprobe_visitor` = 0 行。
+
+#### 新增门禁项：`upload-web`（真实浏览器上传闭环）
+
+`scripts/verify-upload-web.mjs`，两种模式：
+
+| 模式 | 断言 | 实测 |
+|---|---|---|
+| `EXPECT_STORAGE=on`（配了 S3） | 成功提示明确说"文件也保存了"；`hasFile=true`；**从签名直链取回的字节与浏览器上传的字节逐字节一致**；另加"服务端会拒绝的文件必须报上传失败、不得报成功" | **21 通过 / 0 失败** |
+| `EXPECT_STORAGE=off`（没配 S3） | 必须出现"文件没有上传"的**警告**；不得出现绿色成功提示；不得伪造 bucket/path；下载被拒（404 无文件 / 503 存储未配置）且不给签名直链 | **13 通过 / 0 失败 / 1 显式跳过** |
+
+#### 门禁全绿（本轮，未配置存储模式）
+
+```
+npm test 276/276 · eslint PASS · stylelint PASS · typecheck server/client PASS · build PASS
+api-contracts matched
+authz-http 75 · hardening 10 · mfa 55 · security-headers 20 · files-http 80 · naming-http 49
+directories 55 · directories-write 31 · resource-versions 22 · account-permissions 27
+storage-s3 28 · storage-upload 1 · browser-e2e 37 · mfa-web 17 · upload-web 13
+✅ 全部通过        （276 单元 + 520 HTTP/浏览器 = 796）
+```
+
+#### 顺带修正：门禁有两种模式，之前没人说明
+
+`files-http` / `naming-http` 有一组断言的前提**就是**"本进程没有对象存储后端"，
+而生产**要求**必须配后端。在配了 S3 的进程上跑整个门禁，那两组会红 ——
+那是环境模式不匹配，不是产品缺陷。**最危险的处理方式是"为了把门禁弄绿去关掉对象存储"。**
+
+已在 `verify-all.sh` 头部写明两种模式的跑法，并在两个套件里加了**前提不成立时的醒目横幅**
+（用另一条代码路径 `upload-url` 探测模式，不拿被测接口自证）。
+
+#### 本轮我自己犯的错（如实记录）
+
+1. 新增的两个断言**是我写错的**，不是产品错：
+   * 「被拒后下载应返回 503」—— 资源压根没有文件时正确返回 **404**（先判有无文件，
+     再去存储），503 是"存储未配置"。已改成断言"被拒绝"这个事实 + "不给签名直链"。
+   * 两个阶段共用一条探针资源 → 阶段 1 已挂上文件，阶段 2 的 `hasFile=false` 必然失败。
+     已改为每阶段独立资源。
+2. 探针标题有两处拼接，加了后缀后只改了一处 → 「编辑页已预填」假失败一次。已收敛为单一来源。
+3. 用 `assert count == 1` 做锚点，但 `'upload.storageNote':` 在 zh/en 各出现一次（count=2）
+   → 脚本中止。教训与第 24 轮同源：**锚点必须验证唯一性**，不能假设。
+
+#### 第 31 轮收尾：两处小修（都属于"修错"，不属 UI 改版）
+
+1. **面向用户的文案里混进了 markdown**。`upload.storageNotConfigured`
+   原文是 `…但**文件没有上传**：…`。这条要经 sonner 的 toast **原样渲染**，
+   而 sonner 不解析 markdown（产物里 0 处 markdown/HTML 渲染）—— 老师看到的会是
+   字面的星号。**这条文案之所以"以前没人发现"，恰恰因为它此前是死分支**（见缺陷 2）；
+   我把它修活之后，这个瑕疵才第一次变成可见的。已去掉星号（强调靠措辞，不靠语法糖）。
+   全仓库 `client/src/i18n/translations.ts` 里已无面向用户的 `**`（其余 `**` 都在注释或 Tailwind 类里）。
+   实测复跑：未配置存储模式下提示为
+   「资源信息已保存为草稿，但文件没有上传：服务端当前没有配置对象存储。请让管理员接入存储后端后重试。」
+
+2. **数据库里有一行 `username IS NULL` 的 `principal` 账号**（`name='系统初始化'`，
+   `password_hash` 为空）。它**无法登录**（没有口令哈希），因此不是可利用的入口；
+   但一个"无用户名、角色为主管、却拿不到口令"的行本身就是可疑的历史残留。
+   本轮**没有动它**（不在本次范围内，且删除账号属运维/数据决策），在此如实登记，
+   建议上线前由你确认它的来历，并考虑连同 `__rbac_keeper` 一起做一次账号盘点。
+
+#### 第 31 轮最终门禁（干净重跑两次，结论一致）
+
+```
+npm test 276/276 · eslint PASS · stylelint PASS · typecheck server/client PASS · build PASS
+api-contracts matched
+authz-http 75 · hardening 10 · mfa 55 · security-headers 20 · files-http 80 · naming-http 49
+directories 55 · directories-write 31 · resource-versions 22 · account-permissions 27
+storage-s3 28 · storage-upload 1 · browser-e2e 37 · mfa-web 17 · upload-web 13
+✅ 全部通过                      （276 单元 + 520 HTTP/浏览器 = 796）
+```
+
+配置存储模式下的两个套件（另起一个设了 S3_* 的进程）：
+
+```
+node scripts/verify-storage-upload-flow.mjs            → 20 通过 / 0 失败 / 0 跳过
+EXPECT_STORAGE=on node scripts/verify-upload-web.mjs   → 21 通过 / 0 失败 / 0 跳过
+```
+
+探针卫生复查（两轮门禁 + 两轮存储套件之后）：`dirprobe_visitor` 残留 **0 行**、
+未删除的探针资源 **0 条**、未删除且有文件的资源 **0 条**。
+（回收站里另有 44 条**已软删除**的探针资源 —— 那是软删除的正确行为，不是脏数据。）
+
+---
+
+### 追加（第 40 轮，收官）：把"新建资源"这条最常用的路也真的走了一遍
+
+第 31 轮修掉"编辑页静默存不了档"之后，还剩一条**没被任何浏览器测试覆盖**的路：
+**新建资源**（`/upload`，不是 `/upload?id=`）。老师平时点的就是这条 ——
+要自己选班型/科目/资料夹/学期、自己填标题。而第 31 轮修的那个缺陷
+（选完班型把科目清空）恰恰出在这个表单的联动上，所以必须真的走一遍。
+
+#### 卡住的技术点：DOM 合成事件驱动不了 Radix Select
+
+Radix 的 `SelectItem` 在 pointer 处理器里用
+`document.elementFromPoint(clientX, clientY)` 判断"指针是否落在内容区上"，
+而 `new MouseEvent('click')` 的 `clientX/clientY` 默认是 **0,0** ——
+`elementFromPoint(0,0)` 拿到的是页面左上角的元素，判定"不在内容区"，
+**选择被丢弃**。
+
+实测症状极具误导性：下拉**会正常关闭**，但值不设置。表现为
+
+    点 "Pre-K" → 下拉关闭 → combobox 文案仍为空 → 科目下拉仍是 disabled
+
+看起来完全像"点了没反应"的产品缺陷。换成 **CDP `Input.dispatchMouseEvent`**
+（真实输入管线、真实坐标）后，四个下拉一次全部选中：
+
+```
+选班型 = Pre-K      PASS
+选科目 = 美德        PASS
+选资料夹 = 周次教案   PASS
+选学期 = 第一学期     PASS
+四个下拉的值都**保留住了**（选班型没有把科目清掉）  -> Pre-K / 美德 / 周次教案 / 第一学期
+```
+
+> 这与第 30 轮 §16 的结论一致（那次改成 CDP 真实鼠标事件才解决）：**凡是
+> 依赖真实指针位置的库组件，合成事件都不可靠。** 这一条值得写进入库须知。
+
+#### 半路又踩了一个"看起来像产品缺陷"的坑（我的选择器写错了）
+
+标题框填不进去，报 `NOT_FOUND`，于是提交被"必填项"校验拦下 ——
+**看上去就是产品缺陷**。真相：shadcn 的 `<Input>` 渲染出来**没有 `type` 属性**，
+而属性选择器 `input[type=text]` 匹配的是 **attribute**，不是 `el.type` 属性值。
+周次框因为显式写了 `type="number"` 所以能填，标题框就匹配不到。
+改成 `input:not([type=file]),textarea` 后正常。
+
+顺带说明：**第 31 轮新加的"请先补全必填项"toast 在这里立了功** ——
+它把"点了没反应"变成了"明确告诉我缺什么"，所以我一眼就知道是标题没填上，
+而不是又去猜表单逻辑。这正是那条改动的价值。
+
+#### 新建流程的完整证据（`upload-web` 阶段 5，真实浏览器）
+
+```
+填标题 / 填周次 / 四个下拉 / 选中文件            PASS
+点「提交审核」                                   PASS
+新建后提示"资源与文件均已保存"                     PASS
+新建的资源在「我的资源」里查得到                    PASS
+状态真的是 pending_review（提交审核生效）           PASS   -> pending_review
+库里标记为有文件                                  PASS   -> hasFile=true
+新建流程上传的字节也能逐字节取回                     PASS   -> 193B
+```
+
+合计 **35 通过 / 0 失败 / 0 跳过**（阶段 1/2/3 全跑）。
+
+这条同时证明了 §3/§5/§6/§7/§30 的状态机在**真实 UI 操作**下是通的：
+表单 → 建资源（draft）→ 上传字节 → 登记 → `submit-review` → `pending_review`。
+
+#### 第 40 轮门禁与 docker（收官证据）
+
+```
+# 未配置存储模式（主门禁全绿基线）
+npm test 276/276 · eslint PASS · stylelint PASS · typecheck server/client PASS · build PASS
+api-contracts matched
+authz-http 75 · hardening 10 · mfa 55 · security-headers 20 · files-http 80 · naming-http 49
+directories 55 · directories-write 31 · resource-versions 22 · account-permissions 27
+storage-s3 28 · storage-upload 1 · browser-e2e 37 · mfa-web 17 · upload-web 13（+1 跳过）
+✅ 全部通过
+
+# 配置存储模式
+node scripts/verify-storage-upload-flow.mjs            → 20 通过 / 0 失败 / 0 跳过
+EXPECT_STORAGE=on node scripts/verify-upload-web.mjs   → 35 通过 / 0 失败 / 0 跳过
+
+# docker（用本轮最终代码重建）
+docker build --platform linux/amd64 -t qls:r40 .       → BUILD EXIT=0，镜像 119MB
+
+# 迁移
+node scripts/migrate.mjs status                        → 11 applied，✓ No checksum drift
+```
+
+探针卫生：`dirprobe_visitor` 0 行、未删除探针资源 0 条、新建流程的三条探针资源全部删除。
+库里另有 1 条**早于本轮**的 `pending_review` 资源（`§5 序列验证资源`，`hasFile=false`），
+为既有套件的夹具，**本轮未动它**（删除可能打断依赖它的套件），在此如实登记。
+
+---
+
+## 收官指令执行台账（按用户 12 节指令，逐节记录）
+
+> 本节只记录**已经做到并有证据**的；未完成的在最后单列，绝不写成"已完成"。
+
+### §7 username IS NULL 的 principal —— 已完成（按指令，不删除）
+
+**先查引用关系（指令要求的第一步）**，实测结果：
+
+| 引用 | 行数 |
+|---|---|
+| `resources.uploader_id` | **346** |
+| `resources.reviewer_id` / `deleted_by` | 0 / 0 |
+| `review_records.reviewer_id` | 0 |
+| `sessions.teacher_id` | 0 |
+| `account_permission_overrides.teacher_id` / `granted_by` | 0 |
+| `account_scopes.teacher_id` | 0 |
+| `subject_permissions.teacher_id` | 0 |
+| `audit_logs.teacher_id` / `teacher_name='系统初始化'` | 0 / 0 |
+
+结论：它是 `scripts/seed-curriculum.mjs` 有意创建的**内容归属账号**（种子 347 条资源挂在它名下），
+**没有 username、没有 password_hash**。实测用 `''` / `'系统初始化'` / `'null'` / `'__null__'`
+登录**全部 401**，即**不可登录**。
+
+处理（严格按指令）：**不 DELETE**，只置 `status='inactive'`，保留记录与全部历史关联。
+证据：归属资源 `346 → 346`（不变）；处理后 `GET /api/resources` 仍 `200 total=348`；
+**全库 348 条未删除资源一条不少**。
+同时把 `seed-curriculum.mjs` 的插入改为 `status='inactive'`，让新装环境的初始状态与之一致
+（否则这个"改了活库、没改种子"的差异会随时间漂移）。
+
+### §2 PDF 新增科目 —— 已完成
+
+之前的状态：`prek:english` 与 `k:chinese:arts` **只存在于目录表**，规范词汇里没有，
+因此 `canonicalSubjectOfDirectoryCode()` 返回 `null` → 目录树这两个节点的 `subject = null`
+→ **既挂不上资源、也不受任何 scope 约束**（整棵树 69 节点里只有这两个是 null）。
+
+按决策做的三件事：
+1. `shared/curriculum.ts`：prek 新增科目 `english`（英文）；
+   k/chinese 新增子科 `arts`（美育）——**刻意不映射到已有的 `drama`**（两门不同的课）。
+2. `server/modules/directories/directory-vocabulary.ts`：两条 `null` 改为真实 token。
+3. i18n：新增 `subject.arts` / `subject.artsDesc`（zh + en）。
+
+角色归属**不需要写任何映射**：`roleSubjectScope` 已给 `prek_head` 整个 prek、
+`k_head` 整个 k —— 科目一进规范词汇就自动被覆盖，**未新增任何 Specialist 角色**。
+
+实测：`prek:english → subject="english"`、`k:chinese:arts → subject="arts"`，
+**全树已无解析不出 subject 的科目/子科节点**。
+
+⚠️ 三处**按决策更新**的测试期望（不是为变绿放宽断言，规格变了）：
+`scripts/verify-directories.mjs` 1 处、`tests/curriculum-tokens.test.mjs` 2 处，
+均已在代码注释里写明"旧期望对应的是未决策缺口，已按决策补上"。
+
+### §1 目录模型（进行中）
+
+已完成并验证的部分：
+* **migration 0012**（`resources.directory_id`）：加列 + `ON DELETE RESTRICT` 外键 + 部分索引 +
+  按既有 (program, subject) 回填 + 迁移内自校验。
+  - 迁移**前**已取快照 `backups/pre-0012-snapshot.json`（含 fingerprint）。
+  - **up**：348/348 归属成功，program 不一致 **0**，悬空引用 **0**。
+  - **down**：干净回滚（列/外键/索引全消失），348 条资源一条不少。
+  - **再 up**：幂等，348/348 重新回填。
+  - 顺带验证了 0011 的 down 守卫会正确拒绝（存在 138 条真实版本历史）。
+* **两个维度并存**：`folder_type` 原样保留（347 行历史数据一字未改），
+  `directory_id` 是新维度；**刻意没做** folder_type→PDF 资料夹的语义猜测。
+* **服务端写入/读取闭环**：实测建资源带目录 → `directoryId` 落库并能在详情与列表读回；
+  不传 → `null`；跨班型 / 跨科目 / 目录不存在 → 三者均 **400**（§3 的
+  "目录归属与 program/subject scope 同受约束"由此落地：无法靠挑别的目录绕开科目授权）。
+
+**尚未完成**（不得声称已完成）：目录页查询"属于该目录的资源"、
+上传界面选目录、目录树 `resourceCount` 改为按 `directory_id` 精确统计、目录排序/停用的界面入口。
+
+### 本轮门禁
+
+`npm test` 276/276（两条金标准按决策更新后）；15 个 HTTP/浏览器套件全绿；
+`directories` 由 55 增至 **56**（新增 prek:english 断言）。
+
+### 第 2 轮追加：§1 目录模型读写两侧闭环
+
+**精确计数**：`resourceCount` 之前**只有科目节点的数字是真的**（按 (program, subject) 聚合，
+子科与资料夹恒为 0，注释里写明"等 directory_id 落地后改为精确统计"）。现在改为按
+`resources.directory_id` 聚合，并在内存里累加成**子树计数** —— 老师在科目页看到
+「美德 10」时，意指"这个科目下总共 10 份"，含进了资料夹里的那些。
+
+**目录查资源**：`GET /api/resources?directory=<code>`（另有 `/api/resources/mine`
+同样支持）。code → 「该节点 + 全部子孙」的 id 集合；未知 code 返回 **404**（绝不
+返回"全部"）。过滤条件加在权限条件**之后**，因此它只能收窄、永远不能放宽 ——
+"目录归属"不可能被用来绕过科目权限。实测：
+
+    prek:virtue            -> 200 total=12
+    prek:virtue_outline    -> 200 total=0
+    prek:montessori        -> 200 total=292
+    prek                   -> 200 total=304
+    root:edu               -> 200 total=348
+    no:such:code           -> 404
+
+**排序 / 启用停用**：`UpdateDirectoryNodeDto` 加 `sortOrder`、`enabled`，
+审计新增动作 `directory_update`（**刻意不复用** `directory_rename`：改名与停用
+是完全不同的事）。系统节点仍**禁止改名**（来自 PDF），但**允许排序与启停** ——
+"这一学期不开这门课"应当靠停用表达，而不是去改 PDF。
+
+#### 途中发现并修掉的一个真实设计缺陷
+
+`loadAll()` 一律带 `enabled = true`。写路径 `updateNode()` 也用它查找目标节点 ——
+于是**一旦停用，就再也找不到它，"重新启用"永远返回 404**。停用会变成一次性、
+不可逆的操作，而界面上却会摆着一个"启用"按钮。
+修法：`loadAll(includeDisabled)`，写路径传 `true`。实测：
+
+    1) 新建文件夹 -> 201 k:chinese:arts_lesson_u1
+    2) 设置排序 -> 200 sortOrder=15
+    3) 停用 -> 200 enabled=false
+    4) 停用后还在树上吗 -> false（应 false）
+    5) 重新启用 -> 200 enabled=true   ← 修复前这里永远 404
+    6) 恢复后回到树上吗 -> true（应 true）
+    7) 自建节点改名 -> 200
+    8) 系统节点改名 -> 403（保护生效）
+    9) 系统节点排序 -> 200（允许）
+
+#### 上传页目录选择器
+
+`UploadPage` 新增「目录归属」下拉，候选**全部来自** `GET /api/directories/tree`
+（服务端已按角色 scope 剪枝），页面既不复刻权限规则也不预置目录名；
+留空 = 尚未归属（服务端存 NULL），不猜默认目录。与 legacy「资料夹」**并存**。
+
+浏览器实测（`upload-web` 扩到 **38/38**）：
+
+    PASS  选目录归属 = Pre-K / 美德
+    PASS  目录归属已落库且指向 prek:virtue  -> f7cc3cea-…
+    PASS  按目录查询能查到这条新资源（?directory=prek:virtue）
+    PASS  状态真的是 pending_review
+    PASS  新建流程上传的字节也能逐字节取回  -> 193B
+
+#### 本轮我自己犯的两个测试错误（都属"看起来像产品缺陷"）
+
+1. **点错下拉项**：目录下拉有 69 个候选、列表可滚动，我只取了目标项的
+   `getBoundingClientRect` 中心去点，结果点中了**别的**行
+   （点 "Pre-K / 美德" 实际选中 `prek:montessori_lesson`），服务端随即正确地以
+   400「资源与所选目录不属于同一科目」拒绝 —— 看起来完全像产品缺陷。
+   修法：坐标取"目标项矩形 ∩ 下拉可视区矩形"的交集中心；并**新增自校验**：
+   点完必须复核 combobox 上的文案是否真的是期望值，否则返回 `WRONG_PICK`。
+   没有这个自校验，它会静默地一直错下去。
+2. 同类的第十次教训：**断言必须验证"实际发生了什么"**，不能只验证"我做了这个动作"。
+
+**门禁**：全绿 —— `npm test 276/276`、双端 typecheck、lint、build、api-contracts，
+15 个套件（`directories` 56、`upload-web` 13/off 模式）。
+
+### 第 3 轮追加：§1 的三项硬要求有了浏览器级证据（新增 `directory-web`）
+
+用户对 §1 提了三条明确、可判定、**此前完全没被覆盖**的要求：
+
+1. 目录修改后**刷新浏览器仍然存在**；
+2. 新增目录**无需修改代码**即可在网页出现；
+3. **目录页面能够查询到属于该目录的资源**。
+
+`verify-browser-e2e.mjs` 的 §24 建过文件夹，但**建完就删、从不刷新** ——
+所以第 1 条一直是裸奔的：一个"只活在 React state 里、刷新就没"的实现也能通过。
+新增 `scripts/verify-directory-web.mjs`（已接入门禁），实测 **13/13**：
+
+```
+PASS  展开目录树后找到父节点 prek:english_lesson 的「新建子目录」按钮
+PASS  提交后新目录出现在树里  -> 刷新探针-567739
+PASS  F5 硬刷新后新目录仍在（不是内存里的假象）  -> 刷新探针-567739
+PASS  服务端目录树里也确实存在该节点  -> prek:english_lesson_u1
+PASS  先选班型 = Pre-K（目录下拉此时才可用）
+PASS  新目录出现在上传页的「目录归属」候选里（没有改过任何代码）
+PASS  按该目录查询能查到归属其中的资源  -> prek:english_lesson_u1
+PASS  资源行上的 directoryId 正是该目录  -> bd7769ab-…
+```
+
+#### 途中发现并修掉的真缺陷：删除目录返回 500
+
+`ON DELETE RESTRICT` 是我在 0012 里加的（删除保护的数据库兜底）。但 `deleteNode()`
+**只检查了子目录、没检查资源**，于是数据库抛出的外键冲突以 Postgres 原始错误冒上来，
+用户看到的是 **500「服务器内部错误」** —— 既不知道原因，也不知道该怎么办。
+实测就是这样：删一个刚放过资源的自建目录 → 500。
+
+修法：删除前先查引用数，给出**可执行的 409**；并且**不过滤 `deleted_at`** ——
+回收站里的行还在，外键照样拦得住它，判断必须与数据库的真实约束一致，
+否则又会出现"接口说能删、数据库说不能"。实测：500 → **409**，消息说明还有几份资源、
+含回收站里的、以及该怎么办。
+
+顺带把 `deleteNode` 的查找也改成 `loadAll(true)`（与 `updateNode` 同类问题：
+停用过的节点会永远找不到，"停用即不可删"）。
+
+#### 本轮我自己犯的三个测试错误（都是"读了自己过期的数据/误判"）
+
+1. **深层节点根本没渲染**：目录页是可折叠树，`prek:english_lesson` 在祖先收起时
+   不进 DOM，直接 `querySelector` 得到 NOT_FOUND，于是 4 条断言全部误报失败。
+   修法：新增 `expandUntil()` 逐层展开再查找。
+2. **在禁用控件上点击**：「目录归属」下拉在未选班型时是 disabled 的（有意的设计），
+   不先选班型就点它什么都不会发生 —— 误报成"新目录没出现"。
+3. **用了建目录之前的目录树快照**去取新目录的 id，`find()` 返回 undefined、
+   `.id` 得到 undefined，资源被建成"未归属"，查询自然是 0。
+   **这是同类错误的第三次**（前两次：探针标题两处拼接、复用过期变量）。
+
+另外还有一个**差点造成破坏**的错误：清理残留时写了 `code LIKE '%_u%'` ——
+`_` 在 SQL LIKE 里是**单字符通配符**，于是 `root:edu`（含字母 u）也被选中，
+差一步就删掉根节点（外键挡住了）。改用锚定正则 `'_u[0-9]+$'`。
+**又一个"锚点必须先证明唯一"的实例，这次是在 SQL 里。**
+
+#### 门禁
+
+**全绿，16 个套件**：276 单元 + 534 HTTP/浏览器 = **810 项**。
+`directory-web` 13 已接入；`directories` 56。探针卫生复查：目录总数回到 **69**、
+探针目录残留 0、未删除探针资源 0。
+
+### 第 4 轮追加：§4 用**真正校验签名**的后端跑完 8 个用例；§5 落成最小权限 CORS
+
+#### 为什么 s3rver 不算数
+
+`s3rver` **不校验 V4 签名**（其源码自述 "V4 signatures have incomplete support"）。
+于是"PUT 返回 200"**完全不能证明签名是对的** —— 一个 canonical request 拼错、
+签名算错的实现，在 s3rver 上照样通过。本项目客户端直传完全依赖预签名 URL，
+这一条不能靠"看起来能用"。
+
+#### 新增 `scripts/test-s3-sigv4-server.mjs`（真的重算签名）
+
+按 AWS 文档**从零重算**，每一层独立拒绝，并返回**不同的 S3 错误码**，
+让测试能断言"因为哪个原因被拒"而不是只断言"403 了"：
+
+1. `X-Amz-Algorithm` 必须是 AWS4-HMAC-SHA256；
+2. `X-Amz-Credential` 的 AccessKeyId 必须匹配 → 否则 **InvalidAccessKeyId**；
+3. credential scope 自洽（date/region/service）；
+4. **未过期**（X-Amz-Date + X-Amz-Expires ≥ now）→ 否则 **AccessDenied**；
+5. 重算 canonical request → stringToSign → 签名，**定长比较** → 否则 **SignatureDoesNotMatch**。
+
+#### 8 个用例实测（`scripts/verify-storage-sigv4.mjs`，**16/16 通过 / 0 跳过**）
+
+```
+1) 正确签名的 PUT 被接受                                    PASS  200
+2) GET 取回的字节与 PUT 的逐字节一致                          PASS  33B
+3) 错误签名被拒（SignatureDoesNotMatch）                     PASS  403
+4) 过期签名被拒（AccessDenied: Request has expired）         PASS  403
+5) 篡改对象键被拒（签名覆盖了 URI）                            PASS  403
+6) 篡改有效期被拒（签名覆盖了 query）                          PASS  403
+7) 换成别的 bucket 被拒（bucket 在签名覆盖的 URI 里）           PASS  403
+8) 用错的 secret 签名被拒                                    PASS  403
+   用错的 AccessKeyId 被拒（InvalidAccessKeyId）              PASS  403
+```
+
+**外加两条"防止自己骗自己"的断言**：
+
+* **第三方实现交叉验证**：让 `aws4`（第三方库）自己签一个 PUT URL，
+  交给我们的后端 —— **被接受（200）**，且同一 URL 被篡改后立刻被拒（403）。
+  这排除了"我的签名器和我的校验器共享同一个 bug、自己和自己达成一致"。
+* **走应用的真实链路**：应用自己签发 URL → PUT 到严格后端（**200**）→ 登记 →
+  两跳签名下载 → 逐字节一致。**这一条才真正证明应用签出的签名是对的。**
+
+#### §5 最小权限 CORS（已写入 `DEPLOYMENT_PRODUCTION.md` §2.5）
+
+只允许 `https://tsinglankindergarten.zeabur.app` 一个来源（**明确禁止 `*`**）、
+只开放 `PUT/GET/HEAD`、只允许 `content-type` 一个请求头、只暴露 `ETag`。
+每一项都在文档里写了"为什么是这个值"。
+
+> 这份策略是**实测可用**的，不是照文档抄的：本机严格校验签名的测试后端用的就是
+> 同一份最小权限策略（只允许 `http://127.0.0.1:3200`），
+> `verify-upload-web.mjs` 在**真实浏览器**里对着它跑通了 **38/38**。
+
+#### 本轮我犯的两个错（都是"把环境问题当成结论"）
+
+1. **凭据解析只取了两段**：`const [key, scope] = credential.split('/')` ——
+   `X-Amz-Credential` 是 5 段，于是 region/service 全是 undefined，
+   每个请求都被判成 "invalid credential scope"，**连正确的 PUT 都过不去**。
+   症状是所有 8 个用例一起变红，看起来像"签名算法错了"。
+2. **`aws4` 的两个用法错误**：`signQuery` 属于**请求对象**而不是第二个参数
+   （第一次传错位置，aws4 悄悄退回去签 Authorization 头，签名自然是 null）；
+   `import()` 也不能指向包目录（ESM 不接受目录路径），要指向 `aws4.js`。
+
+#### 一个只有真跑才会暴露的坑：测试后端也得配 CORS
+
+严格后端一开始**没有任何 CORS 头**，于是浏览器直传在预检就被拦掉 ——
+`upload-web` 报 4 条 `Failed to fetch`，而**后端一行日志都没有**（请求根本没到）。
+这与 §5 要说的完全是同一件事，只是换了个位置发生。加上最小权限 CORS 后 38/38。
+
+#### 门禁
+
+新增 `storage-sigv4` 一项（未设置 `S3_SIGV4_ENDPOINT` 时**明确打印"未运行、
+不算通过"**，不静默放过）。配置存储模式下：`storage-sigv4` **16/16**、
+`storage-upload` **20/20**、`upload-web` **38/38**。
+（该模式下 `files-http` / `naming-http` 会因"本进程没有存储后端"这一前提不成立而红 ——
+那是环境模式不匹配，两个套件都会打印醒目横幅说明，已在前文记录。）
+
+### 第 5 轮追加：§9 业务全链路 E2E —— 33 通过 / 0 失败 / 1 显式跳过
+
+新增 `scripts/verify-business-e2e.mjs`（已接入门禁），在**真实浏览器**里把用户点名的
+整条链一次走完，而不是逐个接口各测一遍 —— **单点都对、串起来断掉**是这类系统最常见
+也最难发现的一类缺陷。
+
+```
+2) 新建 → 选班型 → 选科目 → 选目录 → 上传真实文件 → 保存草稿
+   填标题 / 选班型=Pre-K / 选科目=美德 / 选资料夹=周次教案 / 选学期=第一学期
+   选目录归属=Pre-K / 美德 / 选中真实文件 / 保存草稿 → 提示"资源与文件均已保存"
+3) 编辑 → 保存 → F5 硬刷新 → 数据仍在（草稿阶段）
+   编辑页由接口预填原标题 / 改标题 / 刷新后新标题仍在 / 接口也确认标题已改
+4) 我的资源 → 查看详情                      详情弹窗打开并显示该资源
+5) 提交审核                                 状态 = pending_review
+6) 审核工作台 → 通过审核                     状态 = published
+7) 目录页面：该目录下能看到这条资源            徽标「美德 12 条资源」= 接口 published 计数
+8) 下载 → 字节一致                          逐字节一致 69B
+9) 删除 → 回收站 → 恢复 → 再出现              列表消失 / 进回收站 / 恢复后 deletedAt 为空
+10) 授权→重登生效；撤销→旧 Session 失效
+    visitor 授权前被拒 403 / 授予 resource.delete / 重登后权限列表含它 /
+    撤销 / **旧 Session 立刻 401**（permissionsVersion 生效）
+```
+
+#### 为让 E2E 可靠，给图标按钮加了 `data-testid`（纯属性，不改 UI）
+
+`MyResourcesPage` / `ReviewPage` 的操作按钮是**纯图标、没有文案**，"查看"按钮还在两处
+重复出现。按坐标点等于靠猜。加了 `data-testid`（并给共享的 `ConfirmDialog` 增加可选
+`testId`），**没有改任何视觉或行为** —— 属于允许范围内的最小改动。
+
+#### ⚠️ 一个真实缺口：回收站**没有前端界面**
+
+`client/src` 里**没有任何** `recycleBin` / `restoreResource` 的引用：
+老师删掉资源后，只有管理员能通过 API 恢复。§9 要求的
+"删除→回收站→恢复→再出现"因此**只能验证到 API 层**，界面部分属**未实现**。
+已用显式 SKIP 记录（"属未实现，不是未验证"），并列入剩余阻塞项 —— 不掩盖。
+
+#### 本轮我犯的错（5 个，全部是测试自己的问题）
+
+1. **`pageSize=200` → 400**：上限是 100。于是"按目录查资源"和"回收站查询"两条一起变红，
+   看起来像功能坏了。
+2. **测试做了 UI 不允许的事**：把"编辑→保存"放在**发布之后**，而界面对已发布资源的
+   编辑按钮是 `disabled` 的 —— 保存被服务端正确拒绝，却像是"编辑坏了"。
+   修法：把这一段挪到**草稿阶段**。
+3. **拿旧标题去比对**：编辑之后资源标题变了，但校验弹窗内容时仍用**原标题**做
+   `includes`，必然失败。加诊断打印出弹窗真实内容后一眼看出 ——
+   **断言失败时把"实际值"打出来**，不然只能靠猜。
+4. **`stamp` 没提升到模块作用域**：`finally` 里的兜底清理看不到 `main()` 的局部变量，
+   于是"按本次运行标记兜底删除"根本没生效（失败运行各留一行残留）。
+5. **`process.exit()` 截断管道中的 stdout**：用 `| grep`/`tail` 看输出时清理日志整段消失，
+   一度让我以为清理没跑。改成写文件后一切正常 —— 以后看长输出用文件，不要用管道。
+
+#### 门禁（两种模式，都如实标注）
+
+* **基线（未配置存储）**：全绿。`storage-sigv4` 与 `business-e2e` 都**明确打印
+  "未运行…这一项不算通过"** —— 而不是跑出 `pass=0 fail=0`（那和"跑过且没有断言"
+  在外观上无法区分，正是本仓库一直在防的假绿）。
+* **配置存储**：`business-e2e` **33/0**、`upload-web` **38/0**、`storage-upload` **20/0**、
+  `storage-sigv4` **16/0**。（该模式下 `files-http`/`naming-http` 因"本进程没有存储后端"
+  这一前提不成立而红，属环境模式不匹配，两个套件均打印醒目横幅。）
+
+断言合计：基线 **810**；配置存储模式 **903**。
+
+### 第 6 轮追加：§10 docker compose —— **部分实测**，并发现一个真实缺陷
+
+#### 先更正一条我此前说过的不准确结论
+
+我此前写"**Docker Hub 不可达**"。实际重测：`docker pull postgres:16` **成功**
+（digest `sha256:1a6ab3f5…`），Docker Desktop 的镜像仓库可用。
+真正拉不到的是 **`minio/minio`**（`repository does not exist or may require 'docker login'`）
+—— MinIO 已迁移镜像仓库，不是网络不通。这条更正对 §4 有影响：
+"拿不到 MinIO"依旧成立，但**原因与我先前说的不同**，且我用自建严格校验后端 +
+`aws4` 交叉验证覆盖了那 8 个用例（见第 4 轮）。
+
+#### 发现并修掉一个真实缺陷：compose 只钉了构建平台，没钉运行平台
+
+`docker-compose.yml` 的 `app.build.platforms` 钉了 `linux/amd64`（因为
+`package-lock.json` 是 linux/x64 专用），但 **service 上没有 `platform:`**。
+在 Apple Silicon 宿主上实测的后果非常难查：
+
+* `docker compose up -d` **一直卡住不返回**；
+* `docker compose ps` 里 app 永远停在 **`Created`**；
+* `docker logs` **一行都没有**；
+* 只有一行极易忽略的 warning：
+  `app The requested image's platform (linux/amd64) does not match the detected host platform (linux/arm64/v8)`；
+* 随后连 `docker start` / `docker rm -f` 都会挂住，把守护进程一起拖住。
+
+已修：给 app service 加 `platform: linux/amd64`（与 `build.platforms` 一致，
+在 x86_64 宿主上是无害的同架构声明），并把**文件头那句"无法在本机验证"改成实测结论**。
+
+#### 八个子命令的实测结果（如实分列）
+
+| 子命令 | 结果 | 证据 |
+|---|---|---|
+| `docker compose config` | ✅ **通过** | exit 0；修 platform 后再次 `config -q` exit 0 |
+| `docker compose build` | ✅ **通过** | exit 0；产出 `linux/amd64` 镜像 677,721,144 字节 |
+| `docker compose ps` | ✅ **命令可用** | 正确列出 app / postgres 两行及健康状态 |
+| `docker compose logs` | ✅ **命令可用** | postgres 日志完整可取（`database system is ready`） |
+| `docker compose down` | ✅ **通过** | 容器 / 网络 / 具名卷 `pgdata` 全部移除 |
+| `docker compose up -d` | ❌ **app 容器起不来** | app 永远停在 `Created`；postgres 正常 `Up (healthy)` |
+| `docker compose restart` | ❌ 同上被阻断 | 依赖 app 容器能起 |
+| 第二次 `up -d` | ❌ 同上被阻断 | — |
+
+**为什么说这不是本仓库的问题**（逐项排除，都做了对照实验）：
+
+* 配置本身有效：`config` 与 `build` 都 exit 0；
+* 同一套 compose 里 **postgres 服务能正常起来并 healthy** —— 说明 compose 本身能起容器；
+* **镜像本身能跑**：前台 `docker run --platform linux/amd64 <镜像> node -e …`
+  真的执行了，并且 entrypoint 按设计**拒绝启动**并打印
+  `缺少必需的环境变量: MFA_ENCRYPTION_KEY`（fail-closed，正确行为）；
+* **不是 bind mount**：用一个只去掉 `volumes` 的覆盖文件重试，同样停在 `Created`；
+* **不是端口发布**：再去掉 `ports` 重试，同样停在 `Created`；
+* **不是宿主模拟**：全量重启 Docker Desktop 后，amd64 模拟已恢复正常
+  （前台 `docker run` 可跑）；而且**原生 arm64 构建**的镜像经 compose 起来时同样停在 `Created`；
+* 更广的对照：该状态下**任何 detached 容器启动都会挂**
+  （`docker run -d … node -e "setTimeout(...)"` 直接超时），
+  而前台 `docker run --rm` 正常。
+
+结论：**本机 Docker Desktop 在"由 compose/分离模式启动容器"这条路径上不可用**，
+是宿主环境问题，不是仓库缺陷。因此以下项目**在本机无法验证**，如实标 **UNVERIFIED**：
+
+* app 容器在 compose 中的实际运行；
+* 容器内 entrypoint 自动执行迁移（`migrate up`）；
+* compose healthcheck（`/api/health`）与端口映射 `127.0.0.1:3400:3000`；
+* 容器内登录 / 接口冒烟。
+
+> 注意：**镜像能在容器里跑**这一条在此前轮次已经验证过（`qls-e2e` 容器内跑通
+> 浏览器 E2E），但那**不能**代替 compose 栈的验证 —— 这里我没有把两者混为一谈。
+>
+> 需要一台 Docker 正常的机器（或 x86_64 宿主）复跑：
+> `docker compose --env-file .env.deploy up -d && docker compose ps`
+> 期望 app 在 `start_period 20s` 后转为 healthy。

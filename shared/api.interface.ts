@@ -78,6 +78,10 @@ export type AuditAction =
   | 'directory_create'
   | 'directory_rename'
   | 'directory_delete'
+  // 排序与启用/停用等对目录节点属性的修改。刻意**不复用** directory_rename ——
+  // 审计里"改了名字"和"停用了一个科目"是完全不同的事，混在一个动作里
+  // 会让事后追查变成猜谜。
+  | 'directory_update'
   // --- MFA (added by migration 0006) ---------------------------------------
   | 'mfa_enrolled'
   | 'mfa_enabled'
@@ -164,7 +168,20 @@ export interface Resource {
   program: ProgramCode;
   subject: string;
   subSubject?: string;
+  /**
+   * legacy 资料夹分类（6 值）。**与 directoryId 是两个维度**，并存：
+   * 这一列是历史数据在用的"资料夹类型"，不因为有目录归属而被替换或改写。
+   */
   folderType: FolderType;
+  /**
+   * 目录归属：指向可编辑目录树上的节点（§1）。与 `folderType` 是两个维度。
+   * 未归属时为 null —— "尚未指定"，不是"属于某个默认目录"。
+   */
+  directoryId?: string | null;
+  /** 该目录节点的 code，便于界面直接定位；服务端从目录表带出。 */
+  directoryCode?: string | null;
+  /** 该目录节点的中文名。 */
+  directoryName?: string | null;
   semester?: string;
   weekNumber?: number;
   theme?: string;
@@ -220,6 +237,17 @@ export interface ResourceListParams {
   subject?: string;
   subSubject?: string;
   folderType?: FolderType;
+  /**
+   * 只列出**归属在该目录节点（含其所有子孙节点）下**的资源（§1）。
+   *
+   * 传的是目录 **code**（如 `prek:virtue` / `prek:virtue_outline` / 自建文件夹的
+   * `prek:virtue.custom_x`），不是 uuid —— code 可读、可写进 URL、且前端从目录树
+   * 直接就有。服务端负责解析成子树 id 集合。
+   *
+   * 含子孙是刻意的：老师在科目页期望看到"这个科目下所有资源"，
+   * 而不是"正好挂在科目节点上、没进任何资料夹的那几份"。
+   */
+  directory?: string;
   semester?: string;
   weekNumber?: number;
   theme?: string;
@@ -235,6 +263,11 @@ export interface CreateResourceRequest {
   subject: string;
   subSubject?: string;
   folderType: FolderType;
+  /**
+   * 目录归属（可编辑目录树的节点 id）。可选：不传表示"尚未指定"。
+   * 服务端会校验该节点存在、已启用，且调用方对它有权限 scope。
+   */
+  directoryId?: string;
   semester?: string;
   weekNumber?: number;
   theme?: string;
@@ -251,6 +284,8 @@ export interface UpdateResourceRequest {
   titleEn?: string;
   description?: string;
   status?: ResourceStatus;
+  /** 目录归属（可编辑目录树的节点 id）。传 null 表示解除归属。 */
+  directoryId?: string | null;
   semester?: string;
   weekNumber?: number;
   theme?: string;
@@ -402,7 +437,10 @@ export interface DirectoryNode {
   program: ProgramCode | null;
   /**
    * 规范 subject token（`physical_education` 等），仅科目类节点有值。
-   * PDF 新增、规范词汇中没有的科目为 null —— 见 directory-vocabulary.ts。
+   *
+   * 曾经 PDF 新增的 `prek:english` / `k:chinese:arts` 在这里是 null（规范词汇里没有）。
+   * 用户已决策把两者分别归属 prek_head / k_head，它们已正式纳入规范词汇
+   * （见 shared/curriculum.ts 与 directory-vocabulary.ts），因此**全树已无 null 科目**。
    */
   subject: string | null;
   sortOrder: number;
@@ -417,6 +455,12 @@ export interface DirectoryNode {
    * 由数据库列 `is_system` 提供，不是"看 code 里有没有某段字符串"推出来的。
    */
   isSystem: boolean;
+  /**
+   * 是否启用。`false` 的节点**不会出现在树里**（loadAll 直接按 enabled=true 过滤），
+   * 所以正常情况下读到的节点恒为 true；它出现在类型里是为了让写接口的返回与
+   * "我刚刚停用了它"这件事一致，而不是让调用方以为停用没生效。
+   */
+  enabled: boolean;
   /** 该节点（含子树）下的资源条数，供 UI 显示徽标；无权限时为 0 而非猜测值。 */
   resourceCount: number;
   children: DirectoryNode[];

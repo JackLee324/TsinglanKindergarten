@@ -8,7 +8,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, isNotNull, isNull } from 'drizzle-orm';
 import { DRIZZLE_DATABASE, type PostgresJsDatabase } from '@server/database/database.module';
 import { directories, resources } from '@server/database/schema';
 import type {
@@ -39,6 +39,7 @@ interface DirectoryRow {
   allowCustomFolders: boolean;
   isSystem: boolean;
   createdBy: string | null;
+  enabled: boolean;
 }
 
 interface VisibilityContext {
@@ -79,7 +80,7 @@ export class DirectoriesService {
   async getTree(roles: RoleCode[] = [], canManage = false): Promise<DirectoryTreeResponse> {
     const rows = await this.loadAll();
     const childrenOf = this.indexByParent(rows);
-    const counts = await this.loadResourceCounts();
+    const counts = this.computeSubtreeCounts(rows, await this.loadResourceCounts());
     const context = this.visibilityFor(roles);
 
     const rowsById = new Map(rows.map((r) => [r.id, r]));
@@ -120,7 +121,7 @@ export class DirectoriesService {
 
     const childrenOf = this.indexByParent(rows);
     const rowsById = new Map(rows.map((r) => [r.id, r]));
-    const counts = await this.loadResourceCounts();
+    const counts = this.computeSubtreeCounts(rows, await this.loadResourceCounts());
     const node = this.buildNode(target, childrenOf, rowsById, counts, this.visibilityFor(roles));
     if (node === null) {
       throw new NotFoundException(`目录节点不存在：${code}`);
@@ -137,7 +138,7 @@ export class DirectoriesService {
   }
 
   /** 全部启用节点。 */
-  private async loadAll(): Promise<DirectoryRow[]> {
+  private async loadAll(includeDisabled = false): Promise<DirectoryRow[]> {
     const rows = await this.db
       .select({
         id: directories.id,
@@ -152,39 +153,80 @@ export class DirectoriesService {
         allowCustomFolders: directories.allowCustomFolders,
         isSystem: directories.isSystem,
         createdBy: directories.createdBy,
+        enabled: directories.enabled,
       })
       .from(directories)
-      .where(eq(directories.enabled, true))
+      // 读树时只取启用的节点（停用 = 从树上消失）；**写路径必须带上停用节点**，
+      // 否则会出现一个死结：一旦停用，`loadAll()` 就再也找不到它，
+      // 于是「重新启用」这个操作永远返回 404 —— 停用变成一次性不可逆的操作。
+      .where(includeDisabled ? undefined : eq(directories.enabled, true))
       .orderBy(directories.sortOrder, directories.code);
 
     return rows as DirectoryRow[];
   }
 
   /**
-   * 已发布资源数，按 `resources` 的 (program, subject) 聚合。
+   * 已发布资源数，**按 `resources.directory_id` 精确聚合**（migration 0012 落地后）。
    *
-   * 为什么不是按 directory_id：migration 0009 是**纯加法**的，`resources` 还没有
-   * `directory_id` 列 —— 6 种 folder_type → PDF 4 种资料夹的映射待业主确认
-   * （docs/DIRECTORY_SPEC.md §2.1）。所以今天只能按 (program, subject) 聚合。
+   * 之前不是这样的：那时没有 directory_id 列，只能按 (program, subject) 聚合，
+   * 于是**只有科目节点的数字是真的**，子科与资料夹一律返回 0（并在注释里写明了
+   * "等 resources.directory_id 迁移落地后改为按 directory_id 精确统计"）。
+   * 现在那个前提已经满足，这里就换成精确统计 —— 每个节点都能给出属于自己的数字。
    *
-   * 详见 resourceCountFor()：只有科目节点的数字是真实的。
+   * 只统计 `published` 且未删除的资源，与之前的口径一致（回收站里的不算"平台上有"）。
+   * 未归属（directory_id IS NULL）的资源不属于任何节点，因此不出现在任何数字里 ——
+   * 这是事实，不是遗漏。
    */
   private async loadResourceCounts(): Promise<Map<string, number>> {
     const rows = await this.db
       .select({
-        program: resources.program,
-        subject: resources.subject,
+        directoryId: resources.directoryId,
         total: count(),
       })
       .from(resources)
-      .where(and(isNull(resources.deletedAt), eq(resources.status, 'published')))
-      .groupBy(resources.program, resources.subject);
+      .where(
+        and(
+          isNull(resources.deletedAt),
+          eq(resources.status, 'published'),
+          isNotNull(resources.directoryId),
+        ),
+      )
+      .groupBy(resources.directoryId);
 
-    const byKey = new Map<string, number>();
+    const byId = new Map<string, number>();
     for (const row of rows) {
-      byKey.set(`${row.program ?? ''}:${row.subject ?? ''}`, Number(row.total));
+      if (row.directoryId === null) continue;
+      byId.set(row.directoryId, Number(row.total));
     }
-    return byKey;
+    return byId;
+  }
+
+  /**
+   * 把"每个节点自己的资源数"累加成"整棵子树的资源数"。
+   *
+   * 为什么是子树而不是自己那一个节点：老师在科目页看到「美德 12」时，
+   * 期望的是"这个科目下总共有 12 份"，而不是"正好挂在科目节点上、没进任何
+   * 资料夹的那几份"。资料夹里的资源显然也属于这个科目。
+   *
+   * 按**完整**目录表累加（不按可见性剪枝后的树）：权限只决定"你能不能看到这个节点"，
+   * 不改变"这个节点下有多少资源"这个事实。
+   */
+  private computeSubtreeCounts(
+    rows: DirectoryRow[],
+    own: Map<string, number>,
+  ): Map<string, number> {
+    const childrenOf = this.indexByParent(rows);
+    const memo = new Map<string, number>();
+    const visit = (row: DirectoryRow): number => {
+      const cached = memo.get(row.id);
+      if (cached !== undefined) return cached;
+      let total = own.get(row.id) ?? 0;
+      for (const child of childrenOf.get(row.id) ?? []) total += visit(child);
+      memo.set(row.id, total);
+      return total;
+    };
+    for (const row of rows) visit(row);
+    return memo;
   }
 
   private indexByParent(rows: DirectoryRow[]): Map<string | null, DirectoryRow[]> {
@@ -238,6 +280,7 @@ export class DirectoriesService {
       sortOrder: row.sortOrder,
       allowCustomFolders: row.allowCustomFolders,
       isSystem: row.isSystem,
+      enabled: row.enabled,
       resourceCount: this.resourceCountFor(row, counts),
       children,
     };
@@ -334,10 +377,11 @@ export class DirectoriesService {
   private canonicalSubjectFor(row: DirectoryRow, rowsById: Map<string, DirectoryRow>): string | null {
     if (row.type === 'sub_subject') {
       // 子科返回**自己**的规范 token：`k:chinese:reading` → picture_books。
-      // PDF 新增的 `k:chinese:arts`（美育）在规范词汇里没有对应 token，因此返回 null ——
-      // 这正是「PDF 要求了一个应用没有的科目」这个缺口在接口上的如实体现，
-      // 而不是把它伪装成父科目 `chinese` 的 token。
-      // 授权判定不读这个字段（见 isNodeVisible），所以返回 null 不会放开任何权限。
+      //
+      // 曾经 `k:chinese:arts`（美育）返回 null，因为规范词汇里没有它 ——
+      // 那是「PDF 要求了一个应用没有的科目」这个缺口的如实体现。用户已决策
+      // 「K Chinese Arts → k_head」，该子科已**正式纳入规范词汇**（key 'arts'），
+      // 所以现在返回 'arts' 而不是 null，也不再需要把 null 当作"已知但非规范"的信号。
       return isKnownSubjectCode(row.code) ? canonicalSubjectOfDirectoryCode(row.code) : null;
     }
     const ownerCode = this.subjectOwnerCodeFor(row, rowsById);
@@ -358,11 +402,7 @@ export class DirectoriesService {
    * 等 `resources.directory_id` 迁移落地后改为按 directory_id 精确统计。
    */
   private resourceCountFor(row: DirectoryRow, counts: Map<string, number>): number {
-    if (row.type !== 'subject') return 0;
-    if (!isKnownSubjectCode(row.code)) return 0;
-    const token = canonicalSubjectOfDirectoryCode(row.code);
-    if (token === null) return 0;
-    return counts.get(`${row.program ?? ''}:${token}`) ?? 0;
+    return counts.get(row.id) ?? 0;
   }
 
   // ===========================================================================
@@ -452,16 +492,35 @@ export class DirectoriesService {
   /** 重命名 / 改描述 —— 只允许自建节点。 */
   async updateNode(
     code: string,
-    input: { name?: string; nameEn?: string; description?: string },
+    input: {
+      name?: string;
+      nameEn?: string;
+      description?: string;
+      sortOrder?: number;
+      enabled?: boolean;
+    },
     actor: DirectoryActor,
   ): Promise<DirectoryNode> {
-    const rows = await this.loadAll();
+    // **必须带停用节点**：否则停用之后就再也找不到它，"重新启用"永远 404。
+    const rows = await this.loadAll(true);
     const target = rows.find((r) => r.code === code);
     if (!target) throw new NotFoundException(`目录节点不存在：${code}`);
-    if (target.isSystem) {
+
+    // 改名/改描述受系统节点保护（它们来自 PDF，改名会让 PDF 与库里的名字对不上）；
+    // 但**排序与启用/停用对所有节点开放** —— 这两件事不改任何业务含义：
+    // 「这一学期不开这门课」是学校的正常操作，靠停用表达，而不是去改 PDF。
+    const wantsRename =
+      input.name !== undefined || input.nameEn !== undefined || input.description !== undefined;
+    if (target.isSystem && wantsRename) {
       throw new ForbiddenException(
         '系统目录节点来自 PDF《教师平台》，不能改名；如需调整请先改 PDF 与种子数据',
       );
+    }
+
+    if (input.sortOrder !== undefined) {
+      if (!Number.isInteger(input.sortOrder) || input.sortOrder < -100000 || input.sortOrder > 100000) {
+        throw new BadRequestException('排序值必须是 -100000 到 100000 之间的整数');
+      }
     }
 
     const name = input.name === undefined ? undefined : input.name.trim();
@@ -485,16 +544,30 @@ export class DirectoriesService {
         ...(input.description === undefined
           ? {}
           : { description: input.description.trim() || null }),
+        ...(input.sortOrder === undefined ? {} : { sortOrder: input.sortOrder }),
+        ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         updatedAt: new Date(),
       })
       .where(eq(directories.id, target.id))
       .returning();
 
-    await this.audit.log('directory_rename', {
-      teacherId: actor.teacherId,
-      teacherName: actor.teacherName,
-      detail: `重命名「${target.name}」→「${name ?? target.name}」（${target.code}）`,
-    });
+    if (wantsRename) {
+      await this.audit.log('directory_rename', {
+        teacherId: actor.teacherId,
+        teacherName: actor.teacherName,
+        detail: `重命名「${target.name}」→「${name ?? target.name}」（${target.code}）`,
+      });
+    }
+    if (input.sortOrder !== undefined || input.enabled !== undefined) {
+      const bits: string[] = [];
+      if (input.sortOrder !== undefined) bits.push(`排序 ${target.sortOrder} → ${input.sortOrder}`);
+      if (input.enabled !== undefined) bits.push(input.enabled ? '启用' : '停用');
+      await this.audit.log('directory_update', {
+        teacherId: actor.teacherId,
+        teacherName: actor.teacherName,
+        detail: `${bits.join('、')}「${target.name}」（${target.code}）`,
+      });
+    }
 
     const merged = rows.map((r) => (r.id === target.id ? (updated as DirectoryRow) : r));
     const node = this.buildNode(
@@ -510,7 +583,8 @@ export class DirectoriesService {
 
   /** 删除自建文件夹（必须无子节点）。 */
   async deleteNode(code: string, actor: DirectoryActor): Promise<void> {
-    const rows = await this.loadAll();
+    // 与 updateNode 同理：必须带停用节点，否则"停用过就永远删不掉"。
+    const rows = await this.loadAll(true);
     const target = rows.find((r) => r.code === code);
     if (!target) throw new NotFoundException(`目录节点不存在：${code}`);
     if (target.isSystem) {
@@ -520,6 +594,27 @@ export class DirectoriesService {
     if (children.length > 0) {
       throw new ConflictException(
         `「${target.name}」下还有 ${children.length} 个子文件夹，请先删除子文件夹`,
+      );
+    }
+
+    // 删除保护（§1）：还有资源挂在这个节点上时拒绝删除。
+    //
+    // 数据库那层已经有 `ON DELETE RESTRICT` 兜底，但**只有数据库兜底是不够的**：
+    // 外键冲突会以 Postgres 原始错误冒上来，用户看到的是 500「服务器内部错误」，
+    // 既不知道原因也不知道该怎么办 —— 实测正是如此（删一个刚放过资源的自建目录）。
+    // 所以这里先查一次，给出可执行的 409。
+    //
+    // 注意**不过滤 `deleted_at`**：回收站里的资源行还在，外键照样拦得住它，
+    // 所以判断必须与数据库的真实约束一致，否则又会出现"接口说能删、数据库说不能"。
+    const refRows = await this.db
+      .select({ total: count() })
+      .from(resources)
+      .where(eq(resources.directoryId, target.id));
+    const referenced = Number(refRows[0]?.total ?? 0);
+    if (referenced > 0) {
+      throw new ConflictException(
+        `「${target.name}」下还有 ${referenced} 份资源（**含回收站里尚未清除的**），` +
+          `不能删除。请先把这些资源改到别的目录，或等它们在回收站到期后被清理。`,
       );
     }
 

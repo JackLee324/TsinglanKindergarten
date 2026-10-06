@@ -1,4 +1,5 @@
-import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
 
 /**
  * 目录写操作的 DTO。
@@ -46,4 +47,20 @@ export class UpdateDirectoryNodeDto {
   @IsString()
   @MaxLength(2000)
   description?: string;
+
+  /** 排序值（同级内从小到大）。对所有节点开放，含来自 PDF 的系统节点。 */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(-100000)
+  @Max(100000)
+  sortOrder?: number;
+
+  /**
+   * 启用 / 停用。停用的节点**从目录树上消失**（读路径按 enabled=true 过滤），
+   * 因此这是"这一学期不开这门课"的表达方式；可随时重新启用。
+   */
+  @IsOptional()
+  @IsBoolean()
+  enabled?: boolean;
 }

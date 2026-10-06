@@ -218,6 +218,23 @@ export const CURRICULUM: ProgramDefinition[] = [
         i18nDescKey: 'subject.peDesc',
         aliases: ['pe'],
       },
+      {
+        // PDF《教师平台》把「英文」列为 Pre-K 的独立科目（目录码 `prek:english`）。
+        //
+        // 在此之前它**只存在于目录表里**：`directories` 有 5 个 `prek:english*` 节点，
+        // 但规范词汇（本文件）里 prek 没有 english —— 于是 `normalizeSubject('prek','english')`
+        // 返回 null，目录树的 subject 落成 null，**这条支线既挂不上任何资源、也不受任何
+        // scope 约束**。实测：整棵树 69 个节点里只有它的 subject 是 null（prek:virtue 是 "virtue"）。
+        //
+        // 归属按用户决定：Pre-K English → prek_head。这里**不需要**写角色映射 ——
+        // `roleSubjectScope` 已经给 prek_head 整个 prek 程序（wholePrograms），
+        // 科目一旦进入规范词汇就自动被覆盖。**不新增 Specialist 角色。**
+        key: 'english',
+        name: '英文',
+        nameEn: 'English',
+        i18nNameKey: 'subject.english',
+        i18nDescKey: 'subject.englishDesc',
+      },
     ],
   },
   {
@@ -268,6 +285,17 @@ export const CURRICULUM: ProgramDefinition[] = [
             nameEn: 'STEM',
             i18nNameKey: 'subject.stem',
             i18nDescKey: 'subject.stemDesc',
+          },
+          {
+            // PDF《教师平台》把「美育」列为 K 中文下的子科（目录码 `k:chinese:arts`）。
+            // 与 Pre-K 英文同理：它此前只存在于目录表，规范词汇里没有，
+            // 于是目录树 subject=null、既挂不上资源也不受 scope 约束。
+            // 归属按用户决定：K Chinese Arts → k_head（k_head 已覆盖整个 k 程序）。
+            key: 'arts',
+            name: '美育',
+            nameEn: 'Arts',
+            i18nNameKey: 'subject.arts',
+            i18nDescKey: 'subject.artsDesc',
           },
         ],
       },

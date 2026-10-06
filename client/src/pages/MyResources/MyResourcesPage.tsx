@@ -187,6 +187,7 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
           <Button
             variant="ghost"
             size="sm"
+            data-testid="resource-edit"
             onClick={() => navigate(`/upload?id=${record.id}`)}
             disabled={!canEdit(record.status)}
             title={L('编辑', 'Edit')}
@@ -196,6 +197,7 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
           <Button
             variant="ghost"
             size="sm"
+            data-testid="resource-submit-review"
             onClick={() => setSubmitId(record.id)}
             disabled={!canSubmit(record.status)}
             title={t('btn.submitReview')}
@@ -219,6 +221,7 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
           <Button
             variant="ghost"
             size="sm"
+            data-testid="resource-delete"
             onClick={() => setDeleteId(record.id)}
             className="text-destructive hover:text-destructive"
             title={t('btn.delete')}
@@ -286,6 +289,7 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
         confirmText={t('btn.delete')}
         confirmVariant="destructive"
         onConfirm={handleDelete}
+        testId="confirm-delete"
       />
 
       <ConfirmDialog
@@ -295,6 +299,7 @@ const MyResourcesPage: React.FC<MyResourcesPageProps> = () => {
         description={L('确认提交该资源进入审核流程？', 'Confirm submitting this resource for review?')}
         confirmText={t('btn.submitReview')}
         onConfirm={handleSubmitReview}
+        testId="confirm-submit-review"
       />
 
       {/* §14 资源详情弹窗：数据由弹窗自己按 id 取，失败会如实显示 */}

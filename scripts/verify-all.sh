@@ -24,6 +24,30 @@
 #   推荐启动命令见 README / RUNBOOK；本仓库的实测门禁使用
 #   DOWNLOAD_TOKEN_TTL_SECONDS=10 LOGIN_IP_RATE_LIMIT_MAX=100000。
 #
+# ── 门禁有**两种模式**，取决于服务进程有没有配对象存储 ───────────
+# 这不是可有可无的细节：`files-http` / `naming-http` 有一组断言的前提**就是**
+# "本进程没有对象存储后端"（没有后端时登记必须 fail closed），而生产**要求**
+# 必须配后端。所以在配了 S3 的进程上跑整个门禁，那两组会红 —— 那是环境模式
+# 不匹配，不是产品缺陷。最危险的处理方式是"为了把门禁弄绿去关掉对象存储"。
+#
+# 因此：**主门禁用"未配置存储"模式跑**（下方 A），配置模式下的等价行为由
+# storage-upload / upload-web 两个套件覆盖（下方 B）。
+#
+#   A. 未配置存储（主门禁，全绿基线）
+#      启动服务时**不要**设 S3_*；然后再跑门禁：
+#        UPLOAD_WEB_EXPECT_STORAGE=off bash scripts/verify-all.sh
+#      （upload-web 在未配置模式下断言的是"必须出现『文件没有上传』的警告、
+#        且绝不出现绿色成功提示、绝不伪造 bucket/path"。）
+#
+#   B. 已配置存储（上传/下载链路）
+#      启动服务时设齐 S3_ENDPOINT / S3_BUCKET / S3_ACCESS_KEY_ID /
+#      S3_SECRET_ACCESS_KEY（+ S3_REGION），bucket 必须配 CORS（见
+#      DEPLOYMENT_PRODUCTION.md §2.5），然后：
+#        node scripts/verify-storage-upload-flow.mjs   # 接口链路（需 S3_ENDPOINT 可达）
+#        EXPECT_STORAGE=on node scripts/verify-upload-web.mjs   # 真实浏览器闭环
+#      files-http / naming-http 在该模式下会打印**醒目的前提不成立横幅**并失败；
+#      横幅已说明该如何处理。
+#
 # ── 为什么这个门禁现在是可重复的 ─────────────────────────────
 # 每个 HTTP 套件在运行时创建**属于自己的**账号与探针数据（见
 # tests/helpers/reset-fixtures.mjs），运行结束再删除。因此套件之间不再共享
@@ -91,7 +115,20 @@ run() {
   local label="$1"; shift
   printf '  %-24s ' "$label"
   if out=$("$@" 2>&1); then
-    echo "$(echo "$out" | grep -oE 'pass=[0-9]+ fail=[0-9]+' | tail -1 || echo 'PASS')"
+    counts=$(echo "$out" | grep -oE 'pass=[0-9]+ fail=[0-9]+' | tail -1)
+    if [ -z "$counts" ]; then
+      echo "PASS"
+    else
+      echo "$counts"
+      # **pass=0 不算通过。** exit code 0 只说明"没报错"，不说明"检查了什么"。
+      # 一个因为环境缺失而把所有断言都跳过的套件，同样会以 0 退出并打印
+      # `pass=0 fail=0` —— 那与"跑过且没发现问题"在外观上完全一致。
+      # 这正是本仓库反复在防的假绿，所以在这里显式拦掉。
+      if echo "$counts" | grep -q '^pass=0 '; then
+        echo "      ⚠️  该套件**一条断言都没跑**（pass=0）—— 不算通过。请检查它是否因环境缺失而整体跳过。"
+        FAILED=1
+      fi
+    fi
   else
     echo "FAIL"
     # 打印**全部**失败项，而不是前 5 行：截断的诊断会让人去猜。
@@ -164,6 +201,18 @@ run "storage-s3"          node scripts/verify-storage-s3.mjs
 # 配好 S3 后再跑同一个门禁即可执行完整链路（见脚本头注释）。
 run "storage-upload"      node scripts/verify-storage-upload-flow.mjs
 
+# **真实 SigV4 签名校验**（§4）。s3rver **不校验 V4 签名**（其源码自述），
+# 所以"PUT 返回 200"完全不能证明签名是对的。这一项要求一个**真正重算签名**的后端：
+#     node scripts/test-s3-sigv4-server.mjs        # 起后端
+#     并把应用指向它：S3_ENDPOINT=http://127.0.0.1:9300 S3_BUCKET=…（等）
+# 未设置 S3_SIGV4_ENDPOINT 时**明确说没跑**，而不是打印 PASS。
+if [ -n "${S3_SIGV4_ENDPOINT:-}" ]; then
+  run "storage-sigv4"     node scripts/verify-storage-sigv4.mjs
+else
+  printf '  %-24s ' "storage-sigv4"
+  echo "未运行（未设置 S3_SIGV4_ENDPOINT）—— 这一项**不算通过**"
+fi
+
 # 真实浏览器 E2E（§32）。它不是"再跑一次接口" —— 它验证的是**浏览器里真的点得动、
 # 页面真的渲染出了数据库里的东西**（§16 那条卡了三轮的 SKIP 已用可判定断言替代）。
 #
@@ -174,6 +223,35 @@ if [ -n "${BROWSER_E2E_USER:-}" ] && [ -n "${BROWSER_E2E_PASS:-}" ]; then
   # 两步验证与首次登录强制改密的浏览器闭环（§12/§13）。它会建一个临时账号、
   # 走完"临时密码→强制改密→启用 MFA→退出重登→第二步"，用完即删。
   run "mfa-web"           node scripts/verify-mfa-web.mjs
+  # **浏览器里的真实上传闭环**（§4/§23 客户端侧）。接口套件只能证明服务端三步可用，
+  # 证明不了"老师点「保存草稿」之后客户端真的把字节送上去了、失败时真的说清楚了"。
+  # 它按 EXPECT_STORAGE 决定期望哪条分支：
+  #   on（配了 S3）→ 成功提示 + hasFile=true + 从签名直链取回的字节与上传的字节一致；
+  #                 并额外验证"服务端拒绝的文件"必须报上传失败而不是成功。
+  #   off（没配 S3）→ 必须出现"文件没有上传"的**警告**，且不得出现绿色成功提示、
+  #                   不得伪造 bucket/path。服务端没配 S3 时用 off 跑一遍：
+  run "upload-web"        env EXPECT_STORAGE="${UPLOAD_WEB_EXPECT_STORAGE:-on}" node scripts/verify-upload-web.mjs
+  # §1 目录模型的**浏览器级**三项硬要求（此前完全没被覆盖）：
+  #   ① 目录改动 **F5 硬刷新**后仍然存在（不是活在前端内存里的假象）；
+  #   ② 新增目录**无需改代码**即出现在上传页的候选里（数据驱动，不是硬编码数组）；
+  #   ③ 目录页面能按目录查到归属其中的资源。
+  # verify-browser-e2e 的 §24 建完文件夹就删、**从不刷新**，所以①此前是裸奔的。
+  run "directory-web"     node scripts/verify-directory-web.mjs
+  # **业务全链路**（§9）：新建→选班型/科目/目录→上传真实文件→保存草稿→我的资源→
+  # 详情→提交审核→审核→发布→目录出现→下载逐字节一致；外加大编辑刷新、删除回收站恢复、
+  # 授权重登生效、撤销后旧 Session 失效。单点都对、串起来断掉，是这类系统最常见
+  # 也最难发现的缺陷，所以必须有这一条。
+  # 配置了对象存储时才有意义（未配置时上传与下载必然失败）：
+  #
+  # ⚠️ 它**必须有对象存储**才能跑（链里有"上传真实文件"和"下载字节一致"）。
+  # 未配置时**明确打印"未运行、不算通过"**，而不是让它跑出一行 `pass=0 fail=0`
+  # —— 那和"跑过且没有断言"在外观上无法区分，正是本仓库一直在防的假绿。
+  if [ "${UPLOAD_WEB_EXPECT_STORAGE:-on}" = "on" ]; then
+    run "business-e2e"    node scripts/verify-business-e2e.mjs
+  else
+    printf '  %-24s ' "business-e2e"
+    echo "未运行（UPLOAD_WEB_EXPECT_STORAGE=off，本进程未配置对象存储）—— 这一项**不算通过**"
+  fi
 else
   printf '  %-24s ' "browser-e2e"
   echo "未运行（未设置 BROWSER_E2E_USER / BROWSER_E2E_PASS）—— 这一项**不算通过**"

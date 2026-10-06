@@ -124,10 +124,15 @@ export const translations = {
     'detail.changeKind.metadata_edited': '修改信息',
     'detail.changeKind.file_attached': '附加文件',
     'detail.changeKind.status_changed': '状态变更',
+    'upload.fileUploaded': '资源与文件均已保存',
+    'upload.fileUploadFailed': '资源已保存，但文件上传失败',
     'upload.storageNote':
       '资源信息会正常保存；文件字节只有在服务端配置了对象存储后才能真正上传，否则提交时会明确告诉你原因。',
     'upload.storageNotConfigured':
-      '资源信息已保存为草稿，但**文件没有上传**：服务端当前没有配置对象存储。请让管理员接入存储后端后重试。',
+      // 不要在**给用户看**的文案里写 markdown：这条要经 sonner 的 toast 原样渲染，
+      // 而 sonner 不解析 markdown（产物里 0 处 markdown/HTML 渲染）。写成
+      // `**文件没有上传**` 老师看到的就会是字面的星号。强调靠措辞，不靠语法糖。
+      '资源信息已保存为草稿，但文件没有上传：服务端当前没有配置对象存储。请让管理员接入存储后端后重试。',
 
     // 角色
     'role.super_admin': '系统超级管理员',
@@ -220,6 +225,8 @@ export const translations = {
     'subject.peDesc': '体能发展与运动技能',
     'subject.chineseDesc': '中文语言与文化素养',
     'subject.englishDesc': 'English Language Arts 大单元主题教学',
+    'subject.arts': '美育',
+    'subject.artsDesc': 'K 中文下的美育子科（PDF 课程目录新增）',
     'subject.practicalLife': '日常生活',
     'subject.practicalLifeDesc': '照顾自己、照顾环境、优雅与礼仪',
     'subject.sensorial': '感官',
@@ -339,6 +346,7 @@ export const translations = {
     'audit.action.permission_change': '权限变更',
     'audit.action.teacher_create': '教师创建',
     'audit.action.directory_create': '新建目录文件夹',
+    'audit.action.directory_update': '调整目录排序/启停',
     'audit.action.directory_rename': '重命名目录节点',
     'audit.action.directory_delete': '删除目录文件夹',
     'audit.action.password_changed': '密码修改',
@@ -569,6 +577,8 @@ export const translations = {
     'detail.changeKind.metadata_edited': 'Metadata edited',
     'detail.changeKind.file_attached': 'File attached',
     'detail.changeKind.status_changed': 'Status changed',
+    'upload.fileUploaded': 'Resource and file both saved',
+    'upload.fileUploadFailed': 'Resource saved, but the file upload failed',
     'upload.storageNote':
       'Resource details are saved normally. The file bytes can only be uploaded once the server has object storage configured; otherwise the reason is shown on submit.',
     'upload.storageNotConfigured':
@@ -665,6 +675,8 @@ export const translations = {
     'subject.peDesc': 'Physical development and motor skills',
     'subject.chineseDesc': 'Chinese language and cultural literacy',
     'subject.englishDesc': 'English Language Arts — Big Unit Themes',
+    'subject.arts': 'Arts',
+    'subject.artsDesc': 'Arts, a sub-subject under K Chinese (added from the PDF curriculum)',
     'subject.practicalLife': 'Practical Life',
     'subject.practicalLifeDesc': 'Care of self, care of environment, grace & courtesy',
     'subject.sensorial': 'Sensorial',
@@ -784,6 +796,7 @@ export const translations = {
     'audit.action.permission_change': 'Permission Change',
     'audit.action.teacher_create': 'Teacher Create',
     'audit.action.directory_create': 'Directory folder created',
+    'audit.action.directory_update': 'Directory order or enabled state changed',
     'audit.action.directory_rename': 'Directory node renamed',
     'audit.action.directory_delete': 'Directory folder deleted',
     'audit.action.password_changed': 'Password Changed',

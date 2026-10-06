@@ -160,7 +160,21 @@ const principal = await login('seq_principal', PRINCIPAL_PW);
   const pe = findByCode(r.d?.roots ?? [], 'prek:pe');
   check('prek:pe 的规范 token = physical_education', pe?.subject, 'physical_education');
   const arts = findByCode(r.d?.roots ?? [], 'k:chinese:arts');
-  check('PDF 新增的 k:chinese:arts 规范 token = null（如实反映缺口）', arts?.subject, null);
+  // ⚠️ 这条断言**改过**，而且必须说清楚为什么改：
+  //
+  // 它以前断言 `subject === null`，标题是"如实反映缺口"—— 当时规范词汇里没有
+  // 「美育」，所以目录树只能给出 null。那是**未决策状态**的如实反映。
+  //
+  // 用户随后做了决策：**K Chinese Arts → k_head**，且**不把「美育」等同于「戏剧」**
+  // （两门不同的课，合并会篡改业务含义）。于是「美育」被正式纳入规范词汇
+  // （shared/curriculum.ts 的 k/chinese 下新增子科 key 'arts'），本脚本的期望
+  // 也随之改为 'arts'。
+  //
+  // 这是**规格变了**，不是为了让失败消失而放宽断言：旧期望对应的那个"缺口"
+  // 已经按决策补上了。若把断言留着，反而会挡住正确的行为。
+  check('k:chinese:arts 规范 token = arts（用户决策：新增美育子科，不等同于戏剧）', arts?.subject, 'arts');
+  const prekEnglish = findByCode(r.d?.roots ?? [], 'prek:english');
+  check('prek:english 规范 token = english（用户决策：归属 prek_head）', prekEnglish?.subject, 'english');
   const reading = findByCode(r.d?.roots ?? [], 'k:chinese:reading');
   check('k:chinese:reading 规范 token = picture_books', reading?.subject, 'picture_books');
 }
@@ -298,21 +312,32 @@ let visitorId = null;
 // ---------------------------------------------------------------------------
 if (visitorId) {
   const del = await principal.req('DELETE', `/api/teachers/${visitorId}`);
+  // ⚠️ `DELETE /api/teachers/:id` 的语义是**停用**，不是物理删除：
+  // 服务端执行的是 `UPDATE teachers SET status = 'inactive'`（teachers.service.ts
+  // deleteTeacher），这是有意的设计 —— 保留账号的审计与历史归属。
+  //
+  // 所以这里**不能**把 200 当成"已经删掉了"。以前这段代码就是这么以为的，
+  // 于是每跑一次门禁都在库里留下一个 dirprobe_visitor，而输出一直宣称"删除…HTTP 200"。
+  // 探针账号必须真的消失：API 调用负责验证接口本身可用，真正的清理由 SQL 完成，
+  // 并且**复查**它真的没了。
   if (del.s === 200 || del.s === 204) {
-    console.log(`\n清理：删除临时 visitor 账号 → HTTP ${del.s}`);
+    console.log(`\n清理：DELETE /api/teachers/:id → HTTP ${del.s}（该接口是"停用"语义，不是物理删除）`);
   } else {
-    // 这条路径在本机测试库上会 500（42501 insufficient_privilege，见服务端日志），
-    // 与本次改动无关，但也不能因为清理失败就留着脏账号 —— 所以回退到直接 SQL。
-    console.log(`\n\x1b[33m注意\x1b[0m  DELETE /api/teachers/:id 返回 HTTP ${del.s}；改用 SQL 清理`);
-    if (DB_URL) {
-      const postgres = (await import('postgres')).default;
-      const sql = postgres(DB_URL, { max: 1 });
-      const n = await sql`DELETE FROM teachers WHERE username = 'dirprobe_visitor'`;
-      await sql.end();
-      console.log(`      SQL 清理完成（影响 ${n.count} 行）`);
+    console.log(`\n\x1b[33m注意\x1b[0m  DELETE /api/teachers/:id 返回 HTTP ${del.s}`);
+  }
+  if (DB_URL) {
+    const postgres = (await import('postgres')).default;
+    const sql = postgres(DB_URL, { max: 1 });
+    const n = await sql`DELETE FROM teachers WHERE username = 'dirprobe_visitor'`;
+    const left = await sql`SELECT count(*)::int AS n FROM teachers WHERE username = 'dirprobe_visitor'`;
+    await sql.end();
+    if (left[0]?.n === 0) {
+      console.log(`      SQL 硬删除完成（影响 ${n.count} 行；复查残留 0 行）`);
     } else {
-      console.log('      \x1b[31m未能清理 dirprobe_visitor —— 请手动删除\x1b[0m（未设置 DATABASE_URL / AUTHZ_TEST_DB）');
+      console.log(`      \x1b[31m清理后仍有 ${left[0]?.n} 行残留 —— 请手动删除 dirprobe_visitor\x1b[0m`);
     }
+  } else {
+    console.log('      \x1b[31m未能清理 dirprobe_visitor —— 请手动删除\x1b[0m（未设置 DATABASE_URL / AUTHZ_TEST_DB）');
   }
 }
 

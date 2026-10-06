@@ -52,7 +52,15 @@ export async function createDirectoryFolder(input: {
 /** 重命名自建文件夹（仅自建节点；系统节点服务端会拒绝）。 */
 export async function updateDirectoryNode(
   code: string,
-  input: { name?: string; nameEn?: string; description?: string },
+  input: {
+    name?: string;
+    nameEn?: string;
+    description?: string;
+    /** 排序值，同级内从小到大。系统节点也可排序。 */
+    sortOrder?: number;
+    /** 启用/停用。停用后该节点从目录树上消失，可随时重新启用。 */
+    enabled?: boolean;
+  },
 ): Promise<DirectoryNode> {
   try {
     const resp = await axiosForBackend.patch(`/api/directories/node/${encodeURIComponent(code)}`, input);

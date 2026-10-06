@@ -143,12 +143,18 @@ try {
   line('=== 执行 ===');
   await sql.begin(async (tx) => {
     if (owner.length === 0) {
+      // 这个账号**只是内容归属**：种子的 347 条资源挂在它名下，它没有 username、
+      // 没有 password_hash，因此永远登不进来（实测：用 '', '系统初始化', 'null'
+      // 等任何用户名登录都是 401）。既然登不进来，就不该是一个 status='active' 的
+      // 全权限 principal —— 一个"活着却用不了"的全权限账号只会扩大攻击面。
+      // 因此固定插入为 'inactive'：**保留记录、保留全部历史关联**（346 条
+      // resources.uploader_id 指向它），只是不再是可用账号。
       await tx`
         insert into teachers (wecom_user_id, name, name_en, roles, status)
         values (${UPLOADER_WECOM_ID}, '系统初始化', 'System Initializer',
-                array['principal']::varchar[], 'active')
+                array['principal']::varchar[], 'inactive')
       `;
-      line(`  已创建上传者账号 ${UPLOADER_WECOM_ID}（无密码，不能登录，只是内容归属）`);
+      line(`  已创建上传者账号 ${UPLOADER_WECOM_ID}（无 username / 无密码，不能登录，只是内容归属；status=inactive）`);
     } else {
       line(`  上传者 ${UPLOADER_WECOM_ID} 已存在，复用`);
     }

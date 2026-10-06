@@ -56,7 +56,11 @@ export const DIRECTORY_SUBJECT_TO_CANONICAL: Readonly<Record<string, string | nu
   'prek:virtue': 'virtue',
   'prek:montessori': 'montessori',
   'prek:pe': 'physical_education',
-  'prek:english': null, // PDF 新增，规范词汇里没有 Pre-K 英文
+  // 曾经是 null（"PDF 新增，规范词汇里没有 Pre-K 英文"）。用户已决策：
+  // **Pre-K English 归属 prek_head**，因此把它正式纳入规范词汇（shared/curriculum.ts
+  // 的 prek.subjects 新增 key 'english'），这里随之给出规范 token。
+  // 归属不需要写角色映射：roleSubjectScope 已给 prek_head 整个 prek 程序。
+  'prek:english': 'english',
 
   // ---- K ----
   'k:chinese': 'chinese',
@@ -69,7 +73,11 @@ export const DIRECTORY_SUBJECT_TO_CANONICAL: Readonly<Record<string, string | nu
   'k:chinese:reading': 'picture_books',
   'k:chinese:poetry': 'ancient_poetry',
   'k:chinese:stem': 'stem',
-  'k:chinese:arts': null, // PDF 新增「美育」；规范词汇这里是「戏剧」drama
+  // 曾经是 null，理由是"规范词汇这里是「戏剧」drama"。用户已决策：
+  // **K Chinese Arts 归属 k_head**，且**不把「美育」等同于「戏剧」**
+  // （那是两门不同的课，合并会篡改业务含义）。因此在规范词汇里**新增**
+  // 子科 key 'arts'（美育），而不是把它映射到 drama。
+  'k:chinese:arts': 'arts',
 });
 
 /**

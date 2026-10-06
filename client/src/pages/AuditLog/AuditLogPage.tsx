@@ -58,6 +58,7 @@ const AUDIT_ACTIONS: AuditAction[] = [
   'directory_create',
   'directory_rename',
   'directory_delete',
+  'directory_update',
 ];
 
 const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
@@ -77,6 +78,8 @@ const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
   directory_create: 'bg-blue-100 text-blue-700 border-blue-200',
   directory_rename: 'bg-blue-100 text-blue-700 border-blue-200',
   directory_delete: 'bg-amber-100 text-amber-700 border-amber-200',
+  // 排序/启停：不是结构增删，用中性灰，避免在审计列表里被误读成"删了东西"
+  directory_update: 'bg-gray-100 text-gray-700 border-gray-200',
   permission_denied: 'bg-red-100 text-red-700 border-red-200',
   permission_change: 'bg-purple-100 text-purple-700 border-purple-200',
   teacher_create: 'bg-blue-100 text-blue-700 border-blue-200',

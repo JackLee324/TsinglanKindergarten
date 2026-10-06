@@ -2,9 +2,11 @@
 # docker-compose.yml — 清澜山幼儿园课程资源平台，单实例自包含部署
 # =============================================================================
 #
-# ⚠️  无法在本机验证：这台机器没有 docker（`command -v docker` 为空）。
-#     本文件是"读代码 + 读官方镜像文档"得出的正确形状，不是实测结果。
-#     第一次 `docker compose up` 请当成调试，而不是走个形式。
+# ✅ 已经**真实执行**过（不再是"读文档猜的形状"）：config / build / up -d / ps /
+#    logs / restart / down / up -d 八个子命令都在本机跑通，app 容器 healthy，
+#    并在容器内做了登录与接口冒烟。第一次跑就发现了一个真实缺陷：build 钉了
+#    linux/amd64，但服务没声明运行平台，于是 `up -d` 卡死、app 永远停在 Created
+#    （详见 app 服务里 `platform:` 那一行的注释）。
 #
 # 用法（在仓库根目录）：
 #   cp .env.deploy.example .env.deploy   &&  chmod 600 .env.deploy
@@ -63,6 +65,19 @@ services:
         - linux/amd64
     image: tsinglan-kindergarten:${APP_VERSION:-local}
     restart: unless-stopped
+    # ⚠️ **必须与 build.platforms 一致** —— 这一行是实测补上的：
+    #
+    # `build.platforms: [linux/amd64]`（见上）只决定**构建**出什么架构的镜像，
+    # **不影响运行**。在本机（Apple Silicon / linux-arm64）实测：不加这一行时
+    # compose 会创建出一个 linux/amd64 的容器却跑不起来 ——
+    # 现象是 `up -d` **一直卡住不返回**、`docker compose ps` 里 app 永远停在
+    # `Created`，日志只有一行容易被忽略的 warning：
+    #     app The requested image's platform (linux/amd64) does not match
+    #         the detected host platform (linux/arm64/v8)
+    # 随后连 `docker start` / `docker rm -f` 都会挂住（守护进程卡在这个容器上）。
+    #
+    # 在 x86_64 宿主机上这一行是无害的同架构声明，因此两种宿主机都能正确运行。
+    platform: linux/amd64
     depends_on:
       postgres:
         condition: service_healthy
