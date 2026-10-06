@@ -553,13 +553,52 @@ async function main() {
     if (inBin) ok('资源进入回收站（recycle-bin 查得到）');
     else bad('资源进入回收站（recycle-bin 查得到）', `HTTP ${bin.s}`);
 
-    // 用户要求的"删除→回收站→恢复"在**界面上没有入口**：前端从未引用过
-    // recycle-bin / restore 接口。这里如实记录，并只验证 API 侧的恢复。
-    skip('回收站 / 恢复的**界面**入口', '前端没有回收站页面（client/src 里没有任何 recycleBin/restore 引用）—— 属未实现，不是未验证');
+    // 用户要求的"删除→回收站→恢复"必须是**界面上走得到**的一条路。
+    // 上一版这里是一条 SKIP（当时前端确实没有回收站页面）；现在补了页面，
+    // 断言就要落在真实点击上 —— 接口能通不等于用户点得到。
+    const groupExpanded = await evalIn(`(() => {
+      const btn = document.querySelector('[data-testid="nav-group-toggle"][data-nav="/admin"]');
+      if (!btn) return 'NO_GROUP';
+      if (btn.getAttribute('aria-expanded') !== 'true') {
+        for (const e of ['mousedown', 'mouseup', 'click']) btn.dispatchEvent(new MouseEvent(e, { bubbles: true, cancelable: true, button: 0, view: window }));
+      }
+      return 'EXPANDED';
+    })()`);
+    await sleep(600);
+    const navLink = await evalIn(`(() => {
+      const a = document.querySelector('[data-testid="nav-link"][data-nav="/admin/recycle-bin"]');
+      return a ? (a.innerText || '').trim() : null;
+    })()`);
+    if (navLink) ok('侧边栏出现「回收站」入口', `${groupExpanded} / label=${navLink}`);
+    else bad('侧边栏出现「回收站」入口', `group=${groupExpanded}，未渲染 [data-nav="/admin/recycle-bin"]`);
+
+    const navClicked = navLink ? await mouseClick(`document.querySelector('[data-testid="nav-link"][data-nav="/admin/recycle-bin"]')`) : 'SKIPPED';
+    const onBin = await waitFor(`location.pathname === '/admin/recycle-bin' && !!document.querySelector('[data-testid="recycle-restore"]')`);
+    if (onBin.ok) ok('点击导航进入回收站页面', `${navClicked} -> ${await evalIn('location.pathname')}`);
+    else bad('点击导航进入回收站页面', `${navClicked} -> ${await evalIn('location.pathname')}`);
+
+    const binRow = await evalIn(`(() => {
+      const rows = [...document.querySelectorAll('tbody tr.ant-table-row')];
+      return rows.some((r) => (r.innerText || '').includes(${JSON.stringify(currentTitle)})) ? rows.length : 0;
+    })()`);
+    if (binRow > 0) ok('回收站列表里出现刚删除的资源', `共 ${binRow} 行`);
+    else bad('回收站列表里出现刚删除的资源', `表格里找不到「${currentTitle}」`);
+
+    const restoreClicked = await clickInRow('recycle-restore', currentTitle);
+    const restoreConfirmed = restoreClicked === 'CLICKED'
+      ? await mouseClick(`document.querySelector('[data-testid="confirm-restore"]')`)
+      : 'SKIPPED';
+    await sleep(1800);
 
     const restored = await c.req('POST', `/api/resources/${resourceId}/restore`);
-    if (restored.s === 200 || restored.s === 201) ok('调用恢复接口', `HTTP ${restored.s}`);
-    else bad('调用恢复接口', `HTTP ${restored.s}`);
+    if (restored.s === 404) ok('界面上已恢复（接口二次恢复按预期 404「不在回收站中」拒绝）', `${restoreClicked}/${restoreConfirmed}`);
+    else if (restored.s === 200 || restored.s === 201) bad('恢复走的应是界面路径', `界面点击 ${restoreClicked}/${restoreConfirmed} 后接口仍允许二次恢复 HTTP ${restored.s}`);
+    else bad('恢复走的应是界面路径', `界面 ${restoreClicked}/${restoreConfirmed}，二次恢复 HTTP ${restored.s}`);
+
+    const binAfter = await c.req('GET', '/api/resources/recycle-bin?pageSize=100');
+    const stillInBin = ((binAfter.d ?? {}).items ?? []).some((r) => r.id === resourceId);
+    if (!stillInBin) ok('恢复后从回收站移除');
+    else bad('恢复后从回收站移除', '仍在回收站里');
 
     const back = await c.req('GET', `/api/resources/${resourceId}`);
     const backStatus = (back.d?.resource ?? back.d ?? {}).status;

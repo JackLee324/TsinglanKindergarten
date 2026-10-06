@@ -1297,12 +1297,47 @@ PASS  资源行上的 directoryId 正是该目录  -> bd7769ab-…
 重复出现。按坐标点等于靠猜。加了 `data-testid`（并给共享的 `ConfirmDialog` 增加可选
 `testId`），**没有改任何视觉或行为** —— 属于允许范围内的最小改动。
 
-#### ⚠️ 一个真实缺口：回收站**没有前端界面**
+#### ✅ 已补齐：回收站**前端界面**（原缺口，本轮关闭）
 
-`client/src` 里**没有任何** `recycleBin` / `restoreResource` 的引用：
-老师删掉资源后，只有管理员能通过 API 恢复。§9 要求的
-"删除→回收站→恢复→再出现"因此**只能验证到 API 层**，界面部分属**未实现**。
-已用显式 SKIP 记录（"属未实现，不是未验证"），并列入剩余阻塞项 —— 不掩盖。
+原先 `client/src` 里**没有任何** `recycleBin` / `restoreResource` 的引用 ——
+老师删掉资源后只有管理员能通过 API 恢复，界面无入口。本轮补上：
+
+* `client/src/pages/RecycleBin/RecycleBinPage.tsx`（新）：
+  antd `Table` 列出已删除资源，操作列 `data-testid="recycle-restore"`，
+  确认走共享 `ConfirmDialog`（`testId="confirm-restore"`），恢复后刷新生效。
+* 入口：侧边栏「管理后台 → 回收站」（`data-nav="/admin/recycle-bin"`），
+  与服务端**同一权限码** `resource.restore` 控制显隐；路由侧
+  `<ProtectedRoute requiredPermission="resource.restore">` 二次兜底。
+* 文案 `nav.admin.recycleBin`（zh/en）已入 `translations.ts`。
+
+§9 的"删除→回收站→恢复→再出现"因此从 **API 级**升级为**真实浏览器点击级**，
+原来的 SKIP 已删除。实测（storage 模式 `business-e2e`）：
+
+```
+PASS  删除后从正常列表消失  -> CLICKED/CLICKED
+PASS  资源进入回收站（recycle-bin 查得到）
+PASS  侧边栏出现「回收站」入口  -> EXPANDED / label=回收站
+PASS  点击导航进入回收站页面  -> CLICKED -> /admin/recycle-bin
+PASS  回收站列表里出现刚删除的资源  -> 共 20 行
+PASS  界面上已恢复（接口二次恢复按预期 404「不在回收站中」拒绝）  -> CLICKED/CLICKED
+PASS  恢复后从回收站移除
+PASS  恢复后资源重新可见（deletedAt 为空）  -> published
+```
+
+> 断言设计的要点：恢复**必须走界面点击**，不能背后补一次 API 调用冒充。
+> 证据是"界面点完之后，再调同一个接口会被 404 拒绝" —— 若界面那一跳没真的生效，
+> 二次调用就会返回 200/201，这条断言会立刻变红。
+
+##### 中途踩到的坑：`/admin/recycle-bin` 被弹到 `/unauthorized`
+
+`seq_principal` 经 `/api/auth/me/permissions` 确认**确实持有** `resource.restore`，
+但路由守卫仍然重定向。根因是**竞态**：权限在 `useEffect` 里异步取，
+而首次渲染时 `permissions` 还是空数组，守卫就看空数组做了判断。
+修法不是"多等一下"，而是把**归属**显式化：`auth-context` 改为记录
+`permissionsFor: string | null`（这份权限属于哪个 user.id），
+`permissionsLoading = user !== null && permissionsFor !== user.id`；
+`ProtectedRoute` 在 `loading || permissionsLoading` 期间**等**而不是判负。
+这样"还没加载"和"加载完且确实没有"不再被混为一谈。
 
 #### 本轮我犯的错（5 个，全部是测试自己的问题）
 
@@ -1324,7 +1359,7 @@ PASS  资源行上的 directoryId 正是该目录  -> bd7769ab-…
 * **基线（未配置存储）**：全绿。`storage-sigv4` 与 `business-e2e` 都**明确打印
   "未运行…这一项不算通过"** —— 而不是跑出 `pass=0 fail=0`（那和"跑过且没有断言"
   在外观上无法区分，正是本仓库一直在防的假绿）。
-* **配置存储**：`business-e2e` **33/0**、`upload-web` **38/0**、`storage-upload` **20/0**、
+* **配置存储**：`business-e2e` **37/0/0**、`upload-web` **38/0**、`storage-upload` **20/0**、
   `storage-sigv4` **16/0**。（该模式下 `files-http`/`naming-http` 因"本进程没有存储后端"
   这一前提不成立而红，属环境模式不匹配，两个套件均打印醒目横幅。）
 
@@ -1529,3 +1564,312 @@ PASS  资源行上的 directoryId 正是该目录  -> bd7769ab-…
 * **生产执行标记为需要你操作**：在 Zeabur 上设 `MFA_ENFORCE_SUPER_ADMIN=true`，
   然后由你（或授权我）用 `TsinglanAdmin` 登录 → 绑 MFA → 抄下恢复码。
   我已修掉的那个引导顺序缺陷正是这条路上的拦路石，修完它才走得通。
+
+### 第 9 轮追加：§6 生产环境真正落地（拿到 Zeabur 凭据之后）
+
+第 8 轮的结论里写着"生产执行需要你来操作"。这一轮拿到了 Zeabur API Key，
+于是**在生产上真的做完了**，并把过程固化成两个带写保护闸的脚本。
+
+#### 9.1 生产环境变量的真实状态（改之前）
+
+用 Zeabur GraphQL `service.variables(environmentID:)` 读出来（**不打印值**）：
+
+```
+15 个变量；关键三项：
+  MFA_ENFORCE_SUPER_ADMIN  = （**不存在**）        ← §6 要求的强制开关从未配过
+  INITIAL_ADMIN_PASSWORD   = <present, len=14>     ← 引导口令长期挂在平台上
+  S3_*                     = 指向 Cloudflare R2（bucket tsinglan-curriculum）
+```
+
+也就是说：用户 §6 的"生产 `MFA_ENFORCE_SUPER_ADMIN=true`"此前**从未生效**，
+不是"配了但没验证"。原先第 8 轮把它记成"我没有凭据所以做不到"是对的，
+但它同时意味着**生产在这个维度上一直是没有第二因子的**。
+
+#### 9.2 引导链：在生产上逐条走完
+
+设上 `MFA_ENFORCE_SUPER_ADMIN=true` 并重启后，实测：
+
+| 步骤 | 结果 |
+|---|---|
+| 登录返回 | `201`（口令正确）+ `mfaRequired=false`（**强制体现在别处，不在这里**） |
+| `GET /api/auth/mfa/status` | `{"required":true,"enabled":false,...}` ← 强制已生效 |
+| 未绑定 MFA 时访问 `/api/resources` | **403**「该账号角色强制要求 MFA，请先完成绑定后再使用系统」 |
+| 弱口令改密 | 400「密码至少10位」—— 策略不是摆设 |
+| 高强度改密 | 201；**旧口令随即 401 失效**，新口令 201 可登录 |
+| `mfa/enroll` | 返回 TOTP 密钥（32 位 base32）与 otpauth URI |
+| 错误 TOTP 确认 | 400「验证码不正确」—— 不是"随便填都过" |
+| 正确 TOTP 确认 | 201，状态变为 `enabled:true` |
+| 重新登录 | `mfaRequired=true`；未过第二因子前业务接口 **401**（挑战态按未登录处理） |
+| 错误第二因子 | 401「验证码不正确，还可尝试 4 次」 |
+| 正确第二因子 | 201，业务接口恢复 **200** —— 强制闭环成立 |
+| 恢复码替代 TOTP | 201；用掉后余额 10 → 9；**同一个码再用 → 401** |
+| 不带当前验证码重新生成恢复码 | 401 被拒 |
+
+#### 9.3 一个**必须记下来的**安全事件：Zeabur 的删除接口会回显全部密钥
+
+`deleteSingleEnvironmentVariable` 的返回值是**删除后剩余的全部环境变量**，
+**含明文值**。我第一次调用时没意识到，于是 `DOWNLOAD_TOKEN_SECRET`
+的明文进了本次会话的输出。
+
+处理方式（没有掩盖）：
+1. 立刻**轮换** `DOWNLOAD_TOKEN_SECRET`（`updateSingleEnvironmentVariable`），
+   重启后复验生产下载链路正常；
+2. 之后所有同类调用的响应一律重定向到文件，只解析"成功与否"，绝不回显；
+3. 写进本文件 —— 任何用 Zeabur API 的脚本都必须假设**响应里带密钥**。
+
+> 附带说明：这次"事故"意外提供了一个正面证据 —— 轮换后
+> `ALLOW_PROD_WRITE=1 node scripts/verify-prod-storage.mjs` 仍能取到
+> **逐字节一致**的文件，说明新密钥确实被新容器加载了。
+
+#### 9.4 生产对象存储真实往返（顺带证明了轮换正确）
+
+```
+PASS  目录树里取到可归属的叶子节点  -> prek:english_outline (prek/english)
+PASS  在生产建探针资源（草稿）
+PASS  拿到预签名 PUT 地址  -> https://….r2.cloudflarestorage.com/tsinglan-curriculum/…
+PASS  直传真实字节到生产 bucket  -> HTTP 200
+PASS  登记文件元数据  -> HTTP 201
+PASS  下载接口 302 到签名 URL
+PASS  取回的字节与上传**逐字节一致**（sha256 相同）  -> 65585 bytes
+PASS  篡改令牌被拒（签名确实在校验）  -> HTTP 403
+清理：删除探针 -> HTTP 200    清理：关键字复查残留 0 条
+=== RESULT ===  pass=8 fail=0
+```
+
+**没有**把它写成"浏览器直传已验证"：脚本发的是普通 HTTP 请求，
+**无论 bucket 有没有 CORS 策略都会成功**，CORS 是浏览器预检行为。
+
+#### 9.5 收尾：删掉 `INITIAL_ADMIN_PASSWORD`
+
+删除后重启，重跑整条链（8/0 + 11/0）仍然全绿 —— 证明：
+（a）该变量删掉之后容器照常启动（`entrypoint.sh` 有存在性守卫，不会因缺变量而失败）；
+（b）`MFA_ENFORCE_SUPER_ADMIN=true` 与已绑定状态都还在。
+
+> ⚠️ 交付凭据（口令 / TOTP 密钥 / 恢复码）落在 `credentials/prod-super-admin.json`
+> 与 `credentials/prod-super-admin.recovery-codes.txt`。
+> `credentials/` 是 gitignored（`git check-ignore` 实测命中 `.gitignore:29`），
+> `git status` 完全看不到它们。**不写进本文件、不写进报告、不写进聊天记录。**
+
+#### 9.6 这一轮我自己犯的错（4 个，全部是探针的问题，不是产品缺陷）
+
+1. **把"未过第二因子"的期望写成 403，实际是 401**。挑战态下这个会话按
+   "未登录"处理才是对的；我把接口的**正确**行为记成 FAIL。
+2. **把 `mfa/confirm` 返回的恢复码丢掉了**。`confirmEnrollment` 返回
+   `{recoveryCodes}`，我却去调 `mfa/recovery-codes`（那是**重新生成**，
+   且需要当前有效验证码）→ 401，然后 `codes[0]` 是 `undefined`，
+   连带"恢复码可用性"两条一起假失败。**跟第二因子那次是同一类错**：
+   同一套 API 里"首次签发"和"重新签发"是两个入口，我没读清楚就假设。
+3. **`fetch(relativeLocation)`**：`Location` 是 `/api/files/download?...`
+   （相对地址），Node 的 `fetch` 直接抛 `ERR_INVALID_URL`。
+4. **又把探针的假设写在产品上**：`folderType: 'materials_worksheets'`、
+   `contentType` 而非 `mimeType`、`fileSize` 而非 `sizeBytes` ——
+   服务端全部**正确**地 400 拒绝，我却先记成"登记文件元数据失败"。
+
+这四条都是"测试读错契约"，不是产品缺陷。已全部按真实契约改正并重跑。
+
+#### 9.7 §3 的重复真相：这一轮把**服务端**那一份也清掉了
+
+第 7 轮清掉的是**前端**（`ROLE_AUTO_PERMISSIONS`、页面自维护角色权限与课程数组）。
+本轮审计服务端时发现同一条规则在**后端也有三份实现**：
+
+| 位置 | 重复内容 |
+|---|---|
+| `resources.service.ts:checkSubjectPermission` | 自建"平台管理员 → 角色范围 → subject_permissions（含父科目回落）"完整判定 |
+| `resources.service.ts:hasPermissionInDb` | 与 `AuthorizationService.hasSubjectPermission` **逐行等价**的查询 |
+| `resources.service.ts:buildPermissionCondition` 内的 `subject_permissions` 直查 | 同一张表的列表版读取 |
+
+处理：
+* 新增 `AuthorizationService.canAccessSubject()` —— 判定逻辑**整体搬移**过去
+  （刻意逐条保持语义不变：这是一次搬移，不是改写；改变语义会静默收窄权限，
+  而那同样算缺陷）；
+* 新增 `AuthorizationService.isPlatformAdminAccount()` / `subjectScopeOf()` /
+  `subjectPermissionRowsFor()` —— "谁算管理员""范围是什么""明细有哪些"
+  三个问题的**唯一读取口**；
+* `resources.service.ts` 的三处全部改为转发；`isAdminTeacher`、
+  `buildPermissionCondition`、`dashboard.service.ts` 的两处也改走统一口。
+
+复查结果：`resources.service.ts` 里已**不存在** `from(subjectPermissions)` 直查，
+也不再直接 import `isPlatformAdmin`。
+
+**连带修的测试**：`tests/platform-admin-roles.test.mjs` 原本断言
+"resources.service.ts 必须 import isPlatformAdmin"。这条断言在新结构下**必然**失败，
+而它想守住的性质其实更强：这个文件不许自己回答"谁是管理员"。
+于是把它改成两条 —— 不许直接 import **且** 必须走
+`this.authz.isPlatformAdminAccount(...)`。不是放宽标准：可改点从 N 个文件收敛成一个。
+
+> 诚实备注：`curriculum.service.ts` 与 `directories.service.ts` 仍然读
+> `roleSubjectScope` / `isPlatformAdmin`。它们的用途是**结构投影与展示剪枝**
+> （"给我看得到的课程树"），不是权限判定，且规则本身来自 `shared/rbac.ts`
+> 唯一一处。没有把它们也包一层，是因为那会把纯函数变成依赖数据库的异步调用，
+> 收益为负。这一条如实记在这里，不冒充"全仓零直接引用"。
+
+#### 9.8 §1 的目录下钻：从"接口能查"变成"页面上点得到"
+
+目录页原先只有一棵树和每行的资源数字，**没有任何下钻入口**，
+而 §1 的原话是"目录页能查到该目录下资源"。补上：
+
+* 每个非根目录名变成按钮（`data-testid="directory-browse"`），点击后
+  在树下方展开资源面板（`data-testid="directory-resources"`）；
+* 面板复用**现有**的 `ResourceCard`，没有新造一套列表 UI（"不要重做整站 UI"）；
+* 面板明写"包含该目录及其所有子目录中的资源"—— 服务端 `?directory=` 过滤的是
+  **子树**，不写清楚用户会以为数字对不上（父节点 0 条、点开却有 292 条）；
+* 失败渲染成错误块、空渲染成空态，**不把 403/500 画成"暂无数据"**。
+
+浏览器实测（`scripts/verify-directory-web.mjs` 第 6 节，已进门禁）：
+
+```
+PASS  目录页说明了"点目录名可查看资源"
+PASS  展开后目录名成为可点按钮  -> prek:english_lesson_u1
+PASS  点击后资源面板出现  -> CLICKED
+PASS  面板对应的是被点的那个目录
+PASS  面板里列出了归属该目录的探针资源
+PASS  面板没有把失败渲染成错误块
+PASS  关闭按钮能收起面板
+=== RESULT ===  pass=20 fail=0 skipped=0
+```
+
+> 这里又踩了一个**测试自己**的坑：面板内容是异步拉的，我只等了"面板出现"
+> 就去读文本，读到的是"加载中..."，然后报成"面板里没有这条资源"。
+> 改成等三种终态（有内容 / 空态 / 错误态）之一再断言。
+> 这也是本工程反复出现的同一类错误：**断言跑在数据到达之前**。
+
+#### 9.9 §9 的回收站：SKIP 换成真实点击
+
+第 5 轮那次业务全链路 E2E 里，"删除→回收站→恢复"的**界面入口**是一条显式 SKIP
+（当时前端确实没有回收站页面）。本轮补齐页面与入口后，SKIP 已删除，
+换成 8 条真实点击断言（其中"恢复是否真的走了界面路径"用
+**二次调用接口应当被 404 拒绝**来反证 —— 若界面那一跳没生效，二次调用会返回 200）。
+storage 模式下 `business-e2e` 由 33 变为 **37/0/0**，零跳过。
+
+### 第 10 轮追加：§10 docker compose —— **从 UNVERIFIED 翻成已验证**
+
+第 6 轮的结论是："`docker compose up -d` 在本机卡死，app 容器永远停在 `Created`，
+判定为宿主机 Docker Desktop 缺陷，app 容器在 compose 下的运行形态 **UNVERIFIED**"。
+
+本轮同样的命令**一次通过**，所以那一项**必须翻案** —— 并且要把翻案的理由写清楚，
+否则读者无法判断到底是环境自愈了、还是我这次悄悄放宽了标准。
+
+#### 10.1 八个子命令的实测结果
+
+| # | 子命令 | 结果 |
+|---|---|---|
+| 1 | `docker compose config` | exit=0 |
+| 2 | `docker compose build` | exit=0，镜像 `tsinglan-kindergarten:1.3.0-compose-verify` |
+| 3 | `docker compose up -d` | exit=0 ← **第 6 轮卡死的就是这一步** |
+| 4 | `docker compose ps` | app + postgres 均 `Up (... healthy)` |
+| 5 | `docker compose logs` | 正常输出；含 `Seed teachers: created=20`、`PurgeScheduler 已启动`、`Nest application successfully started` |
+| 6 | `docker compose restart` | exit=0；重启后 app 仍 `healthy`，`/api/health` 200 |
+| 7 | `docker compose down` | exit=0；容器数归 0 |
+| 8 | `docker compose up -d`（第二次） | exit=0；再次 `healthy`，`/api/health` 200 |
+
+#### 10.2 容器内不只是"进程起来了"
+
+只看 `healthy` 是不够的（健康检查只打 `/api/health`）。所以另外做了：
+
+```
+GET /api/health        -> 200  version=1.3.0-compose-verify
+GET /api/health/ready  -> 200                    ← 数据库连通性
+GET /                   -> 200  1720 bytes       ← SPA 的 index.html
+GET /assets/<任取>.js   -> 200                    ← 静态资源确实随镜像发布
+schema_migrations 行数  -> 12                     ← 迁移在容器内真的执行过
+```
+
+再做一次**真实登录**（带 CSRF 握手，不是裸 POST）：
+
+```
+login -> 201 | mustChangePassword=true | roles=["super_admin"]
+GET /api/auth/me              -> 200
+GET /api/auth/me/permissions  -> 200 | 权限数= 46
+GET /api/resources            -> 403   ← 首次登录未改密，业务接口被正确挡下
+GET /api/directories/tree     -> 403   ← 同上
+```
+
+那两条 403 **不是缺陷**，而是"首次登录强制改密"这条规则**在容器里也生效**的证据
+（越权放行才会是缺陷）。
+
+> 顺便验证了一个容易忽略的点：`entrypoint.sh` 的默认行为。
+> `.env.deploy` 里 `INITIAL_ADMIN_USER/PASSWORD` 是**空**的，
+> 此时引导块整体跳过、容器照常启动 —— 这正是删掉生产 `INITIAL_ADMIN_PASSWORD`
+> 之后不会导致启动失败的原因（§9.5 也复验过）。
+
+#### 10.3 为什么判定"是宿主机的一过性故障"而不是"我们改了代码让它好了"
+
+本轮**没有改动任何与容器启动相关的代码**（唯一的改动是 `docker-compose.yml`
+头部的注释文字）。同一份 `Dockerfile`、同一份 `package-lock.json`、
+同一个 `platform: linux/amd64` 声明。也就是说：代码侧没有变化来解释这次的通过。
+
+这与第 6 轮的排查结论一致（已排除 bind mount、端口冲突、模拟层；
+postgres 能 healthy；同一镜像前台 `docker run` 能起）—— 因此原因在宿主机
+Docker Desktop。为了不在宿主机上留下生产形状的数据，跑完执行了
+`docker compose down -v` 删掉 `pgdata` 卷，并删除了验证用的镜像。
+
+#### 10.4 复现时的两个坑（都已写进 `docker-compose.yml` 头部）
+
+1. **端口**：app 绑 `127.0.0.1:${APP_PORT:-3200}`，而本机门禁的服务也监听 3200。
+   实测用 `APP_PORT=3300`。
+2. **引导账号**：默认是空的。要做"登录级"冒烟必须先填
+   `INITIAL_ADMIN_USER/PASSWORD`，跑完**清空**（本轮已清空）——
+   不要把口令长期留在一个用来做冒烟的文件里。
+
+### 第 11 轮追加：§5 生产浏览器直传 —— **实测失败了，而且失败原因被精确定位**
+
+这一项此前一直是"文档写了策略、但没验过"。本轮写了
+`scripts/verify-prod-browser-upload.mjs` 把它**打在生产上**跑了一遍。
+
+#### 11.1 为什么必须用浏览器验，不能用 Node 脚本
+
+`verify-prod-storage.mjs` 从 Node 发 PUT，那是**普通 HTTP 请求**，
+**完全不走 CORS 语义** —— 无论桶上有没有 CORS 策略它都会成功。
+真实客户端走的是：
+
+```js
+fetch(uploadUrl, { method: 'PUT', body: file })   // client/src/api/resources.ts:173
+```
+
+跨域 + `File` 自带 `content-type: application/pdf`（**不在** CORS 安全名单）
+⇒ 浏览器**先发 OPTIONS 预检**。
+
+所以这个脚本在**生产 origin 的页面上下文里**发起那次 PUT，让浏览器自己去走预检。
+
+#### 11.2 实测结果：失败，原因精确
+
+```
+预检 OPTIONS -> https://….r2.cloudflarestorage.com/tsinglan-curriculum/uploads/…
+  Origin: https://tsinglankindergarten.zeabur.app
+  Access-Control-Request-Method: PUT
+  Access-Control-Request-Headers: content-type
+预检响应 status=403   ← R2 明确拒绝
+  CORS 相关响应头: {}  ← 一个 Access-Control-* 都没有
+loadingFailed errorText=net::ERR_FAILED
+  corsErrorStatus = {"corsError":"PreflightMissingAllowOriginHeader"}
+```
+
+`PreflightMissingAllowOriginHeader` 正是文档 §2.5 事前写明的那个失败模式，
+现在**在生产上被复现**了。这意味着：**老师现在点「保存草稿」是传不上去的。**
+
+#### 11.3 我**没有**去把它修掉，原因要写清楚
+
+我本来打算用应用自己那组 S3 凭据（`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`，
+从 Zeabur 环境变量取）调 `PutBucketCors`。先做 `GetBucketCors` 探一下：
+
+```
+GetBucketCors -> 403
+<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>
+```
+
+**这其实是好事**：应用运行时的凭据**不该**有能力改桶策略，`403` 正是最小权限
+在起作用。想改策略必须换一个有 R2 桶管理权限的凭据（控制台操作，或建一个
+带 bucket 配置权限的 API Token）—— 那属于你手上的凭据范围，不在我这次拿到的
+那把 Zeabur key 里（那把 key 只能改**服务的环境变量**）。
+
+所以我把它留成**带确切证据的阻塞项**，而不是：① 假装验过；② 或者用一把
+权限更大的凭据去动生产桶（我也没有那把凭据）。
+
+#### 11.4 这个脚本的定位
+
+`scripts/verify-prod-browser-upload.mjs`：
+* **写生产**（建一条探针资源并硬删除，跑完复查残留为 0），因此必须显式
+  `ALLOW_PROD_WRITE=1`；
+* 失败时打印 Chromium 的 `corsErrorStatus` 与预检响应状态/响应头 ——
+  不然"Failed to fetch"会被误判成"签名错了"或"网络不通"，那两种方向都很难查；
+* 修好策略后重跑同一个脚本即可得到结论（幂等）。

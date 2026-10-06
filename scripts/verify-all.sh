@@ -133,6 +133,19 @@ run() {
     echo "FAIL"
     # 打印**全部**失败项，而不是前 5 行：截断的诊断会让人去猜。
     echo "$out" | grep -E 'FAIL|TEST ERROR|not ok|ABORTED|FATAL|CLEANUP FAILED|Error:' | sed 's/^/      /'
+    # 再打印套件**自报的前提横幅**。
+    #
+    # 为什么需要这一段：`files-http` / `naming-http` 在"已配置对象存储"的进程上
+    # 必然变红，而它们会打印一段说明"这是环境模式不匹配、不是产品缺陷、
+    # 切勿为了变绿而关掉对象存储"的横幅。上面的 grep 只挑 FAIL 行，
+    # 于是那段横幅**恰好被过滤掉了** —— 看到的就是一条没有解释的红，
+    # 而最容易想到的"修法"正是关掉对象存储，也就是最危险的处理方式。
+    # 实测：在配置存储模式下跑门禁时，本段之前看不到任何前提说明。
+    premise=$(echo "$out" | grep -E '⚠️|前提不成立|环境模式不匹配' || true)
+    if [ -n "$premise" ]; then
+      echo "      ── 该套件自报的前提（请先读这一段再判断这是不是产品缺陷）──"
+      echo "$premise" | sed 's/^/      /'
+    fi
     FAILED=1
   fi
 }

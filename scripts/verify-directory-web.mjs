@@ -404,6 +404,63 @@ async function main() {
         } else {
           bad('把资源归属到该目录', `HTTP ${relink.s} ${String(relink.d?.error?.message ?? '')}`);
         }
+
+        // ---------------------------------------------------------------
+        // 6) 界面上真的能点进去看到该目录的资源
+        // ---------------------------------------------------------------
+        // 上一节证明的是**接口**能按目录查。接口能查 ≠ 用户在目录页点得到 ——
+        // 而 §1 的原话是"目录页能查到该目录下资源"。缺了这一段，
+        // "目录页" 就只剩一棵树 + 数字，没有任何下钻入口。
+        console.log('\n6) 界面上点开目录名 → 看到该目录下的资源');
+        if (!ridB) {
+          skip('界面上点开目录名看到资源', '未成功把资源归属到新目录');
+        } else {
+          await openPath('/directory', `!!document.querySelector('[data-testid="directory-tree"]')`);
+          const hint = await evalIn(`!!document.querySelector('[data-testid="directory-browse-hint"]')`);
+          if (hint) ok('目录页说明了"点目录名可查看资源"');
+          else bad('目录页说明了"点目录名可查看资源"', '没有 directory-browse-hint');
+
+          // 探针目录是**新建的深层节点**，默认折叠，必须先展开到它出现。
+          // 直接 querySelector 一定拿不到 —— 折叠的节点不在 DOM 里。
+          const revealSelector = `[data-testid="directory-browse"][data-dir-browse="${createdFolderCode}"]`;
+          const revealed = await expandUntil(revealSelector, 12);
+          if (revealed) ok('展开后目录名成为可点按钮', createdFolderCode);
+          else bad('展开后目录名成为可点按钮', `DOM 里找不到 ${revealSelector}`);
+
+          const clicked = revealed ? await clickSel(revealSelector) : 'SKIPPED';
+          const opened = await waitFor(`!!document.querySelector('[data-testid="directory-resources"]')`, 15000);
+          if (opened.ok) ok('点击后资源面板出现', clicked);
+          else bad('点击后资源面板出现', clicked);
+
+          const panelCode = await evalIn(`document.querySelector('[data-testid="directory-resources"]')?.getAttribute('data-dir-resources')`);
+          if (panelCode === createdFolderCode) ok('面板对应的是被点的那个目录', panelCode);
+          else bad('面板对应的是被点的那个目录', `got=${panelCode} want=${createdFolderCode}`);
+
+          // 面板内容是**异步**拉的。只等"面板出现"是不够的 ——
+          // 上一版就是这么读到了"加载中..."，然后把它报成"面板里没有这条资源"。
+          // 等"加载完成"的三种终态之一（有内容 / 空态 / 错误态）再断言。
+          await waitFor(`(() => {
+            const p = document.querySelector('[data-testid="directory-resources"]');
+            if (!p) return false;
+            if (p.querySelector('[data-testid="directory-resources-empty"]')) return true;
+            if (p.querySelector('[data-testid="directory-resources-error"]')) return true;
+            return (p.innerText || '').includes(${JSON.stringify(`目录归属探针B ${stamp}`)});
+          })()`, 20000);
+
+          const panelText = await evalIn(`(document.querySelector('[data-testid="directory-resources"]')?.innerText || '')`);
+          if (panelText.includes(`目录归属探针B ${stamp}`)) ok('面板里列出了归属该目录的探针资源');
+          else bad('面板里列出了归属该目录的探针资源', panelText.replace(/\s+/g, ' ').slice(0, 160));
+
+          const errBlock = await evalIn(`!!document.querySelector('[data-testid="directory-resources-error"]')`);
+          if (!errBlock) ok('面板没有把失败渲染成错误块');
+          else bad('面板没有把失败渲染成错误块', '出现了 directory-resources-error');
+
+          const closed = await clickSel('[data-testid="directory-resources-close"]');
+          await sleep(600);
+          const gone = !(await evalIn(`!!document.querySelector('[data-testid="directory-resources"]')`));
+          if (closed === 'CLICKED' && gone) ok('关闭按钮能收起面板');
+          else bad('关闭按钮能收起面板', `${closed} gone=${gone}`);
+        }
       }
     }
   } else {

@@ -17,13 +17,37 @@
 ## 0. 当前发布状态（先读这一节）
 
 ```
-PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
+部署目标：Zeabur（Dockerfile 构建）   https://tsinglankindergarten.zeabur.app
+MFA 强制：已开启（MFA_ENFORCE_SUPER_ADMIN=true，实测 403 拦截业务接口）
+对象存储：Cloudflare R2（上传→下载 sha256 逐字节一致，实测）
 ```
-理由与阻塞项见 [`PRODUCTION_READINESS.md`](PRODUCTION_READINESS.md) §M 与 §R-4。
-本手册描述的是**正确的部署流程**，不等于"现在就可以上线"。
-上线前必须跑通 §13 的发布闸门并完成 §14 的验收清单。
 
-**在本机（macOS）能做到什么 / 不能做到什么**
+本手册描述的是**正确的部署流程**。上线判定与逐条证据见
+[`FINAL_COMPLETION_REPORT.md`](FINAL_COMPLETION_REPORT.md) —— 那份是唯一结论来源，
+本手册只讲"怎么部署、怎么验"，不重复下结论。
+
+### 0.1 super_admin 引导（**一次性动作，做完必须收尾**）
+
+```
+1) 部署前在平台上设置 INITIAL_ADMIN_USER / INITIAL_ADMIN_PASSWORD
+   （entrypoint.sh 只在"账号不存在"时创建，不会覆盖已有密码）
+2) 首次登录 → 立刻改成高强度口令（服务端强制 ≥10 位且含大小写与数字）
+3) MFA enrollment → confirmation → 取走恢复码
+4) 重新登录，确认 mfaRequired=true 且第二因子通过后才拿得到业务数据
+5) **删掉 INITIAL_ADMIN_PASSWORD 环境变量并重启**
+```
+
+第 5 步不是可选的：留着它，等于把引导口令长期挂在部署平台上，
+而平台上的任何读权限都能看到它（实测 Zeabur 的 GraphQL
+`variables` 查询会**明文回显全部环境变量**）。
+
+`MFA_ENFORCE_SUPER_ADMIN=true` 必须先设好再走 2~4 —— 否则
+"强制 MFA"这条链路没有被真正验证过，只是在文档里存在。
+
+> ⚠️ 生产凭据（口令 / TOTP 密钥 / 恢复码）只能落在 `credentials/`
+> 这类 **gitignored** 目录，绝不进 Git、不进日志、不进前端。
+
+### 0.2 在本机（macOS）能做到什么 / 不能做到什么
 
 | 步骤 | 本机能否验证 | 说明 |
 |---|---|---|
@@ -32,9 +56,63 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 | `node scripts/migrate.mjs status/up/down/verify` | ✅ 已证实（真实 PostgreSQL 16.14） | 见 §6 |
 | 生产模式启动 + `/api/health` | ✅ 已证实 | 见 §10 |
 | **反向代理 / TLS / HSTS / `trust proxy` 实链路** | ❌ **[无法验证]** | 本机无 Nginx/Traefik/云入口 |
-| **Docker / K8s / 容器编排** | ❌ **[无法验证]** | 本机无 docker，仓库亦无 Dockerfile |
-| **妙搭平台发布管线 / dataloom 存储 / vefaas** | ❌ **[无法验证]** | 无平台凭据 |
+| **`docker compose` 八个子命令** | ✅ 已证实 | config/build/up -d/ps/logs/restart/down/up -d 全部 exit=0，容器 healthy，含容器内真实登录（见 §0.3） |
+| **生产对象存储（R2）真实往返** | ✅ 已证实（**对生产**） | `ALLOW_PROD_WRITE=1 node scripts/verify-prod-storage.mjs`，见 §0.4 |
+| **生产 MFA 强制链** | ✅ 已证实（**对生产**） | `node scripts/verify-prod-mfa.mjs`，见 §0.4 |
+| **浏览器 CORS 直传** | ❌ **[无法验证]** | 需真人浏览器；策略模板见 §2.5，脚本发的普通 HTTP 请求**不能**代替它 |
 | **`pg_dump` / `pg_restore` 备份恢复** | ❌ **[无法验证]** | 本机**没有** `psql`/`pg_dump`/`pg_restore` 客户端（见 §4 与 [`DISASTER_RECOVERY.md`](DISASTER_RECOVERY.md) §0） |
+
+### 0.3 `docker compose` 八个子命令 —— **已全部实测通过**
+
+```
+config  exit=0      build   exit=0      up -d   exit=0      ps      exit=0
+logs    exit=0      restart exit=0      down    exit=0      up -d   exit=0（第二次）
+```
+
+两个容器均为 `Up (... healthy)`，并且**在容器内**验证了真实业务链路：
+
+| 检查 | 结果 |
+|---|---|
+| `GET /api/health` | 200，`version=1.3.0-compose-verify` |
+| `GET /api/health/ready` | 200（数据库连通性） |
+| `GET /` | 200，返回 SPA 的 `index.html`（1720 字节） |
+| 任取一个 `/assets/*.js` | 200（静态资源确实随镜像发布） |
+| `schema_migrations` 行数 | 12（迁移在容器内真的跑过） |
+| 启动日志 | `Seed teachers: created=20` / `PurgeScheduler 已启动` / `Nest application successfully started` |
+| 真实登录（带 CSRF 握手） | `201`，`roles=["super_admin"]`，`mustChangePassword=true` |
+| 未改密时访问业务接口 | `/api/resources` **403**、`/api/directories/tree` **403** ← 首次登录强制改密在容器内也生效 |
+| `restart` 后 | app `healthy`，`/api/health` 200 |
+| `down` → `up -d` 循环 | 容器数为 0 → 重新起来后仍 `healthy` |
+
+> ⚠️ **改密之前，这个状态与前一轮的记录是相反的。** 第 6 轮实测
+> `docker compose up -d` 会**卡住不返回**、app 容器永远停在 `Created`，
+> 当时把原因归结为宿主机 Docker Desktop 的缺陷（排除了 bind mount、端口冲突、
+> 模拟层，postgres 能 healthy，同镜像前台 `docker run` 能起）。
+> 本轮同样的命令**一次通过**，说明那确实是**宿主机侧的一过性故障**，
+> 而不是本仓库的缺陷 —— 因此这一项从 UNVERIFIED 改为**已验证**。
+>
+> 复现 compose 冒烟时的注意点：`docker-compose.yml` 把 app 绑在
+> `127.0.0.1:${APP_PORT:-3200}`，而本机门禁的服务也监听 3200，
+> 所以实测用的是 `APP_PORT=3300`。另外 `.env.deploy` 里的
+> `INITIAL_ADMIN_USER/PASSWORD` 默认是**空**的（`entrypoint.sh` 会跳过引导）；
+> 要做"登录级"冒烟就需要先填上，跑完**再清空** —— 不要让它长期留在文件里。
+
+### 0.4 两个可以打生产、且自带写保护闸的脚本
+
+```bash
+export PROD_BASE_URL=https://tsinglankindergarten.zeabur.app
+export PROD_ADMIN_CREDENTIALS=$PWD/credentials/prod-super-admin.json
+
+# 只读：验证"强制 MFA"闭环（登录→第二因子→业务接口可用）
+node scripts/verify-prod-mfa.mjs
+
+# 会写生产：建探针资源→直传真实字节→下载比对 sha256→删除并复查 0 残留
+# 必须显式开闸，否则脚本直接退出（码 2）
+ALLOW_PROD_WRITE=1 node scripts/verify-prod-storage.mjs
+```
+
+两个脚本都以**生产**为目标，所以刻意不放进 `verify-all.sh`：
+跑一次门禁不该变成"对生产做一次操作"。
 
 > ⚠️ 本机确实没有 `psql` / `pg_dump` / `pg_restore` / `createdb`：
 > `which psql pg_dump pg_restore createdb` 全部返回空。
@@ -78,6 +156,7 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 | `SERVER_HOST` | 建议 | 监听地址；**默认 `localhost` 只监听回环** | 容器内设 `0.0.0.0` | `0.0.0.0` |
 | `SERVER_PORT` | 建议 | 监听端口，默认 `3000` | 部署环境分配 | `3000` |
 | `APP_VERSION` | 建议 | 健康检查/就绪检查返回的版本 | 发布流水线写入 git describe | `1.3.0-hardening` |
+| `MFA_ENFORCE_SUPER_ADMIN` | ✅ 生产（**强烈建议**） | `true` 时：super_admin 登录仍返回 201，但**任何业务接口**在完成第二因子绑定前一律 403。**默认 OFF 属于"已知并被接受的残余风险"，见 §2.2 注** | 固定 `true` | `true` |
 
 > `SERVER_HOST` 默认值是 `'localhost'`（`server/main.ts:63`）——
 > **在容器/多机部署下如果不设 `0.0.0.0`，健康检查会从外部失败**，而进程日志仍然显示
@@ -105,6 +184,8 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 | `QLS_MIGRATION_GUC_<NAME>` | — | 迁移期间注入事务级 GUC `qls.<name>`（`down` 的强制逃生门）。值走绑定参数，不能注入 SQL | `scripts/migrate.mjs` `applyMigrationGucs()` |
 | `QLS_SOFT_DELETE_FORCE_DOWN` | — | `0007 down` 的显式别名（`on`/`1`/`true`/`yes`）；回收站非空时放行回滚 | 同上 + `0007_resource_soft_delete.down.sql:27,46` |
 | `QLS_STRICT_PLATFORM_CLI` | `0` | 构建期：`capabilities/` 存在但平台 CLI 不可用时是否硬失败 | `scripts/postinstall.mjs:55`、`scripts/build.sh:40-43` |
+| `MFA_ENFORCE_SUPER_ADMIN` | **`false`（OFF）** | `false` 时 super_admin 只凭口令即可登录并使用全部功能 —— 这是一个**已知并被明确接受的残余风险**：口令泄露即等于平台接管。生产**必须**设为 `true`（见 §2.1） | `auth.guard.ts` 读取该变量；实测生产设为 `true` 后业务接口返回 403「该账号角色强制要求 MFA」 |
+| `PURGE_SCHEDULER_ENABLED` | `true` | 回收站到期清理调度器开关 | `purge.scheduler.ts` |
 
 > `LOGIN_IP_RATE_LIMIT_*` 在**模块加载时读取一次**（`auth.service.ts:41-51`），
 > 改值必须重启进程才生效。 [已证实]
@@ -224,6 +305,37 @@ PRODUCTION STATUS: NOT READY FOR PUBLIC RELEASE
 | `AllowedMethod` | `PUT` / `GET` / `HEAD` | 应用只有这三种跨域请求。`DELETE`、`POST` 用不到，开了就是多余的攻击面。 |
 | `AllowedHeader` | 仅 `content-type` | 浏览器直传只带这一个自定义头（见 `putFileBytes`：`fetch(url, {method:'PUT', body: file})` 会自动带 `content-type`）。放开 `*` 会让预检通过任何自造头。 |
 | `ExposeHeader` | `ETag` | 便于前端做完整性/去重校验；不暴露其它响应头。 |
+
+#### 🔴 生产现状：**这份策略还没有应用，浏览器直传目前是失败的**
+
+这不是推断，是在生产上实测到的（`scripts/verify-prod-browser-upload.mjs`）：
+
+```
+PASS  页面已在生产 origin 上  -> https://tsinglankindergarten.zeabur.app
+FAIL  浏览器在生产 origin 上直传成功（CORS 预检通过）  -> error=Failed to fetch
+      预检响应 status=403 CORS 响应头={}                      ← 一个 CORS 头都没有
+      loadingFailed errorText=net::ERR_FAILED
+        corsError=PreflightMissingAllowOriginHeader          ← Chromium 给的确切原因
+```
+
+即：老师点「保存草稿」时上传会失败，而**服务端没有任何日志**。
+
+> **为什么不是我去配好的**：应用用的那组 R2 凭据**没有**桶管理权限 ——
+> `GetBucketCors` 返回 `403 AccessDenied`。这正是**正确的最小权限**：
+> 应用不该有能力修改桶策略。要修必须用一个有 R2 管理权限的凭据
+> （Cloudflare 控制台里配，或换一个带 bucket 配置权限的 API Token）。
+
+**怎么验有没有修好**（幂等、跑完自查残留）：
+
+```bash
+export PROD_BASE_URL=https://tsinglankindergarten.zeabur.app
+export PROD_ADMIN_CREDENTIALS=$PWD/credentials/prod-super-admin.json
+ALLOW_PROD_WRITE=1 node scripts/verify-prod-browser-upload.mjs
+```
+
+它会在**生产 origin 的页面上下文里**按真实客户端的方式发那次 PUT
+（`fetch(url, {method:'PUT', body: File})`，`File` 自带 `content-type: application/pdf`
+⇒ 非安全名单 ⇒ 触发预检），并把 Chromium 的 `corsErrorStatus` 打出来。
 
 > ⚠️ **没有配 CORS 的症状极具误导性**：预检响应缺少 `Access-Control-Allow-Origin`
 > 时，浏览器直接拦掉请求，页面显示 `Failed to fetch`，而**对象存储侧一行日志都没有**

@@ -3,10 +3,13 @@
 # =============================================================================
 #
 # ✅ 已经**真实执行**过（不再是"读文档猜的形状"）：config / build / up -d / ps /
-#    logs / restart / down / up -d 八个子命令都在本机跑通，app 容器 healthy，
-#    并在容器内做了登录与接口冒烟。第一次跑就发现了一个真实缺陷：build 钉了
-#    linux/amd64，但服务没声明运行平台，于是 `up -d` 卡死、app 永远停在 Created
+#    logs / restart / down / up -d 八个子命令全部 exit=0，两个容器 healthy，
+#    并在**容器内**验证了真实登录（201 + super_admin + 首次登录强制改密会把
+#    业务接口挡在 403）。第一次跑就发现了一个真实缺陷：build 钉了 linux/amd64，
+#    但服务没声明运行平台，于是 `up -d` 卡死、app 永远停在 Created
 #    （详见 app 服务里 `platform:` 那一行的注释）。
+#
+#    ⚠️ 复现时用 `APP_PORT=3300`：默认 3200 会与本机门禁跑的服务撞端口。
 #
 # 用法（在仓库根目录）：
 #   cp .env.deploy.example .env.deploy   &&  chmod 600 .env.deploy
