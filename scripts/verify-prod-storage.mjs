@@ -186,8 +186,26 @@ try {
     try {
       const after = await req('GET', `/api/resources?pageSize=100&keyword=${encodeURIComponent(String(STAMP))}`);
       const residue = (after.d?.items ?? []).filter((r) => String(r.title).includes(String(STAMP)));
-      console.log(`清理：关键字复查残留 ${residue.length} 条`);
-      if (residue.length > 0) { console.error('⚠️ 仍有残留，需人工处理'); exitCode = 1; }
+      console.log(`清理：**正常列表**里残留 ${residue.length} 条`);
+      if (residue.length > 0) { console.error('⚠️ 正常列表里仍有残留，需人工处理'); exitCode = 1; }
+
+      // ⚠️ 只查"正常列表"是不够的：`DELETE /api/resources/:id` 是**软删除**，
+      // 行会移进回收站，而正常列表看不到它。上一版就因此打印了"残留 0 条"，
+      // 而生产回收站里其实躺着我的 9 条探针 —— 那是**我自己造的假安心**。
+      // 所以这里同时查回收站，并把"什么时候会被自动清掉"如实说出来。
+      const bin = await req('GET', '/api/resources/recycle-bin?pageSize=100');
+      const inBin = ((bin.d?.items ?? [])).filter((r) => String(r.title).includes(String(STAMP)));
+      if (inBin.length === 0) {
+        console.log('清理：回收站里也没有残留');
+      } else {
+        const eta = inBin.map((r) => r.purgeAfter).filter(Boolean).sort()[0];
+        console.log(
+          `清理：回收站里有 ${inBin.length} 条（软删除的正确行为，不是脏数据）。` +
+            (eta ? `将在 ${eta} 由到期清理调度器永久删除。` : '（未返回 purgeAfter，无法给出预计时间）'),
+        );
+        console.log('      注意：**没有**按需 purge 的接口（`resource.purge` 是幽灵权限），');
+        console.log('            所以这条记录只能等保留期到期，或由运维直接操作数据库。');
+      }
     } catch (e) { console.error(`残留复查失败：${e?.message ?? e}`); exitCode = 1; }
   }
   console.log(`\n=== RESULT ===\n  pass=${PASSED} fail=${FAILED}`);
