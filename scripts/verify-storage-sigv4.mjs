@@ -29,13 +29,21 @@
  *      `POST /api/resources/:id/upload-url` 签发、用它 PUT、再通过应用的两跳
  *      签名下载取回，逐字节比对。这才是"应用签出来的 URL 真的能被严格后端接受"。
  */
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 import { createHash, createHmac } from 'node:crypto';
+import { purgeProbeResources } from '../tests/helpers/probe-cleanup.mjs';
 
 const BASE = process.env.BROWSER_E2E_BASE || 'http://127.0.0.1:3200';
 const S3 = process.env.S3_SIGV4_ENDPOINT || 'http://127.0.0.1:9300';
 const BUCKET = process.env.S3_SIGV4_BUCKET || 'qls-sigv4-bucket';
 const ACCESS_KEY_ID = process.env.S3_SIGV4_ACCESS_KEY || 'SIGV4TESTKEY';
 const SECRET = process.env.S3_SIGV4_SECRET || 'sigv4-test-secret';
+/**
+ * 数据库连接串，仅用于**清理探针**的 SQL 兜底（
+ * `DELETE /api/resources/:id` 是软删除，只走它会在回收站里积行）。
+ * 没设也能跑：那时清理只走 purge 接口，残留会被清清楚楚报出来。
+ */
+const DB_URL = process.env.DATABASE_URL || process.env.AUTHZ_TEST_DB || null;
 const REGION = process.env.S3_SIGV4_REGION || 'us-east-1';
 const USER = process.env.BROWSER_E2E_USER || '';
 const PASS = process.env.BROWSER_E2E_PASS || '';
@@ -46,6 +54,8 @@ if (!USER || !PASS) {
 }
 
 let PASSED = 0, FAILED = 0, SKIPPED = 0;
+/** 清理没清掉的行 —— 必须让整个套件失败，而不是只打印一行警告。 */
+const failedCleanup = [];
 const ok = (label, detail = '') => { console.log(`  \x1b[32mPASS\x1b[0m  ${label}${detail ? '  -> ' + detail : ''}`); PASSED++; };
 const bad = (label, detail = '') => { console.log(`  \x1b[31mFAIL\x1b[0m  ${label}${detail ? '  -> ' + detail : ''}`); FAILED++; };
 const skip = (label, reason) => { console.log(`  \x1b[33mSKIP\x1b[0m  ${label}  -> ${reason}`); SKIPPED++; };
@@ -287,11 +297,13 @@ async function main() {
   if (login.s !== 201 && login.s !== 200) {
     bad('登录', `HTTP ${login.s}`);
   } else {
+    // §8：必须带 directoryId；目标取「教学详案」（原 legacy folderType 是 weekly_plans）。
+    const sigv4Dir = await folderIdFor(c, { program: 'prek', subject: 'virtue', suffix: 'lesson' });
     const created = await c.req('POST', '/api/resources', {
       title: `SigV4 链路探针 ${Date.now()}`,
       program: 'prek',
       subject: 'virtue',
-      folderType: 'weekly_plans',
+      directoryId: sigv4Dir,
       status: 'draft',
     });
     const rid = created.d?.id ?? created.d?.resource?.id ?? null;
@@ -346,7 +358,22 @@ async function main() {
           }
         }
       } finally {
-        await c.req('DELETE', `/api/resources/${rid}`);
+        // ⚠️ `DELETE` 只是**软删除**（进回收站）。实测这个套件每跑一次就往回收站
+        // 留一行，本机积了 12 行 `SigV4 链路探针 <ts>`。
+        // 清理必须真正删掉，并且**核实**删掉了 —— 见 tests/helpers/probe-cleanup.mjs。
+        const purged = await purgeProbeResources({
+          req: (m, p, b) => c.req(m, p, b),
+          ids: [rid],
+          dbUrl: DB_URL,
+          label: 'SigV4 链路探针',
+        });
+        if (purged.remaining.length > 0) {
+          failedCleanup.push(...purged.remaining);
+        }
+        console.log(
+          `\n清理：SigV4 探针 ${rid} → 接口 purge ${purged.purgedViaApi} 条 / SQL 硬删 ${purged.purgedViaSql} 条` +
+            (purged.remaining.length ? `；**仍残留 ${purged.remaining.length} 条**` : '；残留 0'),
+        );
       }
     }
   }
@@ -362,4 +389,9 @@ try {
 console.log('\n' + '='.repeat(78));
 console.log(`SigV4 校验：${PASSED} 通过 / ${FAILED} 失败 / ${SKIPPED} 跳过   pass=${PASSED} fail=${FAILED} skipped=${SKIPPED}`);
 if (SKIPPED > 0) console.log('  ⚠️  有 ' + SKIPPED + ' 条断言被显式跳过，它们**不算通过**。');
+if (failedCleanup.length > 0) {
+  console.log('\n  ❌ 探针清理失败，以下资源仍留在库里（门禁的 verify-no-probe-residue 也会红）：');
+  for (const id of failedCleanup) console.log('      ' + id);
+  FAILED += 1;
+}
 process.exit(FAILED ? 1 : 0);

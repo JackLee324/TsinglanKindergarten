@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PROGRAM_STRUCTURES, FOLDER_DEFINITIONS, ROLE_DEFINITIONS } from './curriculum.data';
-import type { ProgramStructure, FolderType, RoleCode, SubjectNode } from '@shared/api.interface';
+import type { ProgramStructure, FolderType, RoleCode } from '@shared/api.interface';
 // 与 resources/dashboard 同一个判定：shared/rbac.ts 的 isPlatformAdmin。
 // 这里原本自带 ADMIN_ROLES，漏掉 super_admin —— super_admin 会看到
 // 「无权限」的各班型结构。第六个同源缺陷点。

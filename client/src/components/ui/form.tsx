@@ -13,6 +13,8 @@ import {
   type FieldValues,
 } from "react-hook-form"
 
+import { useTranslation } from '@client/src/i18n/useTranslation'
+
 import { cn } from "@/lib/utils"
 import { Label } from "@/components/ui/label"
 
@@ -135,9 +137,29 @@ function FormDescription({ className, ...props }: React.ComponentProps<"p">) {
   )
 }
 
+/**
+ * 校验消息可能是两种东西，这里必须都照顾到：
+ *   · 中文句子字面量（如 ChangePasswordPage 的「请输入当前密码」）；
+ *   · **i18n key**（如 UploadPage / LoginPage 的 `upload.titleRequired`）。
+ *
+ * 后者以前是**直接把 key 印在老师脸上**：`FormMessage` 只做
+ * `String(error.message)`，于是一个校验失败的输入框下面会显示
+ * `upload.directoryRequired` 这么一行。它不是崩溃，所以没人报 bug，
+ * 但它对用户毫无意义 —— 属于"看起来完成了"的典型。
+ *
+ * 判定很保守：只对 `xxx.yyy` 这种**点分小写形态**尝试翻译，
+ * 且翻译结果与 key 相同（字典里没有）时原样显示，绝不吞掉真实句子。
+ */
+function translateValidationMessage(raw: string, t: (key: string) => string): string {
+  if (!/^[a-z][a-zA-Z0-9]*\.[a-zA-Z][a-zA-Z0-9]*$/.test(raw)) return raw
+  const translated = t(raw)
+  return translated === raw ? raw : translated
+}
+
 function FormMessage({ className, ...props }: React.ComponentProps<"p">) {
   const { error, formMessageId } = useFormField()
-  const body = error ? String(error?.message ?? "") : props.children
+  const { t } = useTranslation()
+  const body = error ? translateValidationMessage(String(error?.message ?? ""), t) : props.children
 
   if (!body) {
     return null

@@ -20,6 +20,7 @@ import {
   ROLE_ASSIGN_PERMISSION,
   type EffectivePermissions,
 } from '@shared/rbac';
+import type { WritableScopeBinding } from '@shared/rbac';
 import { withRbacWriteContext } from '@server/database/rbac-write-context';
 import {
   auditLogs,
@@ -171,6 +172,73 @@ export class TeachersService {
     return this.authz.getEffectivePermissions(targetTeacherId);
   }
 
+  // ===========================================================================
+  // §12 数据范围（scope）—— 查看与编辑
+  // ===========================================================================
+  //
+  // `AuthorizationService.setScopes()` 与 `account_scopes` 表早就存在，
+  // 但**没有任何 API 或界面能调用它们** —— 于是"把某个主任的数据范围限制到
+  // 只有 Pre-K"这件事，在库里定义完整、在界面里完全不可达。
+  // 与上面 grant/deny 那段同样的处境，所以同样在这里把链路接上。
+  //
+  // 语义（与 `shared/rbac.ts` 的 `scopeSatisfies` 逐字一致，不另立一套）：
+  //   · **空数组 = 不受限**，按角色默认（这是刻意的：绝大多数账号不需要显式绑定）；
+  //   · 一旦有绑定，就按 kind 判定：ALL / PROGRAM / SUBJECT / OWN；
+  //   · `permission` 为 null 表示该绑定对**所有数据权限**生效。
+  //
+  // 写路径全部由 `setScopes()` 在**一个事务里整表替换**，不做增量 —— 增量容易
+  // 在并发下留下半套绑定，而"半套绑定"在权限系统里的表现是"有人能看到不该看的"。
+
+  /** 读取某个账号的数据范围绑定（空数组 = 按角色默认，不受限）。 */
+  async getAccountScopes(targetTeacherId: string): Promise<{ scopes: WritableScopeBinding[] }> {
+    await this.requireTeacher(targetTeacherId);
+    const effective = await this.authz.getEffectivePermissions(targetTeacherId);
+    return { scopes: effective.scopes };
+  }
+
+  /**
+   * 整表替换某个账号的数据范围绑定。
+   *
+   * `bindings: []`（空数组）是**合法输入**，含义是"清除全部显式绑定、回到角色默认"。
+   * 不提供"清空=省略"的写法：省略与"清空"必须能区分，否则一次忘记传字段的
+   * 请求就会静默把人的数据范围放大到角色默认。
+   */
+  async setAccountScopes(
+    targetTeacherId: string,
+    bindings: WritableScopeBinding[],
+    actor: { id: string; name: string; roles: readonly RoleCode[] },
+    operatorIp?: string,
+  ): Promise<{ scopes: WritableScopeBinding[] }> {
+    const target = await this.requireTeacher(targetTeacherId);
+
+    await this.authz.setScopes({ id: actor.id, roles: actor.roles }, targetTeacherId, bindings);
+
+    await this.db.insert(auditLogs).values({
+      action: 'permission_change' as AuditAction,
+      teacherId: targetTeacherId,
+      teacherName: target.name,
+      ipAddress: operatorIp,
+      detail:
+        `设置数据范围：` +
+        (bindings.length === 0
+          ? '清除全部显式绑定（回到角色默认）'
+          : bindings
+              .map(
+                (b) =>
+                  `${b.permission ?? '（全部数据权限）'}=${b.kind}` +
+                  (b.program ? `/${b.program}` : '') +
+                  (b.subject ? `/${b.subject}` : '') +
+                  (b.subSubject ? `/${b.subSubject}` : ''),
+              )
+              .join('、')) +
+        `；目标角色=${(target.roles ?? []).join(',')}；操作人=${actor.name}`,
+      success: true,
+    });
+
+    const effective = await this.authz.getEffectivePermissions(targetTeacherId);
+    return { scopes: effective.scopes };
+  }
+
   /** 取账号且不存在就抛 404（三处共用一份判定）。 */
   private async requireTeacher(id: string): Promise<{ name: string; roles: RoleCode[] }> {
     const rows = await this.db
@@ -288,8 +356,8 @@ export class TeachersService {
 
   async createTeacher(
     dto: CreateTeacherDto,
-    operatorId: string,
-    operatorName: string,
+    _operatorId: string,
+    _operatorName: string,
     operatorRoles: RoleCode[],
     authz: EffectivePermissions | undefined,
     operatorIp?: string,
@@ -375,7 +443,7 @@ export class TeachersService {
     id: string,
     dto: UpdateTeacherDto,
     operatorId: string,
-    operatorName: string,
+    _operatorName: string,
     operatorRoles: RoleCode[],
     authz: EffectivePermissions | undefined,
     operatorIp?: string,
@@ -453,7 +521,7 @@ export class TeachersService {
   async deleteTeacher(
     id: string,
     operatorId: string,
-    operatorName: string,
+    _operatorName: string,
     operatorIp?: string,
   ): Promise<void> {
     try {
@@ -494,8 +562,8 @@ export class TeachersService {
   async updatePermissions(
     teacherId: string,
     permissionsInput: { program: string; subject: string; subSubject?: string; canView: boolean; canUpload: boolean }[],
-    operatorId: string,
-    operatorName: string,
+    _operatorId: string,
+    _operatorName: string,
     operatorIp?: string,
   ): Promise<SubjectPermission[]> {
     try {

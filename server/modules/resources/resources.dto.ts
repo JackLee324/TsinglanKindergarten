@@ -1,4 +1,20 @@
-import { ValidateIf, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
+  IsBoolean,
+  IsIn,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+  ValidateIf,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import type {
   ProgramCode,
@@ -129,11 +145,20 @@ export class CreateResourceDto implements CreateResourceRequest {
   @IsString()
   subSubject?: string;
 
-  @IsNotEmpty()
+  /**
+   * legacy 资料夹分类。**上传时不再要求老师填**（§7）。
+   *
+   * 保留这个可选字段只有两个用途：
+   *   1. 迁移期间脚本/接口显式写入历史分类；
+   *   2. 万一某个目录无法自动推导（例如挂到一棵不含官方资料夹的树上），
+   *      调用方可以显式给出，而不是让服务端**猜**一个值。
+   * 常规上传走 `directoryId`，服务端自动维护这一列。
+   */
+  @IsOptional()
   @Type(() => String)
   @IsString()
   @IsIn(FOLDER_TYPES)
-  folderType!: FolderType;
+  folderType?: FolderType;
 
   @IsOptional()
   @IsString()
@@ -174,13 +199,18 @@ export class CreateResourceDto implements CreateResourceRequest {
   fileType?: string;
 
   /**
-   * 目录归属（可编辑目录树节点 id）。可选。
-   * 只做形状校验（UUID）；**存在性、是否启用、以及调用方对该目录的 scope
-   * 一律在服务层判** —— 那需要查库和权限上下文，DTO 层拿不到。
+   * 目录归属（可编辑目录树节点 id）。**新建时必填**（§8）。
+   *
+   * 「没有 directoryId → 不能提交保存」是业主的硬要求：资源必须落在目录树上，
+   * 否则就会出现"库里有这条资源、但老师在目录里怎么点都找不到它"。
+   * 历史数据允许 `directory_id IS NULL`（迁移报告如实统计，不假装对齐），
+   * 管理员用 `/admin/unassigned-resources` 批量补；**新建不再产生新的 NULL**。
+   *
+   * 只做形状校验（UUID）；**存在性、是否启用、是否叶节点、以及调用方对该目录的
+   * program/subject scope 一律在服务层判** —— 那需要查库和权限上下文，DTO 拿不到。
    */
-  @IsOptional()
-  @IsUUID()
-  directoryId?: string;
+  @IsUUID('4', { message: '必须选择所属目录（directoryId 缺失或不是合法 id）' })
+  directoryId!: string;
 }
 
 export class UpdateResourceDto implements UpdateResourceRequest {
@@ -352,4 +382,58 @@ export class PurgeResourceDto {
   @MinLength(4, { message: '必须写明清理原因（至少 4 个字）' })
   @MaxLength(500)
   reason!: string;
+}
+
+/**
+ * §8 待补齐资源列表的查询参数。
+ *
+ * `mode` 三态而不是一个布尔：`unassigned`（完全没归属）与 `subject_level`
+ * （只在科目层）是**两种不同的编辑工作**，管理员通常一次只做一种。
+ * 默认 `all` 只是为了让"我到底还有多少条没弄干净"这个总问题有答案。
+ */
+export class UnderFiledQueryDto {
+  @IsOptional()
+  @IsString()
+  @IsIn(['all', 'unassigned', 'subject_level'])
+  mode?: 'all' | 'unassigned' | 'subject_level';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  page?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
+}
+
+/**
+ * §8 批量归档。
+ *
+ * `resourceIds` 有上限（200）：这不是性能优化，是**事故面控制** ——
+ * 一次误操作最多影响 200 条，而且响应体里会逐个报告失败原因。
+ */
+export class AssignDirectoryDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(200)
+  @IsUUID('4', { each: true })
+  resourceIds!: string[];
+
+  @IsUUID('4')
+  directoryId!: string;
+
+  /**
+   * 是否同时把 legacy `folder_type` 改成从目标目录推导出的值。
+   *
+   * **默认 false**，因为 §9 明确要求不篡改历史分类。需要统一口径时
+   * 由管理员显式开启，并且仅在能**确定推导**出值时才会写。
+   */
+  @IsOptional()
+  @IsBoolean()
+  syncLegacyFolderType?: boolean;
 }

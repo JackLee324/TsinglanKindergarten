@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { TeachersService } from './teachers.service';
-import {CreateTeacherDto, ListTeachersQueryDto, PermissionOverrideDto, UpdatePermissionsDto, UpdateTeacherDto} from './teachers.dto';
+import {CreateTeacherDto, ListTeachersQueryDto, PermissionOverrideDto, SetScopesDto, UpdatePermissionsDto, UpdateTeacherDto} from './teachers.dto';
 import type {
   RoleCode,
   SubjectPermission,
@@ -190,6 +190,43 @@ export class TeachersController {
     return this.teachersService.clearAccountPermissionOverride(
       id,
       permission,
+      { id: teacher.id, name: teacher.name, roles: teacher.roles },
+      auditClientIp(req),
+    );
+  }
+
+  // ==========================================================================
+  // §12 数据范围（scope）：查看与编辑
+  // ==========================================================================
+  //
+  // 与上面 grant/deny 同一套理由：能力（`permission.grant`）与
+  // "能不能对**这个人**做"（`assertCanManageAccount`，在 service 里）是两件事，
+  // 都要成立。审计复用 `permission_change` —— 覆盖项与数据范围都是
+  // "改变了某个账号的授权"，按同一个动作筛才查得全。
+  //
+  // `AuthorizationService.setScopes()` 与 `account_scopes` 表一直存在，
+  // 但此前**没有任何 API 或界面能调用它们**，于是"把某位主任的数据范围限制到
+  // 只有 Pre-K"这件事在库里定义完整、在界面上完全不可达。这两条路由把它接上。
+
+  /** 查看某账号的数据范围绑定。空数组 = 没有显式绑定，按角色默认。 */
+  @Get(':id/scopes')
+  @RequirePermission('permission.view')
+  async getScopes(@Param('id') id: string) {
+    return this.teachersService.getAccountScopes(id);
+  }
+
+  /** 整表替换某账号的数据范围绑定。`scopes: []` 表示清除全部显式绑定。 */
+  @Post(':id/scopes')
+  @RequirePermission('permission.grant')
+  async setScopes(
+    @CurrentTeacher() teacher: { id: string; name: string; roles: RoleCode[] },
+    @Param('id') id: string,
+    @Body() body: SetScopesDto,
+    @Req() req: Request,
+  ) {
+    return this.teachersService.setAccountScopes(
+      id,
+      body.scopes,
       { id: teacher.id, name: teacher.name, roles: teacher.roles },
       auditClientIp(req),
     );

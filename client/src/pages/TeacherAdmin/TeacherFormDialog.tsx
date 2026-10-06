@@ -11,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@client/src/components/ui/select';
-import { Badge } from '@client/src/components/ui/badge';
 import {
   Dialog,
   DialogContent,

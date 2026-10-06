@@ -34,8 +34,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { register } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 // curriculum.data.ts 通过 `@shared/...` 别名导入，必须注册别名 loader（同其它 TS 测试）
 register('./helpers/ts-alias-loader.mjs', import.meta.url);

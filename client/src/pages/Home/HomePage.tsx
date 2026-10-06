@@ -5,9 +5,6 @@ import {
   FileText,
   Upload,
   FolderOpen,
-  ClipboardCheck,
-  Calendar,
-  BookOpen,
 } from 'lucide-react';
 import { logger } from '@client/src/lib/logger';
 
@@ -17,6 +14,7 @@ import { StatCard } from '@client/src/components/ui/stat-card';
 import { ResourceListItem } from '@client/src/components/ui/resource-list-item';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import { useAuth } from '@client/src/auth/useAuth';
+import type { FolderType, ProgramCode } from '@shared/api.interface';
 import * as dashboardApi from '@client/src/api/dashboard';
 
 interface TeacherDashboardStats {
@@ -282,16 +280,14 @@ const HomePage: React.FC = () => {
                       id: item.id,
                       title: item.title,
                       titleEn: item.titleEn,
-                      program: item.program as 'prek' | 'k',
+                      program: item.program as ProgramCode,
                       subject: item.subject,
                       subSubject: item.subSubject,
-                      folderType: item.folderType as
-                        | 'curriculum_outline'
-                        | 'weekly_plans'
-                        | 'courseware'
-                        | 'materials'
-                        | 'observation'
-                        | 'research_archive',
+                      // 以前这里把 6 个 legacy 值**又抄了一遍**（内联联合字面量）。
+                      // 那是 §13 说的"同一件事有第二份定义"：`FolderType` 已在
+                      // `@shared/curriculum` 定义过一次，抄一份出来只会在词汇变化时
+                      // 悄悄分叉，而且分叉了也不报错（多一个值/少一个值都能编译）。
+                      folderType: item.folderType as FolderType,
                       uploaderName: item.uploaderName,
                       updatedAt: item.updatedAt,
                       uploaderId: '',

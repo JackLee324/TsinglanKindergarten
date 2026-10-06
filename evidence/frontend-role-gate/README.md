@@ -295,3 +295,73 @@ PRODUCTION_RELEASE_REPORT.md                    附录 G（摘要）
 | `after-pass.txt` | `qls-e2e:test`（两处都修好）第 6c 节 + 整轮结果 |
 | `mutation-test.txt` | 单元级变异测试（三处性质逐个破坏） |
 | `gate-and-deploy-final.txt` | 权威门禁（282 条 HTTP + 单元 + 类型 + 构建 + 契约）与最终部署验收 |
+
+---
+
+## 6. 第 2 轮补充（信息架构收口 §13）：白名单字面量**已改为能力码**
+
+上面 §3 记录的"没有改动的东西"里有一条是：
+
+> `TEACHER_ROLES` 等白名单字面量：**保持原样**。修的是"怎么用它们判定"，不是"白名单里放谁"。
+
+那是一次**刻意的收窄** —— 当时的目标是尽快把线上白屏修掉，把改动限制在
+"判定方式"上，不去动"白名单里放谁"，以免顺手扩大影响面。
+它不是一个"角色数组是正确设计"的结论。
+
+后续的信息架构收口（§13「Role / Permission / Program / Subject / SubSubject /
+Directory / Folder 各自只能有一个来源」）要求把这件事做完，因此
+`client/src/app.tsx` 的四张角色数组**已被删除**，四类路由守卫全部改用能力码：
+
+| 路由 | 原守卫 | 现守卫 | 服务端同一个码 |
+| --- | --- | --- | --- |
+| `<Layout>`（整个应用入口） | `TEACHER_ROLES` | `curriculum.view` | `@RequirePermission('curriculum.view')` |
+| `/upload` | `UPLOAD_ROLES` | `resource.create` | `POST /api/resources` |
+| `/review` | `REVIEW_ROLES` | `review.view` | 审核接口 |
+| `/admin/teachers` | `ADMIN_ROLES` | `account.view` | `@RequirePermission('account.view')` |
+| `/admin/permissions` | `ADMIN_ROLES` | `permission.view` | `:id/effective-permissions` |
+| `/admin/audit` | `ADMIN_ROLES` | `audit.view` | 审计接口 |
+| `/admin/recycle-bin` | 已是 `resource.restore` | `resource.restore` | 回收站接口 |
+| `/admin/unassigned-resources`、`/directory/manage` | — | `curriculum.manage` | 目录写接口 |
+
+### 行为等价性（逐条核对，不是"应该没问题"）
+
+| 账号 | 改动前 | 改动后 | 结论 |
+| --- | --- | --- | --- |
+| `super_admin` | `hasAnyRole` 通配放行全部 | 持有全部权限，放行全部 | **一致** |
+| `principal` | 四张白名单里都有它 | 持有全部守卫码 | **一致** |
+| `visitor` | 不在任何白名单里 → 被拒 | 不持有任何权限 → 被拒 | **一致**（§3 的阴性对照要求仍然满足） |
+| `curriculum_director` | 看得见「管理后台」菜单，点进去被弹回 | 进得去它被授予的那几页 | **修正**（见下） |
+
+### 这次改动修掉的**第二个**分叉
+
+它不是原故障，而是同一形态的第二处：
+
+* 侧边栏（`Layout.tsx`）用能力码 `account.view` 决定是否显示「管理后台」；
+* 路由守卫却用 `ADMIN_ROLES = ['principal']`；
+* 服务端 `GET /api/teachers` 只要求 `account.view`。
+
+于是 `curriculum_director` **看得见菜单、点进去被弹回**，而服务端其实允许他读 ——
+**客户端比服务端更严**，正是本文件一直在防的那类分叉。
+通配语义救不了这一处（它只对 `super_admin` 生效），所以必须把来源统一掉。
+
+注意这次是**对齐**而不是**放宽**：`curriculum_director` 仍然拿不到
+`audit.export` / `role.assign` / `curriculum.manage` 这些超管专属能力。
+
+### 我一度判断错的地方（如实记录）
+
+排查时我先比较了"角色数组 vs `ROLE_PERMISSIONS`"，发现四张数组都不含 `super_admin`，
+于是断言"超管被锁在门外"。**那个结论是错的** —— 我漏掉了
+`hasAnyRole()` 里 `held.includes(SUPER_ADMIN_ROLE) → return true` 的通配语义，
+而那正是本文件 §3 记录的那次修复。教训：比较两套规则的**成员**不等于比较它们的**语义**；
+先读通语义再下结论。
+
+### 回归保护
+
+`tests/client-role-gate.test.mjs` 随之换了真相来源（从 app.tsx 解析能力码，
+而不是角色数组），但**断言一条没少**，并且新增了三条：
+
+1. 守卫能力码不得出现拼错的码（必须存在于 `shared/rbac.ts` 的权限目录里）；
+2. 每一条守卫码都必须被 `super_admin` 持有；
+3. 每一条守卫码都必须在 `server/` 里找得到对应的 `@RequirePermission(...)` ——
+   挡住"客户端发明一个服务端不认的码"（那种码会让页面一进去就 403）。
+   并有 `app.tsx 里不得再出现 requiredRoles` 一条，防止角色数组回归。

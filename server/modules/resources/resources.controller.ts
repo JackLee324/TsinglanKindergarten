@@ -22,6 +22,8 @@ import {
   ResourceIdParamDto,
   ResourceListQueryDto,
   UpdateResourceDto,
+  UnderFiledQueryDto,
+  AssignDirectoryDto,
 } from './resources.dto';
 import { CurrentTeacher } from '@server/modules/auth/auth.guard';
 import { RequirePermission } from '@server/modules/authz/permission.decorator';
@@ -104,6 +106,56 @@ export class ResourcesController {
    * are the same capability, and the service performs no second filter — the
    * decorator is the gate.
    */
+  /**
+   * §8 待补齐资源列表（管理员）。
+   *
+   * MUST BE DECLARED BEFORE `@Get(':id')` —— 与 `mine` / `recycle-bin` 同一个理由：
+   * Express 按声明顺序匹配，字面路径放在 `:id` 之后永远到不了，
+   * 请求会以 id='under-filed' 抵达并变成一个 UUID 解析错误。
+   *
+   * 权限用 `curriculum.manage` 而不是 `resource.view`：
+   * 这一页是**目录数据治理**（把资源精确到资料夹），它是目录管理能力的一部分，
+   * 而 `resource.view` 是每个老师都有的读能力 —— 用它当门槛等于把
+   * 全园资源的"归档债清单"开放给所有人。
+   */
+  @Get('under-filed')
+  @RequirePermission('curriculum.manage')
+  async listUnderFiled(
+    @Query() query: UnderFiledQueryDto,
+    @CurrentTeacher() teacher: AuthUser,
+  ) {
+    return this.resourcesService.listUnderFiledResources(
+      { mode: query.mode, page: query.page, pageSize: query.pageSize },
+      teacher.id,
+    );
+  }
+
+  /**
+   * §8 批量归档到资料夹。
+   *
+   * POST 而不是 PATCH：它不是"改一条资源"，而是一次**批量运维动作**，
+   * 有自己的审计动作（`resource_directory_assign`）与自己的失败语义
+   * （要么全部成功，要么一条都不动 —— 逐条校验通过后才执行一次 UPDATE，
+   * 影响行数对不上就抛错）。
+   */
+  @Post('assign-directory')
+  @RequirePermission('curriculum.manage')
+  async assignDirectory(
+    @Body() body: AssignDirectoryDto,
+    @CurrentTeacher() teacher: AuthUser,
+    @Req() req: Request,
+  ) {
+    return this.resourcesService.assignResourcesToDirectory(
+      {
+        resourceIds: body.resourceIds,
+        directoryId: body.directoryId,
+        syncLegacyFolderType: body.syncLegacyFolderType,
+      },
+      teacher.id,
+      this.getIp(req),
+    );
+  }
+
   @Get('recycle-bin')
   @RequirePermission('resource.restore')
   async listRecycleBin(

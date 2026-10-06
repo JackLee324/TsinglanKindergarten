@@ -1,3 +1,4 @@
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 /**
  * scripts/verify-resource-purge.mjs —— 按需永久删除（`resource.purge`）的**行为**验证。
  *
@@ -96,8 +97,14 @@ try {
   else bad('curriculum_director 默认不持有 resource.purge', '它竟然持有');
 
   // ---- 2) 建一条草稿资源 --------------------------------------------------
+  // §8：必须带 directoryId。这条探针原本用 legacy folderType 'materials'，
+  // 新契约下 folderType 由服务端按目录推导 —— 目标取「教学资源」，
+  // 与原来的 'materials' 属于同一类（courseware/materials → 教学资源）。
+  const purgeProbeDir = await folderIdFor(principal, {
+    program: 'prek', subject: 'virtue', suffix: 'resource',
+  });
   const created = await principal.req('POST', '/api/resources', {
-    title: TITLE, program: 'prek', subject: 'virtue', folderType: 'materials',
+    title: TITLE, program: 'prek', subject: 'virtue', directoryId: purgeProbeDir,
     semester: 'S1', week: 1, status: 'draft',
   });
   resourceId = created.d?.id ?? created.d?.resource?.id ?? null;

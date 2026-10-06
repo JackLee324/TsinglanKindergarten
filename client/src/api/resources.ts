@@ -3,6 +3,7 @@ import type {
   Resource,
   ResourceListParams,
   ResourceListResponse,
+  UnderFiledListResponse,
   ResourceVersion,
   UpdateResourceRequest,
 } from '@shared/api.interface';
@@ -204,5 +205,46 @@ export async function registerResourceFile(
     return resp.data;
   } catch (error) {
     return handleApiError(error, 'registerResourceFile');
+  }
+}
+
+/**
+ * §8 待补齐资源列表（管理员）：完全没有目录归属的，以及只到科目/子科层、
+ * 没精确到资料夹的。
+ *
+ * 两种原因由服务端在每条记录的 `reason` 上区分，并用 `counts` 给出各自总数
+ * （不受分页影响）—— 界面上那句"共 349 条：1 条未归属、348 条只到科目层"
+ * 必须来自服务端统计，不能由当前页推算。
+ */
+export async function listUnderFiledResources(params: {
+  mode?: 'all' | 'unassigned' | 'subject_level';
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<UnderFiledListResponse> {
+  try {
+    const resp = await axiosForBackend.get('/api/resources/under-filed', { params });
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'listUnderFiledResources');
+  }
+}
+
+/**
+ * §8 批量归档到资料夹。
+ *
+ * 服务端语义是"要么全部成功、要么一条都不动"：逐条校验通过后才执行一次
+ * UPDATE，并核对影响行数。所以调用方**不需要**自己处理"部分成功"，
+ * 失败就是整体失败，且响应里会说明原因。
+ */
+export async function assignResourcesToDirectory(input: {
+  resourceIds: string[];
+  directoryId: string;
+  syncLegacyFolderType?: boolean;
+}): Promise<{ assigned: number; folderTypeUpdates: number; directoryCode: string }> {
+  try {
+    const resp = await axiosForBackend.post('/api/resources/assign-directory', input);
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'assignResourcesToDirectory');
   }
 }

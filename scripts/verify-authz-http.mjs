@@ -9,6 +9,7 @@
  *   instant revocation) would revoke the session of every other suite using that
  *   account, in every process. See tests/helpers/reset-fixtures.mjs.
  */
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 const BASE = process.env.AUTHZ_BASE || process.env.MFA_BASE || 'http://127.0.0.1:3200';
 let jar = {};
 function cookieHeader() { return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; '); }
@@ -87,7 +88,11 @@ try {
   check('GET /api/audit/logs (admin API)', (await req('GET', '/api/audit/logs')).status, 403);
   check('POST /api/teachers (create account)', (await req('POST', '/api/teachers', { name: 'x', roles: ['visitor'] })).status, 403);
   check('GET /api/resources (allowed)', (await req('GET', '/api/resources')).status, 200);
-  check('POST /api/resources (needs resource.create)', (await req('POST', '/api/resources', { title: 'x', program: 'prek', subject: 'virtue', folderType: 'curriculum_outline' })).status, 403);
+  // ⚠️ 这个请求必须带一个**合法**的 directoryId。§8 之后缺 directoryId 会先被
+  // DTO 以 400 拒绝，而这条断言期望的是 403 —— 若不补，它会"通过"但检验的
+  // 是参数校验而不是权限。这类"因为错误的理由变绿"正是本仓库反复在防的。
+  const authzProbeDir = await folderIdFor({ req }, { program: 'prek', subject: 'virtue' });
+  check('POST /api/resources (needs resource.create)', (await req('POST', '/api/resources', { title: 'x', program: 'prek', subject: 'virtue', directoryId: authzProbeDir })).status, 403);
 
   console.log('\n=== B. PRINCIPAL (business admin) ===');
   check('login succeeds', (await login(admin)).status, 201);

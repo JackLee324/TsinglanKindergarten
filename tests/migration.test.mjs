@@ -18,10 +18,10 @@
  *   jobs only):  QLS_ALLOW_NO_DB=1  — the suite then reports SKIPPED loudly.
  */
 
-import { test, before, describe } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, copyFileSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';

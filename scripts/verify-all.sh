@@ -155,7 +155,35 @@ printf '  %-24s ' "npm test"
 if out=$(npm test 2>&1); then
   echo "$(echo "$out" | grep -E '^# (tests|pass|fail)' | tr '\n' ' ')"
 else
-  echo "FAIL"; echo "$out" | tail -5 | sed 's/^/      /'; FAILED=1
+  echo "FAIL"
+  # ⚠️ 这里必须**指名道姓地报出是哪条测试红了**，而不是只打最后 5 行。
+  #
+  # 实测教训：有一次门禁报 `# fail 1`，而 `tail -5` 只有汇总行，
+  # 我无法判断失败的是哪一条 —— 于是只能重跑整个门禁去猜，
+  # 而重跑又恰好是绿的（那次失败由更早一个套件留下的脏状态引起）。
+  # 一条报告不出「是什么失败了」的失败信息，等于半个失败信息。
+  echo "$out" | grep -E '^not ok' | head -10 | sed 's/^/      /'
+  echo "$out" | grep -E '^# (tests|pass|fail)' | tr '\n' ' ' | sed 's/^/      /'
+  echo
+  echo "$out" | grep -A 12 -E '^not ok' | head -30 | sed 's/^/      /'
+  FAILED=1
+fi
+
+echo "=== 数据库迁移（migration）==="
+# §16 明确要求门禁覆盖 migration。此前它只写在文件头的"前置条件"里 ——
+# 而"前置条件"不会被任何人跑第二遍。
+#
+# `migrate:verify` 做两件别处都做不到的事：
+#   1. **校验已应用 migration 文件的 SHA-256**。改一个已经上线的迁移文件
+#      （哪怕只改注释）会让校验失败并**拒绝后续迁移** —— 这正是本轮
+#      我刻意不去修改 0012 注释的原因（它早已在生产应用）。
+#   2. 报告是否有未应用的迁移（pending），避免"代码期望的表还不存在"。
+# 两者都是"只在出事那天才发现"的类型，所以必须常态化。
+printf '  %-24s ' "migrate:verify"
+if out=$(DATABASE_URL="${DATABASE_URL:-$AUTHZ_TEST_DB}" node ./scripts/migrate.mjs verify 2>&1); then
+  echo "$(echo "$out" | tr -d '\033' | grep -oE 'Checksums verified \([0-9]+ applied\)|[0-9]+ pending migration\(s\)' | tr '\n' ' ')"
+else
+  echo "FAIL"; echo "$out" | tail -8 | sed 's/^/      /'; FAILED=1
 fi
 
 echo "=== 静态检查（lint）==="
@@ -185,6 +213,22 @@ if out=$(node scripts/verify-api-contracts.mjs 2>&1); then
   echo "$(echo "$out" | grep -oE '[0-9]+ server routes discovered' | head -1) matched"
 else
   echo "FAIL"; echo "$out" | grep -E 'NO matching' -A2 | head -8 | sed 's/^/      /'; FAILED=1
+fi
+
+# ── 探针残留：先存一份 id 快照 ─────────────────────────────────────────
+#
+# 在跑任何 HTTP 套件**之前**记下 resources / teachers 的全部 id，全部跑完后再比一次。
+# 判据是精确的集合差，不依赖任何命名约定 —— 这一点很重要：第一版用
+# "标题里带时间戳"去猜探针，于是**漏掉了 54 行**改过名的探针（`版本探针（改名）`
+# 把时间戳改没了，模式就匹配不上）。凡是靠标题形态猜的检查都会这样：
+# 猜得松就假红，猜得紧就漏报。
+RESIDUE_SNAPSHOT="$(mktemp -t qls-residue-snapshot)"
+if DATABASE_URL="${DATABASE_URL:-$AUTHZ_TEST_DB}" node scripts/verify-no-probe-residue.mjs --snapshot "$RESIDUE_SNAPSHOT" >/dev/null 2>&1; then
+  :
+else
+  printf '  %-24s ' "residue-snapshot"
+  echo "FAIL（无法写入快照，后面的残留比对将不可用）"
+  FAILED=1
 fi
 
 echo "=== HTTP 验证套件（需要运行中的服务） ==="
@@ -261,6 +305,15 @@ if [ -n "${BROWSER_E2E_USER:-}" ] && [ -n "${BROWSER_E2E_PASS:-}" ]; then
   #   ③ 目录页面能按目录查到归属其中的资源。
   # verify-browser-e2e 的 §24 建完文件夹就删、**从不刷新**，所以①此前是裸奔的。
   run "directory-web"     node scripts/verify-directory-web.mjs
+  # §1/§2/§3/§5/§7/§8/§10/§11 **信息架构收口**的浏览器级验证：
+  #   侧边栏由数据库驱动；`/directory` 是浏览视图（Pre-K→美德→课程大纲→资源）；
+  #   把「美德」改名后 F5 硬刷新 → 侧边栏/首页卡片/管理页/上传页/面包屑**同时**变而
+  #   code 不变；上传页不再有 6 个 legacy 资料夹下拉且必须有目录归属；
+  #   教师成长 → L1 → 安全施教规范 → 应急预案 → 传染病识别与防治；
+  #   待补齐目录归属页的两个计数来自服务端；旧 URL 由 directory code 解析仍可用。
+  # 这些要求**没有一条能靠接口测试证明**（接口全绿而界面名字对不上是完全可能的），
+  # 所以它必须是真浏览器。
+  run "ia-consolidation"  node scripts/verify-ia-consolidation.mjs
   # §6 超级管理员安全引导：bootstrap→首次登录→改强密码→MFA 登记→确认→恢复码→
   # 重登第二因素；外加"再次引导不得写回 INITIAL_ADMIN_PASSWORD"与
   # "秘密不进审计详情/前端产物"。用独立探针账号，跑完删除。
@@ -284,6 +337,27 @@ else
   printf '  %-24s ' "browser-e2e"
   echo "未运行（未设置 BROWSER_E2E_USER / BROWSER_E2E_PASS）—— 这一项**不算通过**"
 fi
+
+# ── 探针残留（系统性检查）──────────────────────────────────────────────
+#
+# 放在**所有 HTTP 套件之后**：这时库的状态正是"跑完一轮门禁"的状态。
+#
+# 为什么需要它：`DELETE /api/resources/:id` 是**软删除**，所以"建探针 → DELETE"
+# 的套件每跑一次就往回收站留几行。这个缺陷此前被**单独修过三次**（每次修的都是
+# "那一条没清干净的探针"），于是下一条继续漏 —— 实测本机积了 233 行回收站，
+# 其中约 220 行是探针。
+#
+# 点修解决不了"每一处都要记得清"。这道检查不依赖谁记得：
+# 只要还有"带时间戳/runId 形态"的资源行，无论哪个套件产生的，一律失败。
+printf '  %-24s ' "no-probe-residue"
+if out=$(DATABASE_URL="${DATABASE_URL:-$AUTHZ_TEST_DB}" node scripts/verify-no-probe-residue.mjs --compare "$RESIDUE_SNAPSHOT" 2>&1); then
+  echo "$(echo "$out" | grep -oE '新增 [0-9]+' | head -1)"
+else
+  echo "FAIL"
+  echo "$out" | tail -22 | sed 's/^/      /'
+  FAILED=1
+fi
+rm -f "$RESIDUE_SNAPSHOT"
 
 echo
 if [ "$FAILED" -eq 0 ]; then

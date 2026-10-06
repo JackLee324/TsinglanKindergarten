@@ -28,6 +28,34 @@ const DB_URL = process.env.DATABASE_URL || process.env.AUTHZ_TEST_DB || null;
 
 let sql = null;
 
+/**
+ * 缺 env 时必须**显式红一条**，不能只是让 4 条测试静默 cancel。
+ *
+ * WHY：`node --test` 在 `before` 抛错时，会把子测试标成 `cancelledByParent`，
+ * 汇总行于是长这样：
+ *
+ *     # tests 4
+ *     # pass 0
+ *     # fail 0
+ *     # cancelled 4
+ *
+ * 退出码确实是 1（门禁不会漏判），但**汇总行写着 `fail 0`** —— 任何人只看那一行，
+ * 都会以为"全绿"。我自己就差点这么读过去：跑完看到 `pass 314 / fail 0`，
+ * 以为只是新增的测试少算了，实际是有 4 条**根本没跑**。
+ * 这正是不该出现的那类"看起来完成"。所以这里补一条会在缺 env 时直接失败的前置断言，
+ * 让汇总行变成 `fail 1`，一眼就能看出"有东西没跑"。
+ */
+if (!DB_URL) {
+  test('§7 前置条件：必须提供 DATABASE_URL / AUTHZ_TEST_DB（否则本文件的断言全部不算通过）', () => {
+    assert.fail(
+      '没有 DATABASE_URL / AUTHZ_TEST_DB：本文件的 4 条断言读的是真实数据库，' +
+        '拿假数据测等于什么都没测。请以门禁的方式运行（scripts/verify-all.sh ' +
+        '会设置 DATABASE_URL），或手动：' +
+        "DATABASE_URL='postgresql://…/qls_test_0005' npm test",
+    );
+  });
+}
+
 describe('§7 username IS NULL 的主账号', () => {
   before(async () => {
     if (!DB_URL) {

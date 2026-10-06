@@ -16,6 +16,7 @@
  * 本套件证明**把这些步骤连起来走一遍**不会在中途断掉 —— 单点都对、
  * 串起来不对，是这类系统最常见也最难发现的一类缺陷。
  */
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -124,11 +125,13 @@ async function main() {
   // 没有后端时服务端会（正确地）503，整条链会在第 2 步就断掉。
   // 那种情况下**大声说明并跳过**，而不是把环境缺失报成一堆产品缺陷 ——
   // 这是本仓库既有约定（storage-upload / files-http 同一套做法）。
+  // §8：必须带 directoryId；目标取「教学详案」（原 legacy folderType 是 weekly_plans）。
+  const bizProbeDir = await folderIdFor(c, { program: 'prek', subject: 'virtue', suffix: 'lesson' });
   const probeRes = await c.req('POST', '/api/resources', {
     title: `链路前置探测 ${stamp}`,
     program: 'prek',
     subject: 'virtue',
-    folderType: 'weekly_plans',
+    directoryId: bizProbeDir,
     status: 'draft',
   });
   const probeId = probeRes.d?.id ?? probeRes.d?.resource?.id ?? null;
@@ -435,7 +438,10 @@ async function main() {
     if (t1 === 'SET') ok('填标题');
     else bad('填标题', String(t1));
 
-    for (const [label, opt] of [['班型', 'Pre-K'], ['科目', '美德'], ['资料夹', '周次教案'], ['学期', '第一学期'], ['目录归属', 'Pre-K / 美德']]) {
+    // §7：不再有「资料夹」下拉（legacy folder_type 由服务端按目录推导）。
+    // §8：新增必填的「所属目录」，且它的选项文案是**从根到资料夹的完整路径**。
+    // 选「教学详案」等价于原来那个 legacy '周次教案'。
+    for (const [label, opt] of [['班型', 'Pre-K'], ['科目', '美德'], ['学期', '第一学期'], ['所属目录', '教育教学 / Pre-K / 美德 / 教学详案']]) {
       const r = await pickSelect(label, opt);
       if (r === 'PICKED') ok(`选${label} = ${opt}`);
       else bad(`选${label} = ${opt}`, r);
@@ -460,6 +466,28 @@ async function main() {
     resourceId = row?.id ?? null;
     if (resourceId) { createdResourceIds.push(resourceId); ok('新建后拿到资源 id', resourceId); }
     else bad('新建后拿到资源 id');
+
+    // §7/§8 的**替代断言**：以前这里会选一个 legacy「资料夹」下拉，那条断言证明了
+    // "老师选了什么分类就存了什么分类"。现在老师只选目录，所以证据换成：
+    // 服务端必须按目录把 legacy folder_type 推导对（教学详案 → weekly_plans），
+    // 且目录归属必须真的落库。等价强度，不是放宽。
+    if (resourceId) {
+      const detail = await c.req('GET', `/api/resources/${resourceId}`);
+      const created = detail.d ?? {};
+      if (created.folderType === 'weekly_plans') {
+        ok('§7 legacy folder_type 由服务端按目录推导', String(created.folderType));
+      } else {
+        bad('§7 legacy folder_type 由服务端按目录推导', `got=${String(created.folderType)} want=weekly_plans`);
+      }
+      if (created.directoryId) ok('§8 目录归属已落库', String(created.directoryId));
+      else bad('§8 目录归属已落库', 'directoryId 为空');
+      // 子科必须由目录补齐（这条探针的目录是「教学详案」，位于科目而不是子科之下 → null）
+      if (created.subSubject === null || created.subSubject === undefined) {
+        ok('§8 科目层资料夹不虚构子科', String(created.subSubject));
+      } else {
+        bad('§8 科目层资料夹不虚构子科', String(created.subSubject));
+      }
+    }
   } else {
     skip('新建→上传→保存草稿', '登录未通过');
   }
@@ -584,7 +612,8 @@ async function main() {
     // 去比"13（全部状态）"，看起来像对不上，其实是两个口径。
     const publishedOnly = await c.req('GET', '/api/resources?directory=prek%3Avirtue&status=published&pageSize=100');
 
-    await openPath('/directory', '!!document.querySelector("[data-dir-code]")');
+    // §3/§11：管理树已移到 /directory/manage（/directory 现在是浏览视图）。
+    await openPath('/directory/manage', '!!document.querySelector("[data-dir-code]")');
     await expandUntil(`[data-dir-code="prek:virtue"]`);
     const badge = await evalIn(`(() => {
       const el = document.querySelector('[data-dir-code="prek:virtue"]');

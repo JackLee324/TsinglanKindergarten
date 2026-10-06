@@ -1,3 +1,5 @@
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
+import { purgeProbeResources } from '../tests/helpers/probe-cleanup.mjs';
 /**
  * scripts/verify-resource-versions.mjs —— 资源版本生命周期（§15）。
  *
@@ -51,11 +53,13 @@ let resourceId = null;
 try {
   // ---- 1. 新建 → 第 1 版 ----
   console.log('1) 新建资源应当产生第 1 版');
+  // §8：必须带 directoryId。
+  const versionProbeDir = await folderIdFor(c, { program: 'prek', subject: 'virtue' });
   const created = await c.req('POST', '/api/resources', {
     title: `版本探针 ${Date.now().toString().slice(-6)}`,
     program: 'prek',
     subject: 'virtue',
-    folderType: 'curriculum_outline',
+    directoryId: versionProbeDir,
     description: '初始说明',
   });
   check('创建资源 → 201', created.s, 201);
@@ -123,8 +127,19 @@ try {
   }
 } finally {
   if (resourceId) {
-    const del = await c.req('DELETE', `/api/resources/${resourceId}`);
-    console.log(`\n清理：删除探针资源 → HTTP ${del.s}`);
+    // ⚠️ `DELETE` 是软删除。本套件以前只做它，于是每跑一次就往回收站留一行
+    // `版本探针（改名）<ts>` —— 实测积了 54 行。现在真正删掉并**核实**。
+    const purged = await purgeProbeResources({
+      req: (m, p, b) => c.req(m, p, b),
+      ids: [resourceId],
+      dbUrl: DB_URL,
+      label: '资源版本探针',
+    });
+    console.log(
+      `\n清理：探针 ${resourceId} → 接口 purge ${purged.purgedViaApi} 条 / SQL 硬删 ${purged.purgedViaSql} 条` +
+        (purged.remaining.length ? `；**仍残留 ${purged.remaining.length} 条**` : '；残留 0'),
+    );
+    for (const id of purged.remaining) { bad('探针清理', `仍残留 ${id}`); }
   }
 }
 

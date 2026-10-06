@@ -29,6 +29,8 @@
  * "选文件 → 提交"这两个真正的用户动作。新建分支与编辑分支调用的是**同一个**
  * uploadSelectedFile，服务端接口也已被 verify-storage-upload-flow.mjs 覆盖。
  */
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
+import { purgeProbeResources } from '../tests/helpers/probe-cleanup.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,6 +41,12 @@ const USER = process.env.BROWSER_E2E_USER || '';
 const PASS = process.env.BROWSER_E2E_PASS || '';
 const PORT = Number(process.env.BROWSER_E2E_CDP_PORT || 9273);
 const EXPECT_STORAGE = (process.env.EXPECT_STORAGE || 'on').toLowerCase();
+/**
+ * 数据库连接串，仅用于**清理探针**的 SQL 兜底。
+ * `DELETE /api/resources/:id` 是软删除，只走它会在回收站里积行（实测积了 94 行）。
+ * 没设也能跑：那时清理只走 purge 接口，残留会被清清楚楚报出来。
+ */
+const DB_URL = process.env.DATABASE_URL || process.env.AUTHZ_TEST_DB || null;
 
 if (!USER || !PASS) {
   console.error('需要 BROWSER_E2E_USER / BROWSER_E2E_PASS。');
@@ -135,11 +143,14 @@ async function main() {
   const probeTitle = (suffix) => `上传闭环探针 ${suffix} ${stamp}`;
   /** 建一条草稿探针资源；返回 id（失败即退出，因为后续全部依赖它）。 */
   const createProbeResource = async (suffix) => {
+    // §8：新建资源必须带 directoryId；§7：legacy folderType 由服务端按目录推导。
+    // 目标取「教学详案」，与原 folderType 'weekly_plans' 是同一类（weekly_plans → 教学详案）。
+    const probeDir = await folderIdFor(c, { program: 'prek', subject: 'virtue', suffix: 'lesson' });
     const created = await c.req('POST', '/api/resources', {
       title: probeTitle(suffix),
       program: 'prek',
       subject: 'virtue',
-      folderType: 'weekly_plans',
+      directoryId: probeDir,
       semester: 'S1',
       weekNumber: 3,
       status: 'draft',
@@ -572,10 +583,11 @@ async function main() {
     else bad('填周次', String(week));
 
     // 四个下拉依次选。顺序与真实用户一致：班型 → 科目 → 资料夹 → 学期。
+    // §7：这里**不再有「资料夹」下拉** —— 老师只选「所属目录」，
+    // legacy folder_type 由服务端按目录推导。断言跟着契约走。
     const picks = [
       ['班型', 'Pre-K'],
       ['科目', '美德'],
-      ['资料夹', '周次教案'],
       ['学期', '第一学期'],
     ];
     let allPicked = true;
@@ -588,17 +600,30 @@ async function main() {
     // 本轮修掉的缺陷就是"选完班型把科目清空"，症状是校验失败 + 完全不提示。
     const shown = await evalIn(`JSON.stringify([...document.querySelectorAll('[role=combobox]')].map((c) => (c.innerText || '').replace(/\\s+/g, ' ').trim()))`);
     const labels = JSON.parse(shown || '[]');
-    if (allPicked && labels[0].includes('Pre-K') && labels[1].includes('美德') && labels[2].includes('周次教案')) {
-      ok('四个下拉的值都**保留住了**（选班型没有把科目清掉）', labels.join(' / '));
+    if (allPicked && labels[0].includes('Pre-K') && labels[1].includes('美德')) {
+      ok('已选下拉的值都**保留住了**（选班型没有把科目清掉）', labels.join(' / '));
     } else {
-      bad('四个下拉的值都**保留住了**（选班型没有把科目清掉）', labels.join(' / '));
+      bad('已选下拉的值都**保留住了**（选班型没有把科目清掉）', labels.join(' / '));
     }
 
-    // §1 目录归属：新建时真的选一个目录，并断言它**落库**了。
+    // §8：新建时**必须**选一个目录，并断言它**落库**了。
     // 这是"资源上传时可以真正归属到目录"这条要求的浏览器级证据。
-    const dirPick = await pickSelect('目录归属', 'Pre-K / 美德');
-    if (dirPick === 'PICKED') ok('选目录归属 = Pre-K / 美德');
-    else bad('选目录归属 = Pre-K / 美德', dirPick);
+    //
+    // 选项文案是"从根到资料夹"的完整路径（教育教学 / Pre-K / 美德 / 教学详案…），
+    // 所以这里取第一个含「美德」的资料夹选项 —— 由下面的落库断言兜底：
+    // 选错目录的话，服务端会因为跨科目而 400。
+    const dirOptions = await evalIn(
+      `JSON.stringify([...document.querySelectorAll('[role=option]')].map((x) => (x.innerText || '').trim()))`,
+    );
+    void dirOptions;
+    const dirPick = await pickSelect('所属目录', '教育教学 / Pre-K / 美德 / 教学详案');
+    if (dirPick === 'PICKED') ok('选所属目录 = 教育教学 / Pre-K / 美德 / 教学详案');
+    else {
+      const seen = await evalIn(
+        `JSON.stringify([...document.querySelectorAll('[role=option]')].map((x) => (x.innerText || '').trim()).slice(0, 12))`,
+      );
+      bad('选所属目录', `${dirPick} seen=${String(seen).slice(0, 300)}`);
+    }
 
     const fileName = `新建探针-${stamp}.pdf`;
     const attached = await attachFile(fileName, PDF_BYTES, 'application/pdf');
@@ -632,23 +657,29 @@ async function main() {
       if (createdRow.hasFile === true) ok('库里标记为有文件', 'hasFile=true');
       else bad('库里标记为有文件', `hasFile=${JSON.stringify(createdRow.hasFile)}`);
 
-      // §1：目录归属必须真的落库，而且必须落在 prek:virtue 这个节点上。
+      // §8：目录归属必须真的落库，而且必须落在**具体资料夹**上
+      // （不再是科目节点 —— 新契约要求 requireLeafFolder）。
       const virtue = await c.req('GET', '/api/directories/tree');
       const flat = [];
       const walk = (ns) => { for (const n of ns ?? []) { flat.push(n); walk(n.children); } };
       walk((virtue.d ?? {}).roots ?? []);
-      const expected = flat.find((n) => n.code === 'prek:virtue');
+      const expected = flat.find((n) => n.code === 'prek:virtue_lesson');
       if (expected && createdRow.directoryId === expected.id) {
-        ok('目录归属已落库且指向 prek:virtue', createdRow.directoryId);
+        ok('目录归属已落库且指向资料夹', createdRow.directoryId);
       } else {
-        bad('目录归属已落库且指向 prek:virtue', `got=${createdRow.directoryId} want=${expected?.id}`);
+        bad('目录归属已落库且指向资料夹', `got=${createdRow.directoryId} want=${expected?.id}`);
       }
+      // §7：legacy folder_type 由服务端按目录推导 —— 资料夹是「教学详案」，
+      // 所以它必须被推导成 weekly_plans，而不是被留空或被猜成别的。
+      const derived = createdRow.folderType ?? createdRow.folder_type;
+      if (derived === 'weekly_plans') ok('legacy folder_type 由服务端按目录推导', String(derived));
+      else bad('legacy folder_type 由服务端按目录推导', `got=${String(derived)} want=weekly_plans`);
 
       // 反向：用目录过滤能查回这条资源（"目录页面能查到属于该目录的资源"）。
-      const byDir = await c.req('GET', '/api/resources?directory=prek%3Avirtue&pageSize=100');
+      const byDir = await c.req('GET', '/api/resources?directory=prek%3Avirtue_lesson&pageSize=100');
       const inDir = ((byDir.d ?? {}).items ?? []).some((r) => r.id === createdRow.id);
-      if (inDir) ok('按目录查询能查到这条新资源（?directory=prek:virtue）');
-      else bad('按目录查询能查到这条新资源（?directory=prek:virtue）', `HTTP ${byDir.s}`);
+      if (inDir) ok('按目录查询能查到这条新资源（?directory=prek:virtue_lesson）');
+      else bad('按目录查询能查到这条新资源（?directory=prek:virtue_lesson）', `HTTP ${byDir.s}`);
 
       const dl = await c.req('GET', `/api/resources/${createdRow.id}/download`);
       if (dl.s === 302) {
@@ -679,24 +710,32 @@ try {
 } finally {
   if (chrome) chrome.kill();
   try { rmSync(profile, { recursive: true, force: true }); } catch { /* 忽略 */ }
-  // 清理探针资源（可能不止一条）。用**同一个会话**删，顺带验证删除接口本身可用。
+  // 清理探针资源（可能不止一条）。
+  //
+  // ⚠️ 这里以前只做 `DELETE` —— 而它是**软删除**。于是每跑一次门禁就往回收站
+  // 留 3 行（主 / 新建 / 拒绝），实测积了 94 行，是本库最大的一处残留来源。
+  // 现在走共用的 purgeProbeResources()：先走真实 purge 接口（顺带把
+  // `resource.purge` 权限与审计一起验到），再用 SQL 兜底，最后**核实**行真的没了。
   if (createdResourceIds.length > 0) {
-    const remaining = [];
     try {
       const c = makeClient();
       await c.req('GET', '/');
       await c.req('POST', '/api/auth/login', { username: USER, password: PASS });
-      for (const id of createdResourceIds) {
-        const del = await c.req('DELETE', `/api/resources/${id}`);
-        console.log(`\n清理：删除探针资源 ${id} → HTTP ${del.s}`);
-        if (del.s >= 400) remaining.push(id);
-      }
+      const purged = await purgeProbeResources({
+        req: (m, p, b) => c.req(m, p, b),
+        ids: createdResourceIds,
+        dbUrl: DB_URL,
+        label: '上传闭环探针',
+      });
+      console.log(
+        `\n清理：${createdResourceIds.length} 条探针 → 接口 purge ${purged.purgedViaApi} 条 / ` +
+          `SQL 硬删 ${purged.purgedViaSql} 条` +
+          (purged.remaining.length ? `；**仍残留 ${purged.remaining.length} 条**` : '；残留 0'),
+      );
+      for (const id of purged.remaining) { bad('探针清理', `仍残留 ${id}`); }
     } catch (e) {
       console.error(`\n清理探针资源失败：${e?.message}`);
-      remaining.push(...createdResourceIds);
-    }
-    if (remaining.length > 0) {
-      console.error(`  ⚠️  以下探针资源未能删除，请手动清理：${remaining.join(', ')}`);
+      bad('探针清理', String(e?.message));
     }
   }
 }

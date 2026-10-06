@@ -149,6 +149,36 @@ async function main() {
     }
   }
 
+  // ---- 2b) §13：超管必须持有全部能力，因此**每一条客户端路由守卫都放行** ----
+  //
+  // WHY 这一段：`client/src/app.tsx` 原本用手写的角色数组守路由，
+  // 而那四张数组**全部漏掉了 super_admin** —— 超管登录后会被 `<Layout>` 那一层
+  // 直接挡在门外，整个应用进不去。这是"客户端与 shared/rbac.ts 各写一份"的
+  // 典型后果：分叉了既不报错、也没有任何测试发现（本套件此前只走
+  // /change-password 与 /account/security，从不进 `<Layout>`）。
+  //
+  // 现在守卫改用能力码，这一段就断言"超管确实拿得到那些能力"，
+  // 而这些能力码正是 app.tsx 里每一个 `requiredPermission` 的值 ——
+  // 逐一对照，任何一个从超管身上掉下来都会红。
+  console.log('\n2b) §13 super_admin 持有全部客户端路由守卫所需的能力');
+  {
+    const guardCodes = [
+      'curriculum.view', 'resource.create', 'curriculum.manage', 'review.view',
+      'account.view', 'permission.view', 'resource.restore', 'audit.view',
+    ];
+    const perms = await s1.req('GET', '/api/auth/me/permissions');
+    const held = new Set(perms.d?.permissions ?? []);
+    if (held.size === 0) {
+      bad('取到生效权限集合', JSON.stringify(perms.d).slice(0, 120));
+    } else {
+      ok('取到生效权限集合', `${held.size} 条`);
+      for (const code of guardCodes) {
+        if (held.has(code)) ok(`  → 超管持有守卫能力 ${code}`);
+        else bad(`  → 超管持有守卫能力 ${code}`, '缺失 —— 该路由会把超管挡在门外');
+      }
+    }
+  }
+
   // ---- 3) 修改高强度密码 -------------------------------------------------
   //
   // 这一步曾经**被 MFA 强制挡住**（403「请先完成绑定后再使用系统」）：AuthGuard 的

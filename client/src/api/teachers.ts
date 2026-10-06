@@ -1,3 +1,4 @@
+import type { ScopeBinding, WritableScopeBinding } from '@shared/rbac';
 import type {
   CreateTeacherRequest,
   SubjectPermissionInput,
@@ -121,5 +122,40 @@ export async function clearPermissionOverride(teacherId: string, permission: str
     return resp.data;
   } catch (error) {
     return handleApiError(error, 'clearPermissionOverride');
+  }
+}
+
+/**
+ * §12 读取某账号的数据范围绑定。**空数组 = 没有显式绑定，按角色默认**。
+ *
+ * 注意"空数组"与"不受限"是同一件事，不是"没查到" ——
+ * 界面上必须说清楚这一点，否则管理员会以为这个账号还没有配置过数据范围，
+ * 而它实际的含义是"角色给什么就是什么"。
+ */
+export async function getAccountScopes(teacherId: string): Promise<{ scopes: ScopeBinding[] }> {
+  try {
+    const resp = await axiosForBackend.get(`/api/teachers/${teacherId}/scopes`);
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'getAccountScopes');
+  }
+}
+
+/**
+ * §12 整表替换某账号的数据范围绑定。
+ *
+ * 传 `[]` 是**明确的清空**（回到角色默认），与"没传"不是一回事 ——
+ * 服务端把 `scopes` 设为必填正是为了让这两者无法混淆：漏传字段会 400，
+ * 而不是静默把数据范围放大到角色默认。
+ */
+export async function setAccountScopes(
+  teacherId: string,
+  scopes: WritableScopeBinding[],
+): Promise<{ scopes: ScopeBinding[] }> {
+  try {
+    const resp = await axiosForBackend.post(`/api/teachers/${teacherId}/scopes`, { scopes });
+    return resp.data;
+  } catch (error) {
+    return handleApiError(error, 'setAccountScopes');
   }
 }

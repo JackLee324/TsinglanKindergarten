@@ -65,7 +65,6 @@ const {
   CURRICULUM,
   FOLDER_DEFINITIONS,
   FOLDER_TYPES,
-  THEME_SETS,
   foldToken,
   normalizeFolderType,
   normalizeProgram,
@@ -160,12 +159,6 @@ function isAsciiLetter(ch) {
   if (typeof ch !== 'string' || ch.length !== 1) return false;
   const c = ch.charCodeAt(0);
   return (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
-}
-
-function isAsciiDigit(ch) {
-  if (typeof ch !== 'string' || ch.length !== 1) return false;
-  const c = ch.charCodeAt(0);
-  return c >= 48 && c <= 57;
 }
 
 /**

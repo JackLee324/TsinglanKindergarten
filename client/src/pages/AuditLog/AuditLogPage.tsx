@@ -59,6 +59,10 @@ const AUDIT_ACTIONS: AuditAction[] = [
   'directory_rename',
   'directory_delete',
   'directory_update',
+  // 生产运维：全量数据导出（§14 标记为高危，仅 super_admin，每次调用都审计）
+  'data_export',
+  // §8 批量归档到资料夹
+  'resource_directory_assign',
 ];
 
 const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
@@ -109,6 +113,13 @@ const ACTION_BADGE_COLORS: Record<AuditAction, string> = {
   resource_file_register: 'bg-blue-100 text-blue-700 border-blue-200',
   resource_download_failed: 'bg-orange-100 text-orange-700 border-orange-200',
   file_validation_rejected: 'bg-red-100 text-red-700 border-red-200',
+  // 全量数据导出：红色。它与上面"回收到删除"的生命周期不同，但同样是
+  // **不该被日常使用的动作** —— 一次导出就是整库明文离开平台，
+  // 所以用同一档警示色，而不是混在普通蓝色操作里。
+  data_export: 'bg-red-100 text-red-700 border-red-200',
+  // 批量归档：蓝色，因为它是一次**正常的管理维护**（与上面两个破坏性动作不同），
+  // 只是影响面较大，所以用醒目的主色档而不是灰色。
+  resource_directory_assign: 'bg-blue-100 text-blue-700 border-blue-200',
 };
 
 const AuditLogPage: React.FC = () => {

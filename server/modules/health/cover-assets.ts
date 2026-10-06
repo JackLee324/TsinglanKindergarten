@@ -70,8 +70,8 @@
  * anchor they own, so the anchor is explicit rather than implicit.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { readdirSync, statSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 
 /** Explicit asset-root override. When set it is authoritative — there is no fallback. */
 export const COVER_ASSETS_DIR_ENV = 'STORYBOOK_COVER_ASSETS_DIR';

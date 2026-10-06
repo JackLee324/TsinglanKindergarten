@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { logger } from '@client/src/lib/logger';
@@ -28,12 +28,11 @@ import {
 } from '@client/src/components/ui/select';
 import { Textarea } from '@client/src/components/ui/textarea';
 import { useTranslation } from '@client/src/i18n/useTranslation';
+import { useDirectory } from '@client/src/directory/DirectoryProvider';
 import { extractApiErrorCode } from '@client/src/api/client';
 import { createResource, getResource, getUploadUrl, putFileBytes, registerResourceFile, submitReview, updateResource } from '@client/src/api/resources';
-import { getCurriculumStructure } from '@client/src/api/curriculum';
-import { getDirectoryTree } from '@client/src/api/directories';
-import type { DirectoryNode, FolderType, ProgramCode, ProgramStructure, Resource } from '@shared/api.interface';
-import { FOLDER_TYPES } from '@shared/api.interface';
+import type { DirectoryNode, FolderType, ProgramCode, Resource } from '@shared/api.interface';
+import { normalizeSubSubject } from '@shared/curriculum';
 
 import { ResourceFileUpload } from './ResourceFileUpload';
 
@@ -43,14 +42,21 @@ const uploadSchema = z.object({
   program: z.string().min(1, 'upload.programRequired'),
   subject: z.string().min(1, 'upload.subjectRequired'),
   subSubject: z.string().optional(),
-  folderType: z.string().min(1, 'upload.folderRequired'),
   /**
-   * §1 目录归属（可编辑目录树节点的 **id**）。
-   * 可选 —— 留空表示"尚未归属"，而不是由客户端猜一个默认目录。
-   * 注意它与上面 `folderType` 是**两个维度**：`folderType` 是 legacy 资料夹分类，
-   * 这一项才是"放进哪个可编辑目录"。
+   * legacy 资料夹分类。**上传时不再让老师选**（§7）。
+   *
+   * 它仍然留在表单里，只因为**编辑历史资源**时要能把库里已有的值原样带回去、
+   * 保存时不丢。新建时它是空字符串，服务端按 `directoryId` 自动推导。
    */
-  directoryId: z.string().optional(),
+  folderType: z.string().optional(),
+  /**
+   * 目录归属（可编辑目录树节点的 **id**）。**必填**（§8）。
+   *
+   * 「没有 directoryId → 不能提交保存」是业主的硬要求：资源必须落在目录树上，
+   * 否则就会出现"库里有这条资源、老师在目录里怎么点都找不到"。
+   * 留空不再表示"尚未归属"，而是**交不上去**。
+   */
+  directoryId: z.string().min(1, 'upload.directoryRequired'),
   semester: z.string().optional(),
   weekNumber: z.string().optional(),
   theme: z.string().optional(),
@@ -61,11 +67,17 @@ type UploadFormData = z.infer<typeof uploadSchema>;
 
 const UploadPage: React.FC = () => {
   const { t, language } = useTranslation();
+  const { roots, flatten, pathTo } = useDirectory();
   const navigate = useNavigate();
+
+  /** 目录下拉的显示文案：从根到自己的名字用 ` / ` 连接。 */
+  const nodePathLabel = useCallback(
+    (node: DirectoryNode): string => pathTo(node.code).map((x) => x.name).join(' / '),
+    [pathTo],
+  );
   const [searchParams] = useSearchParams();
   const editId = searchParams.get('id');
 
-  const [structures, setStructures] = useState<ProgramStructure[]>([]);
   const [loading, setLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -77,9 +89,6 @@ const UploadPage: React.FC = () => {
    * 因此老师只可能看到、也只可能选到他有权限的目录 ——
    * 页面既不复刻权限规则，也不预置任何目录名。
    */
-  const [directoryOptions, setDirectoryOptions] = useState<
-    Array<{ id: string; label: string; program: string | null; subject: string | null }>
-  >([]);
 
   const form = useForm<UploadFormData>({
     resolver: zodResolver(uploadSchema),
@@ -92,47 +101,94 @@ const UploadPage: React.FC = () => {
   const programValue = form.watch('program');
   const subjectValue = form.watch('subject');
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setStructures(await getCurriculumStructure());
-      } catch (error) {
-        logger.error('[Upload] load curriculum failed', String(error));
-      }
-    };
-    void load();
-  }, []);
+  /**
+   * 班型 / 科目 / 子科目的候选**全部来自数据库那棵目录树**。
+   *
+   * 以前这里读的是 `getCurriculumStructure()` —— 也就是 `shared/curriculum.ts`
+   * 里的**常量**。于是上传页是最后一份"另一套课程结构"：管理员在
+   * `/directory/manage` 把「美德」改名成「美德课程」，侧边栏、首页、目录页、
+   * 面包屑都跟着变了，**唯独上传页的下拉还写着「美德」**。
+   * 这恰好就是业主说的「目录页叫 A、首页叫 B、侧边栏叫 C」的第三份副本。
+   *
+   * 现在它与其它页面读同一份数据（`useDirectory()`），
+   * 而且候选只列**真的有资料夹可放**的科目 —— 一个连资料夹都没有的科目，
+   * 让老师选了也只会得到"没地方放"。
+   */
+  const uploadScope = useMemo(() => {
+    const eduRoot = roots.find((r) => r.code === 'root:edu');
+    const programs: Array<{ code: string; name: string; nameEn: string }> = [];
+    const subjectsByProgram: Record<string, Array<{ token: string; name: string; nameEn: string; node: DirectoryNode }>> = {};
+    const subSubjectsByNode: Record<string, Array<{ token: string; name: string; nameEn: string }>> = {};
 
-  // §1：拉一次目录树，拍平成下拉候选。
-  // 失败时**不写死任何兜底目录**（那会变成一个凭空的归属），只是让下拉为空。
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const tree = await getDirectoryTree();
-        const out: Array<{ id: string; label: string; program: string | null; subject: string | null }> = [];
-        const walk = (nodes: DirectoryNode[], prefix: string[]) => {
-          for (const node of nodes) {
-            // 根节点只用来提供路径前缀，本身不作为归属目标。
-            const path = node.code.startsWith('root:') ? prefix : [...prefix, node.name];
-            if (node.type !== 'root' && node.type !== 'section' && node.type !== 'program') {
-              out.push({
-                id: node.id,
-                label: `${prefix.join(' / ')}${prefix.length ? ' / ' : ''}${node.name}`,
-                program: node.program,
-                subject: node.subject,
-              });
-            }
-            walk(node.children ?? [], path);
-          }
-        };
-        walk(tree.roots ?? [], []);
-        setDirectoryOptions(out);
-      } catch (error) {
-        logger.error('[Upload] load directory tree failed', String(error));
+    for (const program of eduRoot?.children ?? []) {
+      if (program.type !== 'program' || program.program === null) continue;
+      const programCode = program.program;
+      const subjects: Array<{ token: string; name: string; nameEn: string; node: DirectoryNode }> = [];
+
+      for (const subjectNode of program.children) {
+        if (subjectNode.type !== 'subject' || subjectNode.subject === null) continue;
+        // 只保留"往下能找到资料夹"的科目 —— 资源只能挂在资料夹上。
+        const reachable = flatten(subjectNode).some((n) => n.type === 'folder');
+        if (!reachable) continue;
+        subjects.push({
+          token: subjectNode.subject,
+          name: subjectNode.name,
+          nameEn: subjectNode.nameEn,
+          node: subjectNode,
+        });
+
+        const subs: Array<{ token: string; name: string; nameEn: string }> = [];
+        for (const child of flatten(subjectNode)) {
+          if (child.type !== 'sub_subject') continue;
+          // 数据库里存的是规范子科目 token（`reading` 等），而目录节点只给出
+          // 路径式 code，所以用 shared/curriculum 的归一化函数换算 ——
+          // 与读取路径用的是同一个函数，不自己拼字符串。
+          const lastSegment = child.code.split(':').pop() ?? '';
+          const token = normalizeSubSubject(programCode as ProgramCode, subjectNode.subject, lastSegment);
+          if (token === null) continue;
+          subs.push({ token, name: child.name, nameEn: child.nameEn });
+        }
+        if (subs.length > 0) subSubjectsByNode[subjectNode.code] = subs;
       }
+
+      if (subjects.length === 0) continue;
+      programs.push({ code: programCode, name: program.name, nameEn: program.nameEn });
+      subjectsByProgram[programCode] = subjects;
+    }
+
+    const currentProgramSubjects = subjectsByProgram[programValue] ?? [];
+    const currentSubject = currentProgramSubjects.find((x) => x.token === subjectValue) ?? null;
+    const currentSubSubjects = currentSubject === null ? [] : subSubjectsByNode[currentSubject.node.code] ?? [];
+
+    return {
+      programs,
+      currentProgramSubjects,
+      currentSubject,
+      currentSubSubjects,
+      hasSubSubjects: currentSubSubjects.length > 0,
     };
-    void load();
-  }, []);
+  }, [roots, flatten, programValue, subjectValue]);
+
+  /**
+   * 目录下拉的候选 = **资料夹叶节点**（含老师自建的子文件夹）。
+   *
+   * 与 §7 之后服务端的口径逐字一致：资源只能挂在具体资料夹下，不能挂在科目/子科上。
+   * 前端只列可选项是**减少误选**，不是权限边界 —— 真正拒绝越权与非法层级的
+   * 仍然是服务端（见 resolveDirectoryAssignment 的 `requireLeafFolder`）。
+   * 两边若不一致，用户会看到"能选、但提交被拒"，那是最难自查的一类缺陷；
+   * 所以这里刻意与 `requireLeafFolder` 对齐。
+   *
+   * 数据来自 `useDirectory()`（与侧边栏、首页、目录页同一份），
+   * 而**不是**再单独 `getDirectoryTree()` 拉一次 —— 后者会拿到另一份快照，
+   * 改名之后两个页面可能显示不同的名字。
+   */
+  const directoryOptions = useMemo(
+    () =>
+      flatten()
+        .filter((node) => node.type === 'folder')
+        .map((node) => ({ id: node.id, label: nodePathLabel(node), program: node.program, subject: node.subject })),
+    [flatten, nodePathLabel],
+  );
 
   useEffect(() => {
     if (!editId) return;
@@ -188,15 +244,15 @@ const UploadPage: React.FC = () => {
     prevProgramRef.current = programValue;
     // 首次落值（含编辑页预填）不清空：此时还没有"用户的选择"可以作废。
     if (!prev) return;
-    const program = structures.find((s) => s.program === programValue);
-    // 结构还没加载出来时不判断，避免把有效选择误清掉。
-    if (!program) return;
-    const stillValid = program.subjects.some((s) => s.key === subjectValue);
+    const subjects = uploadScope.currentProgramSubjects;
+    // 目录树还没加载出来时不判断，避免把有效选择误清掉。
+    if (subjects.length === 0) return;
+    const stillValid = subjects.some((x) => x.token === subjectValue);
     if (!stillValid) {
       form.setValue('subject', '');
       form.setValue('subSubject', '');
     }
-  }, [programValue, subjectValue, structures, form]);
+  }, [programValue, subjectValue, uploadScope, form]);
 
   const prevSubjectRef = useRef<string>(subjectValue);
   useEffect(() => {
@@ -208,15 +264,7 @@ const UploadPage: React.FC = () => {
     form.setValue('subSubject', '');
   }, [subjectValue, form]);
 
-  const currentProgram = useMemo(
-    () => structures.find((s) => s.program === programValue),
-    [structures, programValue],
-  );
-  const currentSubjectNode = useMemo(() => {
-    if (!currentProgram) return null;
-    return currentProgram.subjects.find((s) => s.key === subjectValue) ?? null;
-  }, [currentProgram, subjectValue]);
-  const hasSubSubjects = !!currentSubjectNode?.children?.length;
+  const hasSubSubjects = uploadScope.hasSubSubjects;
   const isEnglish = subjectValue === 'english';
 
   const L = (zh: string, en: string) => (language === 'zh-CN' ? zh : en);
@@ -227,15 +275,15 @@ const UploadPage: React.FC = () => {
       toast.error(L('请上传文件', 'Please upload a file'));
       return;
     }
-    const valid = await form.trigger(['title', 'program', 'subject', 'folderType']);
+    const valid = await form.trigger(['title', 'program', 'subject', 'directoryId']);
     if (!valid) {
       // 以前这里是无声 `return`：点了「保存草稿」既不保存也不提示，用户看到的是
       // "点了没反应"，而日志里连一行都不会有。校验失败是**用户的输入问题**，
       // 必须说出来，否则他只会反复点同一个按钮。
       toast.error(
         L(
-          '请先补全必填项（标题、班型、科目、资料夹）后再保存',
-          'Please complete the required fields (title, program, subject, folder type) before saving',
+          '请先补全必填项（标题、班型、科目、所属目录）后再保存',
+          'Please complete the required fields (title, program, subject, directory) before saving',
         ),
       );
       return;
@@ -261,8 +309,12 @@ const UploadPage: React.FC = () => {
         semester: data.semester || undefined,
         weekNumber: data.weekNumber ? Number(data.weekNumber) : undefined,
         theme: data.theme || undefined,
-        // §1：只在真的选了目录时才传；空字符串会被服务端当作"没传"（不归属）。
-        directoryId: data.directoryId || undefined,
+        // §8：目录归属必填，原样传给服务端（服务端再判存在性/层级/scope）。
+        directoryId: data.directoryId,
+        // §7：folderType 不再要求老师选。只有当**编辑历史资源**带着库里已有的值
+        // 回来时才原样回传（否则会把它改掉）；新建时留空是正常情况，
+        // 由服务端按目录推导。**前端不做推导** —— 推导规则只有服务端那一份。
+        folderType: (data.folderType || undefined) as FolderType | undefined,
         fileName: selectedFile?.name,
         fileSize: selectedFile?.size,
         fileType: selectedFile?.type,
@@ -313,7 +365,6 @@ const UploadPage: React.FC = () => {
           program: data.program as ProgramCode,
           subject: data.subject,
           subSubject: data.subSubject || undefined,
-          folderType: data.folderType as FolderType,
         });
 
         // §5：创建接口**只**产生草稿（服务端 `status: 'draft' as const`）。
@@ -416,8 +467,8 @@ const UploadPage: React.FC = () => {
                         <SelectValue placeholder={L('请选择班型', 'Select program')} />
                       </SelectTrigger></FormControl>
                       <SelectContent>
-                        {structures.map((s) => (
-                          <SelectItem key={s.program} value={s.program}>
+                        {uploadScope.programs.map((s) => (
+                          <SelectItem key={s.code} value={s.code}>
                             {language === 'zh-CN' ? s.name : s.nameEn}
                           </SelectItem>
                         ))}
@@ -434,8 +485,8 @@ const UploadPage: React.FC = () => {
                         <SelectValue placeholder={L('请选择科目', 'Select subject')} />
                       </SelectTrigger></FormControl>
                       <SelectContent>
-                        {currentProgram?.subjects.map((s) => (
-                          <SelectItem key={s.key} value={s.key}>
+                        {uploadScope.currentProgramSubjects.map((s) => (
+                          <SelectItem key={s.token} value={s.token}>
                             {language === 'zh-CN' ? s.name : s.nameEn}
                           </SelectItem>
                         ))}
@@ -453,8 +504,8 @@ const UploadPage: React.FC = () => {
                           <SelectValue placeholder={L('请选择子科目', 'Select sub-subject')} />
                         </SelectTrigger></FormControl>
                         <SelectContent>
-                          {currentSubjectNode?.children?.map((s) => (
-                            <SelectItem key={s.key} value={s.key}>
+                          {uploadScope.currentSubSubjects.map((s) => (
+                            <SelectItem key={s.token} value={s.token}>
                               {language === 'zh-CN' ? s.name : s.nameEn}
                             </SelectItem>
                           ))}
@@ -466,26 +517,16 @@ const UploadPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Folder / Semester / Week */}
+              {/*
+                §7：这里**不再有「资料夹」下拉**。
+                以前老师必须从 6 个 legacy 值（课程大纲/周次教案/课件与示范/
+                素材与工作单/观察与评价/教研归档）里选一个，而 PDF 只规定了
+                4 个资料夹 —— 于是同一份东西在哪一栏，取决于当时是谁上传的。
+                现在老师只选「所属目录」，`folder_type` 由服务端按目录推导
+                （映射表只有一份，见 server/modules/directories/legacy-folder-mapping.ts）。
+                编辑历史资源时，库里已有的值仍会原样带回并保留。
+              */}
               <div className="flex flex-wrap gap-4">
-                <FormField control={form.control} name="folderType" render={({ field }) => (
-                  <FormItem className="flex-1 min-w-[200px]">
-                    <FormLabel>{L('资料夹', 'Folder Type')}{reqStar}</FormLabel>
-                    <Select onValueChange={field.onChange} value={field.value}>
-                      <FormControl><SelectTrigger className="w-full">
-                        <SelectValue placeholder={L('请选择资料夹', 'Select folder type')} />
-                      </SelectTrigger></FormControl>
-                      <SelectContent>
-                        {FOLDER_TYPES.map((f) => (
-                          <SelectItem key={f} value={f}>
-                            {t(`folder.${f}` as never)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )} />
                 <FormField control={form.control} name="semester" render={({ field }) => (
                   <FormItem className="flex-1 min-w-[160px]">
                     <FormLabel>{L('学期', 'Semester')}</FormLabel>
@@ -513,24 +554,25 @@ const UploadPage: React.FC = () => {
               </div>
 
               {/*
-                §1 目录归属 —— 与上面的「资料夹」是**两个维度**，不是二选一：
-                · 资料夹（folderType）是 legacy 分类，历史数据在用，保留；
-                · 目录归属（directoryId）决定这份资源出现在可编辑目录树的哪个节点下。
-                留空 = 尚未归属，服务端存 NULL，界面如实显示"未归属"。
+                §8 目录归属 —— **必填**。
+                「没有 directoryId → 不能提交保存」是业主的硬要求：资源必须落在
+                目录树上，否则就会出现"库里有这条资源、老师在目录里怎么点都找不到"。
+                历史资源允许 directory_id 为 NULL（由管理员在
+                /admin/unassigned-resources 批量补），但**新建不再产生新的 NULL**。
               */}
               <FormField control={form.control} name="directoryId" render={({ field }) => (
                 <FormItem className="max-w-xl">
-                  <FormLabel>{L('目录归属', 'Directory')}</FormLabel>
+                  <FormLabel>{L('所属目录', 'Directory')}{reqStar}</FormLabel>
                   <Select
                     onValueChange={field.onChange}
                     value={field.value ?? ''}
                     disabled={!programValue || directoryOptions.length === 0}
                   >
-                    <FormControl><SelectTrigger className="w-full">
+                    <FormControl><SelectTrigger className="w-full" data-testid="upload-directory">
                       <SelectValue placeholder={
                         directoryOptions.length === 0
                           ? L('暂无可选目录', 'No directory available')
-                          : L('请选择所属目录（可留空）', 'Select a directory (optional)')
+                          : L('请选择所属目录', 'Select a directory')
                       } />
                     </SelectTrigger></FormControl>
                     <SelectContent>
@@ -544,6 +586,12 @@ const UploadPage: React.FC = () => {
                         ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground" data-testid="upload-directory-note">
+                    {L(
+                      '资源会出现在该目录下。历史资料夹分类由系统按目录自动归类，无需选择。',
+                      'The resource will appear under this directory. The legacy folder classification is derived automatically from it.',
+                    )}
+                  </p>
                   <FormMessage />
                 </FormItem>
               )} />

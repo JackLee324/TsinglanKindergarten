@@ -25,6 +25,8 @@ export const translations = {
     'nav.upload': '资源上传',
     'nav.myResources': '我的资源',
     'nav.directory': '课程目录',
+    'page.directory': '课程目录',
+    'page.directoryDesc': '按班型与科目浏览课程资源；结构来自数据库，与侧边栏、首页完全一致。',
     'nav.security': '账号安全',
     'nav.review': '审核工作台',
     'nav.admin': '管理后台',
@@ -32,6 +34,7 @@ export const translations = {
     'nav.admin.permissions': '权限管理',
     'nav.admin.recycleBin': '回收站',
     'nav.admin.audit': '审计日志',
+    'nav.admin.unassigned': '待补齐目录归属',
     'nav.changePassword': '修改密码',
 
     // 按钮
@@ -57,6 +60,7 @@ export const translations = {
     // 公共文案
     'common.retry': '重试',
     'common.loading': '加载中...',
+    'common.refresh': '刷新',
     'common.error': '出错了',
     'common.noData': '暂无数据',
     'common.success': '操作成功',
@@ -105,6 +109,7 @@ export const translations = {
     'detail.program': '班型',
     'detail.subject': '科目',
     'detail.folderType': '资料夹',
+    'detail.directory': '所属目录',
     'detail.semester': '学期/周次',
     'detail.week': '第',
     'detail.uploader': '上传者',
@@ -126,6 +131,10 @@ export const translations = {
     'detail.changeKind.metadata_edited': '修改信息',
     'detail.changeKind.file_attached': '附加文件',
     'detail.changeKind.status_changed': '状态变更',
+    'upload.titleRequired': '请填写资源标题',
+    'upload.programRequired': '请选择班型',
+    'upload.subjectRequired': '请选择科目',
+    'upload.directoryRequired': '请选择所属目录（资源必须归属到目录树的资料夹下）',
     'upload.fileUploaded': '资源与文件均已保存',
     'upload.fileUploadFailed': '资源已保存，但文件上传失败',
     'upload.storageNote':
@@ -372,6 +381,8 @@ export const translations = {
     'audit.action.resource_file_register': '登记资源文件',
     'audit.action.resource_download_failed': '下载失败',
     'audit.action.file_validation_rejected': '文件校验拒绝',
+    'audit.action.data_export': '全量数据导出（高危运维）',
+    'audit.action.resource_directory_assign': '批量归档到资料夹',
 
     // Dashboard
     'dashboard.welcome': '欢迎来到 TsinglanKindergarten 课程资源平台',
@@ -414,6 +425,51 @@ export const translations = {
     'directory.summary': '共 {nodes} 个目录节点，其中 {custom} 个资料夹允许教师自建子文件夹。',
     'directory.scopeNote': '有 {count} 个科目因你的权限范围未显示（并非这些科目没有内容）。',
     'directory.allowCustomFolders': '可自建文件夹',
+    'directory.subtreeTitle': '「{name}」下的全部资源',
+    'directory.mineUnpublishedNote': '其中 {count} 条是你自己尚未发布的资源（只有你能看到）。',
+    'directory.browseSubtitle': '目录来自数据库，全站共用同一份。',
+    'directory.legacyFilterNote': '旧链接的「{segment}」不是权威目录里的一层（PDF 没有这一级），因此这里显示「{name}」下按该分组筛选出的资源。',
+    'directory.breadcrumb': '目录路径',
+    'directory.manageEntry': '管理此目录',
+    'directory.childCount': '{count} 个子项',
+    'directory.notFoundTitle': '目录不存在',
+    'directory.notFoundDesc': '这个目录不在你的可见范围内，或者已被停用/删除。',
+    'directory.backToRoot': '回到课程目录',
+    'directory.treeFailed': '目录加载失败',
+    'directory.browseFootnote': '目录结构来自数据库；管理员改名后，这里、侧边栏、首页与上传页会同时变化。',
+    'underFiled.title': '待补齐目录归属',
+    'underFiled.desc':
+      '列出目录归属不完整的资源：完全没有归属的，以及只挂在科目 / 子科层、没有精确到资料夹的。',
+    'underFiled.reasonUnassigned': '完全没有目录归属',
+    'underFiled.reasonUnassignedHint': '这些资源在目录里任何位置都点不到，必须先选一个资料夹。',
+    'underFiled.reasonSubjectLevel': '只到科目 / 子科层',
+    'underFiled.reasonSubjectLevelHint':
+      '它们有归属，但挂在科目节点上而不是四个资料夹之下 —— 需要往下再走一层。',
+    'underFiled.reasonUnassignedShort': '未归属',
+    'underFiled.reasonSubjectLevelShort': '仅科目层',
+    'underFiled.modeAll': '全部待补齐',
+    'underFiled.modeUnassigned': '仅完全没有归属',
+    'underFiled.modeSubjectLevel': '仅到科目 / 子科层',
+    'underFiled.selectedCount': '已选 {count} 条',
+    'underFiled.targetPlaceholder': '选择目标资料夹',
+    'underFiled.syncLegacy':
+      '同时同步历史资料夹分类（默认不改动历史数据，仅在能确定推导时才写）',
+    'underFiled.submit': '归档到该资料夹',
+    'underFiled.assigned': '已归档 {count} 条到 {code}；同步历史分类 {legacy} 条。',
+    'underFiled.loadFailed': '加载失败',
+    'underFiled.empty': '没有待补齐的资源',
+    'underFiled.emptyDesc': '每一条资源的目录归属都精确到了资料夹。',
+    'underFiled.selectAll': '全选本页',
+    'underFiled.colTitle': '资源',
+    'underFiled.colSubject': '班型 / 科目',
+    'underFiled.colCurrent': '当前目录',
+    'underFiled.colReason': '原因',
+    'underFiled.none': '（无）',
+    'underFiled.pageOf': '第 {page} / {pages} 页，共 {total} 条',
+    'underFiled.prev': '上一页',
+    'underFiled.next': '下一页',
+    'underFiled.footnote':
+      '归档接口是「要么全部成功、要么一条都不动」：服务端逐条校验班型、科目与你的科目权限，全部通过后才执行一次写入，并核对影响行数。默认不改动历史 folder_type —— §9 要求不篡改历史分类，需要统一口径时请显式勾选上面的选项。',
     'directory.resourceCount': '{count} 条资源',
     'directory.loadFailed': '目录加载失败',
     'directory.newFolder': '新建文件夹',
@@ -436,6 +492,7 @@ export const translations = {
     'directory.moveUp': '上移',
     'directory.moveDown': '下移',
     'directory.nameEnPlaceholder': '英文名（可选）',
+    'directory.descriptionPlaceholder': '说明（可选，留空即清空）',
     'directory.nameEnLabel': '英文名',
 
     // === 账号安全 / 两步验证（§12）===
@@ -459,6 +516,18 @@ export const translations = {
     'security.savedCodes': '我已保存',
 
     // === §11 按账号授权面板 ===
+    'permPanel.scopeTitle': '数据范围（ALL / PROGRAM / SUBJECT / OWN）',
+    'permPanel.scopeEmpty': '没有显式绑定 —— 表示按角色默认，不是"没有权限"。',
+    'permPanel.scopeEdit': '编辑数据范围',
+    'permPanel.scopeAdd': '新增一条',
+    'permPanel.scopeSave': '保存数据范围',
+    'permPanel.scopeCancel': '取消',
+    'permPanel.scopeAllPermissions': '（对全部数据权限生效）',
+    'permPanel.scopeWriteOnce': '保存是整表替换：这里列出的就是最终结果，未列出的绑定会被清除。空列表 = 清除全部显式绑定。',
+    'permPanel.scopeKind.ALL': '全部（ALL）',
+    'permPanel.scopeKind.PROGRAM': '按班型（PROGRAM）',
+    'permPanel.scopeKind.SUBJECT': '按科目（SUBJECT）',
+    'permPanel.scopeKind.OWN': '仅自己创建（OWN）',
     'permPanel.title': '生效权限',
     'permPanel.subtitle': '有效权限 = 角色默认 ∪ 追加授权 − 显式禁止。禁止永远优先。',
     'permPanel.summary': '当前生效 {total} 项；其中 {granted} 项为单独追加、{denied} 项为单独禁止。',
@@ -494,6 +563,9 @@ export const translations = {
     'nav.upload': 'Upload Resource',
     'nav.myResources': 'My Resources',
     'nav.directory': 'Curriculum Directory',
+    'page.directory': 'Curriculum Directory',
+    'page.directoryDesc':
+      'Browse curriculum resources by programme and subject. The structure comes from the database and matches the sidebar and home pages.',
     'nav.security': 'Account security',
     'nav.review': 'Review',
     'nav.admin': 'Administration',
@@ -501,6 +573,7 @@ export const translations = {
     'nav.admin.permissions': 'Permissions',
     'nav.admin.recycleBin': 'Recycle Bin',
     'nav.admin.audit': 'Audit Logs',
+    'nav.admin.unassigned': 'Incomplete Filing',
     'nav.changePassword': 'Change Password',
 
     // Buttons
@@ -526,6 +599,7 @@ export const translations = {
     // Common
     'common.retry': 'Retry',
     'common.loading': 'Loading...',
+    'common.refresh': 'Refresh',
     'common.error': 'Error',
     'common.noData': 'No data',
     'common.success': 'Success',
@@ -574,6 +648,7 @@ export const translations = {
     'detail.program': 'Program',
     'detail.subject': 'Subject',
     'detail.folderType': 'Folder',
+    'detail.directory': 'Directory',
     'detail.semester': 'Semester / Week',
     'detail.week': 'Week',
     'detail.uploader': 'Uploaded by',
@@ -595,6 +670,11 @@ export const translations = {
     'detail.changeKind.metadata_edited': 'Metadata edited',
     'detail.changeKind.file_attached': 'File attached',
     'detail.changeKind.status_changed': 'Status changed',
+    'upload.titleRequired': 'Please enter a resource title',
+    'upload.programRequired': 'Please select a programme',
+    'upload.subjectRequired': 'Please select a subject',
+    'upload.directoryRequired':
+      'Please select a directory (every resource must be filed under a folder in the directory tree)',
     'upload.fileUploaded': 'Resource and file both saved',
     'upload.fileUploadFailed': 'Resource saved, but the file upload failed',
     'upload.storageNote':
@@ -838,6 +918,8 @@ export const translations = {
     'audit.action.resource_file_register': 'Resource File Registered',
     'audit.action.resource_download_failed': 'Download Failed',
     'audit.action.file_validation_rejected': 'File Validation Rejected',
+    'audit.action.data_export': 'Full Data Export (High-Risk Ops)',
+    'audit.action.resource_directory_assign': 'Bulk Filed Into Folder',
 
     // Dashboard
     'dashboard.welcome': 'Welcome to TsinglanKindergarten Curriculum Platform',
@@ -883,6 +965,56 @@ export const translations = {
     'directory.scopeNote':
       '{count} subject(s) are not shown because they are outside your permission scope (this does not mean they are empty).',
     'directory.allowCustomFolders': 'Custom folders allowed',
+    'directory.subtreeTitle': 'All resources under “{name}”',
+    'directory.mineUnpublishedNote':
+      '{count} of these are your own unpublished resources (visible only to you).',
+    'directory.browseSubtitle': 'The directory comes from the database and is shared by the whole site.',
+    'directory.legacyFilterNote':
+      'The legacy segment \u201c{segment}\u201d is not a level in the authoritative directory (the PDF has no such level), so this page shows the resources under \u201c{name}\u201d filtered by that grouping.',
+    'directory.breadcrumb': 'Directory path',
+    'directory.manageEntry': 'Manage this directory',
+    'directory.childCount': '{count} item(s)',
+    'directory.notFoundTitle': 'Directory not found',
+    'directory.notFoundDesc': 'This directory is outside your scope, or it has been disabled or deleted.',
+    'directory.backToRoot': 'Back to curriculum directory',
+    'directory.treeFailed': 'Failed to load the directory',
+    'directory.browseFootnote':
+      'Structure comes from the database; after an admin renames a node, this page, the sidebar, the home pages and the upload page change together.',
+    'underFiled.title': 'Incomplete Directory Filing',
+    'underFiled.desc':
+      'Resources whose directory filing is incomplete: those with no directory at all, and those filed only at subject / sub-subject level rather than into a folder.',
+    'underFiled.reasonUnassigned': 'No directory at all',
+    'underFiled.reasonUnassignedHint':
+      'These are unreachable from anywhere in the directory; a folder must be chosen.',
+    'underFiled.reasonSubjectLevel': 'Subject / sub-subject level only',
+    'underFiled.reasonSubjectLevelHint':
+      'They have a directory, but it is a subject node rather than one of the four folders — they need one more level down.',
+    'underFiled.reasonUnassignedShort': 'Unassigned',
+    'underFiled.reasonSubjectLevelShort': 'Subject level',
+    'underFiled.modeAll': 'All incomplete',
+    'underFiled.modeUnassigned': 'Only completely unassigned',
+    'underFiled.modeSubjectLevel': 'Only subject / sub-subject level',
+    'underFiled.selectedCount': '{count} selected',
+    'underFiled.targetPlaceholder': 'Choose a target folder',
+    'underFiled.syncLegacy':
+      'Also sync the legacy folder classification (history is left untouched by default; written only when it can be derived unambiguously)',
+    'underFiled.submit': 'File into this folder',
+    'underFiled.assigned':
+      'Filed {count} resource(s) into {code}; legacy classification synced for {legacy}.',
+    'underFiled.loadFailed': 'Failed to load',
+    'underFiled.empty': 'Nothing left to file',
+    'underFiled.emptyDesc': 'Every resource is filed down to folder level.',
+    'underFiled.selectAll': 'Select all on this page',
+    'underFiled.colTitle': 'Resource',
+    'underFiled.colSubject': 'Programme / Subject',
+    'underFiled.colCurrent': 'Current directory',
+    'underFiled.colReason': 'Reason',
+    'underFiled.none': '(none)',
+    'underFiled.pageOf': 'Page {page} of {pages}, {total} in total',
+    'underFiled.prev': 'Previous',
+    'underFiled.next': 'Next',
+    'underFiled.footnote':
+      'Filing is all-or-nothing: the server validates programme, subject and your subject permission for every row, then performs a single write and checks the affected row count. The legacy folder_type is left untouched by default — §9 forbids rewriting historical classification, so tick the option above when you deliberately want them aligned.',
     'directory.resourceCount': '{count} resources',
     'directory.loadFailed': 'Failed to load the directory',
     'directory.newFolder': 'New folder',
@@ -905,6 +1037,7 @@ export const translations = {
     'directory.moveUp': 'Move up',
     'directory.moveDown': 'Move down',
     'directory.nameEnPlaceholder': 'English name (optional)',
+    'directory.descriptionPlaceholder': 'Description (optional; empty clears it)',
     'directory.nameEnLabel': 'English name',
 
     // === Account security / two-factor (§12) ===
@@ -928,6 +1061,20 @@ export const translations = {
     'security.savedCodes': 'I have saved them',
 
     // === §11 per-account authorisation panel ===
+    'permPanel.scopeTitle': 'Data scope (ALL / PROGRAM / SUBJECT / OWN)',
+    'permPanel.scopeEmpty':
+      'No explicit binding — this means the role default applies, not "no permission".',
+    'permPanel.scopeEdit': 'Edit data scope',
+    'permPanel.scopeAdd': 'Add a binding',
+    'permPanel.scopeSave': 'Save data scope',
+    'permPanel.scopeCancel': 'Cancel',
+    'permPanel.scopeAllPermissions': '(applies to every data-scoped permission)',
+    'permPanel.scopeWriteOnce':
+      'Saving replaces the whole set: what you see here is the final result, and bindings not listed are removed. An empty list clears all explicit bindings.',
+    'permPanel.scopeKind.ALL': 'Everything (ALL)',
+    'permPanel.scopeKind.PROGRAM': 'By programme (PROGRAM)',
+    'permPanel.scopeKind.SUBJECT': 'By subject (SUBJECT)',
+    'permPanel.scopeKind.OWN': 'Own items only (OWN)',
     'permPanel.title': 'Effective permissions',
     'permPanel.subtitle': 'Effective = role defaults ∪ grants − explicit denies. A deny always wins.',
     'permPanel.summary': '{total} permission(s) in effect; {granted} granted individually, {denied} denied individually.',

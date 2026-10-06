@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 /**
  * scripts/verify-naming-http.mjs — live HTTP verification of the B4 boundary
  * ==========================================================================
@@ -251,12 +252,14 @@ try {
   // =========================================================================
   console.log('\n=== D. "HAS A REAL FILE" IS REPORTED HONESTLY ===');
   // =========================================================================
+  // §8：必须带 directoryId。
+  const probeDirectoryId = await folderIdFor({ req }, { program: 'prek', subject: 'virtue' });
   const created = await req('POST', '/api/resources', {
     title: `${TITLE_PREFIX} metadata-only lesson plan`,
     titleEn: 'Naming probe lesson plan',
     program: 'prek',
     subject: 'virtue',
-    folderType: 'curriculum_outline',
+    directoryId: probeDirectoryId,
     description: 'created by scripts/verify-naming-http.mjs',
   });
   check('POST /api/resources creates the probe resource', created.status, 201);

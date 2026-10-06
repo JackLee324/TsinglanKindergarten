@@ -27,7 +27,6 @@ import {
   inArray,
   isNull,
   isNotNull,
-  gte,
   lte,
   sql,
 } from 'drizzle-orm';
@@ -42,6 +41,7 @@ import type {
   RoleCode,
   ProgramCode,
   ResourceVersion,
+  UnderFiledListResponse,
 } from '@shared/api.interface';
 import {
   resources,
@@ -52,10 +52,14 @@ import {
 } from '@server/database/schema';
 import { canonicalSubjectOfDirectoryCode } from '@server/modules/directories/directory-vocabulary';
 import {
+  folderSuffixOf,
+  folderTypeForCustomFolder,
+  folderTypeFromDirectoryNode,
+} from '@server/modules/directories/legacy-folder-mapping';
+import {
   signDownloadToken,
   downloadTokenConfigurationError,
   downloadTokenTtlSeconds,
-  DOWNLOAD_TOKEN_SECRET_ENV,
 } from '@server/common/crypto/download-token';
 import {
   validateUpload,
@@ -250,6 +254,8 @@ export interface RegisteredFile {
    */
   hasFile: boolean;
 }
+
+
 
 
 @Injectable()
@@ -842,7 +848,7 @@ export class ResourcesService {
 
   async listPublicResources(
     params: ResourceListParams & { keyword?: string },
-    ip?: string,
+    _ip?: string,
   ): Promise<ResourceListResponse> {
     const page = params.page ?? 1;
     const pageSize = params.pageSize ?? 20;
@@ -962,7 +968,7 @@ export class ResourcesService {
 
   async getPublicResource(
     id: string,
-    ip?: string,
+    _ip?: string,
   ): Promise<Resource> {
     const rows = await this.db
       .select()
@@ -1079,7 +1085,7 @@ export class ResourcesService {
   async getPublicStorybookCoverStream(
     resourceId: string,
     index: number,
-    ip?: string,
+    _ip?: string,
   ): Promise<{ stream: NodeJS.ReadableStream; contentType: string; fileName: string }> {
     const rows = await this.db
       .select()
@@ -1289,16 +1295,33 @@ export class ResourcesService {
     return out;
   }
 
+  /**
+   * 校验并解析 `directoryId`，返回该节点（含 code / type / 祖先链）。
+   *
+   * 返回**整个节点**而不只是 id，是因为上传路径还要用它推导 legacy
+   * `folderType`（§7 的服务端自动维护）—— 再查一次库既慢，也可能读到不同的快照。
+   */
   private async resolveDirectoryAssignment(
     directoryId: string | undefined | null,
     program: string,
     subject: string,
-  ): Promise<string | null> {
+    subSubject?: string,
+    options: { requireLeafFolder?: boolean } = {},
+  ): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    type: string;
+    /** 目录所处子科（`k:chinese:arts_*` → `arts`）；没有则为 null。 */
+    ownerSubSubject: string | null;
+    ancestorCodes: string[];
+  } | null> {
     if (directoryId === undefined || directoryId === null || directoryId === '') return null;
 
     const rows = await this.db
       .select({
         id: directories.id,
+        parentId: directories.parentId,
         code: directories.code,
         name: directories.name,
         type: directories.type,
@@ -1321,24 +1344,129 @@ export class ResourcesService {
       throw new BadRequestException('资源与所选目录不属于同一班型');
     }
 
-    // 节点的所属科目 code（科目节点是自己；子科/资料夹是其科目前缀）。
-    const ownerCode =
-      node.type === 'subject' || node.type === 'sub_subject'
-        ? node.code
-        : (node.subject ?? null);
-    if (ownerCode !== null && ownerCode !== '') {
-      const nodeSubject =
-        canonicalSubjectOfDirectoryCode(ownerCode) ??
-        // 未登记进目录词汇表的 code（用户自建文件夹的 code 形如
-        // `prek:virtue.custom_xxx`）走前缀匹配：取第一段 program、
-        // 第二段 subject，避免"自建文件夹一律不能归属"。
-        canonicalSubjectOfDirectoryCode(ownerCode.split('.').slice(0, 2).join(':'));
+    /**
+     * 新建资源只允许落在**资料夹叶节点**上（§4/§8）。
+     *
+     * 为什么必须限制：PDF 给每个教学叶节点规定的是
+     * 课程大纲 / 教学详案 / 教学资源 / 考核评估 四个资料夹。
+     * 若允许直接把资源挂到科目节点，界面上就会出现"这个科目有 3 条资源，
+     * 但四个资料夹里一条都没有"—— 老师在目录里怎么点都找不到那 3 条。
+     * 历史数据（`directory_id` 指向科目节点）不改，那是既有事实；
+     * **新建不再产生这种形状**。
+     */
+    if (options.requireLeafFolder === true && node.type !== 'folder') {
+      throw new BadRequestException(
+        '资源必须放在具体资料夹下（课程大纲 / 教学详案 / 教学资源 / 考核评估，或资料夹下的自建文件夹）',
+      );
+    }
+
+    /**
+     * 所属科目**只能从 code 的路径结构推导**，不能读 `directories.subject` 列。
+     *
+     * ⚠️ 这里修掉的是一个真实缺陷，症状是"K 中文的四个子科全都传不上去"：
+     *   `directories.subject` 对**子科下的资料夹**存的是**子科 token**，
+     *   不是上级科目。实测：`k:chinese:arts_resource` 的 `subject` 是 `arts`，
+     *   而资源的 `subject` 是上级科目 `chinese` —— 于是
+     *   「资源与所选目录不属于同一科目」把一次完全合法的上传挡掉了。
+     *   美育 / 古诗 / STEM / 绘本阅读 四个子科下的 16 个资料夹全部中招，
+     *   而它们正是 `k:chinese` 的全部内容入口。
+     *
+     * code 的路径结构本身就把层级说清楚了：
+     *   `prek:virtue_outline`        → 科目 `virtue`
+     *   `k:chinese:arts_resource`    → 科目 `chinese`，子科 `arts`
+     *   `prek:virtue_lesson.custom_x` → 科目 `virtue`（自建文件夹）
+     * 所以取第 2 段做科目、第 3 段做子科，与 `shared/curriculum` 的词汇表对齐。
+     */
+    const pathSegments = node.code.split('.')[0].split(':');
+    const ownerSubjectCode = pathSegments[1] ?? null;
+    /**
+     * 子科要从第 3 段里**剥掉资料夹后缀**再取。
+     *
+     * 因为子科与资料夹后缀挤在**同一段**里：`k:chinese:arts_resource` 的第 3 段是
+     * `arts_resource`，而不是 `arts` + `resource` 两段（`prek:virtue_outline`
+     * 同理，第 2 段是 `virtue_outline`）。
+     * 第一版直接取第 3 段，于是拿到 `arts_resource` 与资源声明的 `arts` 一比就
+     * 判成"不属于同一子科目" —— 和上面那个"科目取错列"是同一类错误的第二次出现：
+     * **都把 code 的段数想当然了**。
+     */
+    const rawSubSubjectSegment = pathSegments.length >= 3 ? pathSegments[2] : null;
+    const ownerSubSubjectCode =
+      rawSubSubjectSegment === null
+        ? null
+        : node.type === 'sub_subject'
+          ? rawSubSubjectSegment
+          : // 资料夹：剥掉已知的资料夹后缀；剥不掉就当作子科名本身。
+            (() => {
+              const suffix = folderSuffixOf(node.code);
+              if (suffix === null) return rawSubSubjectSegment;
+              const tail = `_${suffix}`;
+              return rawSubSubjectSegment.endsWith(tail)
+                ? rawSubSubjectSegment.slice(0, -tail.length)
+                : rawSubSubjectSegment;
+            })();
+
+    if (ownerSubjectCode !== null && ownerSubjectCode !== '') {
+      const nodeSubject = canonicalSubjectOfDirectoryCode(ownerSubjectCode);
       if (nodeSubject !== null && nodeSubject !== subject) {
         throw new BadRequestException('资源与所选目录不属于同一科目');
       }
     }
 
-    return node.id;
+    /**
+     * 子科一致性：目标资料夹若在某个子科之下，资源声明的子科必须对得上。
+     *
+     * 只拦**明确冲突**的情况（调用方给了子科、且与目录不符）——
+     * 调用方没给子科时不算冲突，由 createResource 用目录里的子科补齐，
+     * 于是"老师只选了目录、没选子科目"也能正常保存，而不会保存出一条
+     * "挂在美育资料夹下、子科却是古诗"的数据。
+     */
+    if (
+      ownerSubSubjectCode !== null &&
+      subSubject !== undefined &&
+      subSubject !== null &&
+      subSubject !== '' &&
+      subSubject !== ownerSubSubjectCode
+    ) {
+      throw new BadRequestException('资源与所选目录不属于同一子科目');
+    }
+
+    return {
+      id: node.id,
+      code: node.code,
+      name: node.name,
+      type: node.type,
+      /** 目录所处子科（没有则为 null）——供 createResource 补齐资源的 sub_subject。 */
+      ownerSubSubject: ownerSubSubjectCode,
+      ancestorCodes: await this.directoryAncestorCodes(node.parentId),
+    };
+  }
+
+  /**
+   * 从某个节点向上收集祖先 code（不含自己），**最多 16 层**并检测环。
+   *
+   * 上限与环检测不是防御性洁癖：`directories.parent_id` 是自引用外键，
+   * 一次误操作就能造出一个环，而**这段代码跑在资源创建的写路径上** ——
+   * 没有上限的话，一个环会让每次上传都挂死在这里，症状是"上传按钮转圈不返回"，
+   * 与真正的原因（目录数据被改成环）相距极远。
+   */
+  private async directoryAncestorCodes(parentId: string | null): Promise<string[]> {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    let cursor: string | null = parentId;
+    for (let depth = 0; cursor !== null && depth < 16; depth += 1) {
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      const parentRows: { parentId: string | null; code: string }[] = await this.db
+        .select({ parentId: directories.parentId, code: directories.code })
+        .from(directories)
+        .where(eq(directories.id, cursor))
+        .limit(1);
+      const row: { parentId: string | null; code: string } | undefined = parentRows[0];
+      if (row === undefined) break;
+      out.push(row.code);
+      cursor = row.parentId;
+    }
+    return out;
   }
 
   async createResource(
@@ -1362,11 +1490,41 @@ export class ResourcesService {
     // 而目录归属只允许落在**同一 program、同一 subject**的目录节点上，
     // 因此不可能用"选一个别的目录"来绕开科目授权。
     // 另外 `enabled = false`（已停用）的目录**不接受新归属** —— 停用就该是停用。
-    const directoryId = await this.resolveDirectoryAssignment(
+    const directoryAssignment = await this.resolveDirectoryAssignment(
       dto.directoryId,
       scope.program ?? dto.program,
       scope.subject ?? dto.subject,
+      scope.subSubject,
+      // 新建：必须是资料夹叶节点（见 resolveDirectoryAssignment 的说明）。
+      { requireLeafFolder: true },
     );
+    const directoryId = directoryAssignment?.id ?? null;
+
+    /**
+     * legacy `folder_type` 由服务端从目录推导（§7）。
+     *
+     * 优先用"目录 → 官方资料夹"这条（§9 的映射表，只有一份，见
+     * `server/modules/directories/legacy-folder-mapping.ts`）；
+     * 自建文件夹沿祖先链找最近的官方资料夹。
+     *
+     * **推不出来就报错，不猜**。编一个值写进库，等于把一个错误的分类
+     * 永久固化进历史数据 —— 而那正是 §9 要求"如实报告、不要强行猜"的对象。
+     */
+    const derivedFolderType =
+      directoryAssignment === null
+        ? null
+        : (folderTypeFromDirectoryNode({
+            code: directoryAssignment.code,
+            name: directoryAssignment.name,
+            type: directoryAssignment.type,
+          }) ?? folderTypeForCustomFolder(directoryAssignment.ancestorCodes));
+
+    const effectiveFolderType = dto.folderType ?? derivedFolderType;
+    if (effectiveFolderType === null || effectiveFolderType === undefined) {
+      throw new BadRequestException(
+        '无法为该目录推导历史资料夹分类；请显式提供 folderType（该目录不在官方四类资料夹之下）',
+      );
+    }
 
     // 科目上传权限校验
     const canUpload = await this.checkSubjectPermission(
@@ -1401,9 +1559,12 @@ export class ResourcesService {
         titleEn: dto.titleEn,
         program: scope.program ?? dto.program,
         subject: scope.subject ?? dto.subject,
-        subSubject: scope.subSubject,
-        // legacy 资料夹分类照旧写入，**不因目录归属而改动**（两个维度并存）。
-        folderType: dto.folderType,
+        // 子科：调用方给了就用它（一致性已在校验里拦过），没给就用**目录所处子科**。
+        // 这样"只选了目录"的保存不会丢掉子科信息 —— 否则资源会落在美育资料夹下
+        // 却没有子科，按子科筛选时找不到它。
+        subSubject: scope.subSubject ?? directoryAssignment?.ownerSubSubject ?? undefined,
+        // legacy 资料夹分类：由目录推导（§7）。两个维度并存，但这一维不再由用户填。
+        folderType: effectiveFolderType,
         // §1 新的目录归属维度。
         directoryId,
         semester: dto.semester,
@@ -2679,7 +2840,6 @@ export class ResourcesService {
       typeof bucketId === 'string' &&
       bucketId.length > 0 &&
       bucketId.length <= 100 &&
-      // eslint-disable-next-line no-control-regex
       !/[\u0000-\u001f\u007f-\u009f/\\]/.test(bucketId) &&
       !bucketId.includes('..')
     );
@@ -2964,4 +3124,283 @@ export class ResourcesService {
       fileName: safeFileName,
     };
   }
+  // ==========================================================================
+  // §8 目录归属补齐（管理员）
+  // ==========================================================================
+  //
+  // WHY THIS SECTION EXISTS
+  // ----------------------
+  // §9 的迁移报告（`LEGACY_RESOURCE_DIRECTORY_MIGRATION_REPORT.md`）实测出两个事实：
+  //   · **1 条**资源的 `directory_id` 是 NULL（真正"未归属"）；
+  //   · **348 条**资源挂在**科目/子科**节点上，而 PDF 规定资源应落在四个资料夹
+  //     （课程大纲 / 教学详案 / 教学资源 / 考核评估）之下 ——
+  //     也就是说它们"有归属，但精确不到资料夹"。
+  //
+  // 报告只报告、不改数据（§9 的要求）。改数据的入口就是这里：
+  // 一个管理员视图 + 批量归档接口，让**人**决定那 349 条该去哪，
+  // 而不是让一段迁移脚本替他们猜。
+  //
+  // 两个维度分开处理，是这一节最重要的设计约束：
+  //   · `directory_id`（新维度）—— 本接口会改，这是它的职责；
+  //   · `folder_type`（legacy 维度）—— **默认不动**。§9 明确"不要强行猜、
+  //     不要篡改历史分类"。需要同步时由调用方显式开启 `syncLegacyFolderType`，
+  //     且只在能从目标目录**推导出确定值**时才写。
+  // ==========================================================================
+
+  /**
+   * 列出"待补齐"的资源：真正未归属的，以及只归档到科目层、没到资料夹的。
+   *
+   * `reason` 必须区分这两种情况 —— 它们的处理方式完全不同：
+   * `unassigned` 要"选一个目录"，`subject_level` 要"往下再走一层到资料夹"。
+   * 混成一个"未归档"标签，管理员会以为 349 条全都无处安放。
+   */
+  async listUnderFiledResources(
+    params: { mode?: 'all' | 'unassigned' | 'subject_level'; page?: number; pageSize?: number } = {},
+    teacherId?: string,
+  ): Promise<UnderFiledListResponse> {
+    const mode = params.mode ?? 'all';
+    const page = params.page ?? 1;
+    const pageSize = params.pageSize ?? 20;
+    const offset = (page - 1) * pageSize;
+
+    const subjectLevelIds = sql`(select id from directories where type in ('subject', 'sub_subject'))`;
+    const nullClause = isNull(resources.directoryId);
+    const subjectLevelClause = and(
+      isNotNull(resources.directoryId),
+      inArray(resources.directoryId, subjectLevelIds),
+    );
+
+    const reasonClause =
+      mode === 'unassigned'
+        ? nullClause
+        : mode === 'subject_level'
+          ? subjectLevelClause
+          : or(nullClause, subjectLevelClause);
+
+    const conditions: SQLWrapper[] = [this.activeOnly(), reasonClause as SQLWrapper];
+
+    // 与其它读路径共用同一套数据范围判定：没有它，一个只被授了某个科目的账号
+    // 也能在这里看到全园资源列表 —— 那是一个纯粹由"新页面忘了加条件"造成的越权。
+    if (teacherId !== undefined) {
+      const permCondition = await this.buildPermissionCondition(teacherId, undefined, undefined, undefined);
+      if (permCondition === null) {
+        return { items: [], total: 0, page, pageSize, counts: { unassigned: 0, subjectLevel: 0 } };
+      }
+      conditions.push(permCondition);
+    }
+
+    const whereClause = and(...conditions);
+
+    const countResult = await this.db.select({ value: count() }).from(resources).where(whereClause);
+    const total = countResult[0]?.value ?? 0;
+
+    /**
+     * 两个分组计数**单独查一次**，不受分页影响。
+     * 界面要说的那句话是"349 条里有 1 条完全没归属、348 条只在科目层"，
+     * 而当前页最多 20 条 —— 只统计当前页会把这句话说错。
+     */
+    const countByReason = await this.db
+      .select({
+        unassigned: sql<number>`count(*) filter (where ${resources.directoryId} is null)`,
+        subjectLevel: sql<number>`count(*) filter (where ${resources.directoryId} is not null)`,
+      })
+      .from(resources)
+      .where(whereClause);
+
+    const items = await this.db
+      .select({
+        id: resources.id,
+        title: resources.title,
+        program: resources.program,
+        subject: resources.subject,
+        subSubject: resources.subSubject,
+        folderType: resources.folderType,
+        status: resources.status,
+        updatedAt: resources.updatedAt,
+        directoryId: resources.directoryId,
+        directoryCode: directories.code,
+        directoryName: directories.name,
+        directoryType: directories.type,
+      })
+      .from(resources)
+      // 左连接：`directory_id IS NULL` 的行也必须出现在结果里，
+      // 用内连接会把**恰好是这一节主要对象**的那 1 条悄悄丢掉。
+      .leftJoin(directories, eq(directories.id, resources.directoryId))
+      .where(whereClause)
+      // 先按"最容易补错"排：完全没归属的排前面，其次是科目层；
+      // 同级按更新时间倒序（最近动过的更可能在等人补）。
+      .orderBy(sql`${resources.directoryId} is not null`, desc(resources.updatedAt))
+      .limit(pageSize)
+      .offset(offset);
+
+    return {
+      items: items.map((item) => ({
+        id: item.id,
+        title: item.title,
+        program: item.program,
+        subject: item.subject,
+        subSubject: item.subSubject ?? null,
+        folderType: item.folderType,
+        status: item.status,
+        directoryCode: item.directoryCode ?? null,
+        directoryName: item.directoryName ?? null,
+        directoryType: item.directoryType ?? null,
+        reason: item.directoryId === null ? 'unassigned' : 'subject_level',
+        updatedAt: new Date(item.updatedAt).toISOString(),
+      })),
+      total,
+      page,
+      pageSize,
+      counts: {
+        unassigned: Number(countByReason[0]?.unassigned ?? 0),
+        subjectLevel: Number(countByReason[0]?.subjectLevel ?? 0),
+      },
+    };
+  }
+
+  /**
+   * 批量把资源归档到某个资料夹。
+   *
+   * 为什么是"逐条校验 + 一次 UPDATE + 校验影响行数"，而不是直接批量写：
+   * 这个项目已经踩过一次同类坑 —— `resource.purge` 曾经在 `anon_` 角色下
+   * 执行 `DELETE`，**实际影响 0 行**，而审计日志已经写下"已永久删除"。
+   * 所以这里的规则是：**写入必须核对受影响行数**，对不上就抛错，
+   * 绝不让"看起来成功"过去。
+   */
+  async assignResourcesToDirectory(
+    input: {
+      resourceIds: string[];
+      directoryId: string;
+      /** 是否同时把 legacy `folder_type` 改成从目标目录推导出的值。默认 false。 */
+      syncLegacyFolderType?: boolean;
+    },
+    currentTeacherId: string,
+    ip?: string,
+  ): Promise<{ assigned: number; folderTypeUpdates: number; directoryCode: string }> {
+    const uniqueIds = [...new Set(input.resourceIds)];
+    if (uniqueIds.length === 0) {
+      throw new BadRequestException('请至少选择一条资源');
+    }
+
+    // 目标目录：必须存在、启用、且是资料夹叶节点（与 createResource 同一口径）。
+    const targetRows = await this.db
+      .select({
+        id: directories.id,
+        code: directories.code,
+        name: directories.name,
+        type: directories.type,
+        program: directories.program,
+        subject: directories.subject,
+        parentId: directories.parentId,
+      })
+      .from(directories)
+      .where(eq(directories.id, input.directoryId))
+      .limit(1);
+    const target = targetRows[0];
+    if (target === undefined) throw new BadRequestException('指定的目录不存在');
+    if (target.type !== 'folder') {
+      throw new BadRequestException('只能归档到资料夹（课程大纲 / 教学详案 / 教学资源 / 考核评估或自建文件夹）');
+    }
+
+    const targetFolderType = folderTypeFromDirectoryNode({
+      code: target.code,
+      name: target.name,
+      type: target.type,
+    }) ?? folderTypeForCustomFolder(await this.directoryAncestorCodes(target.parentId));
+
+    const rows = await this.db
+      .select({
+        id: resources.id,
+        program: resources.program,
+        subject: resources.subject,
+        subSubject: resources.subSubject,
+        title: resources.title,
+      })
+      .from(resources)
+      .where(and(this.activeOnly(), inArray(resources.id, uniqueIds)));
+
+    // 少了行就说明有 id 不存在或已在回收站 —— 静默跳过会让界面显示
+    // "已归档 12 条"而实际只动了 10 条。必须逐条说清楚。
+    if (rows.length !== uniqueIds.length) {
+      const found = new Set(rows.map((r) => r.id));
+      const missing = uniqueIds.filter((id) => !found.has(id));
+      throw new BadRequestException(
+        `有 ${missing.length} 条资源不存在或已在回收站，未做任何改动：${missing.join(', ')}`,
+      );
+    }
+
+    // 逐条校验：目标目录必须与该资源同 program、同 subject。
+    // 与 createResource 用同一个断言口径（跨班型/跨科目的归档会把资源
+    // 挪到用户看不见的地方，比"没归档"更糟）。
+    for (const row of rows) {
+      if (target.program !== null && target.program !== row.program) {
+        throw new BadRequestException(`「${row.title}」与目标目录不属于同一班型`);
+      }
+      // 与 resolveDirectoryAssignment 同一条规则：**从 code 路径取科目**，
+      // 不读 `directories.subject`（它对子科下的资料夹存的是子科 token，
+      // 会让 K 中文四个子科的资料夹一律判定为"科目不符"）。
+      const pathSegments = target.code.split('.')[0].split(':');
+      const ownerSubjectCode = pathSegments[1] ?? null;
+      if (ownerSubjectCode !== null && ownerSubjectCode !== '') {
+        const nodeSubject = canonicalSubjectOfDirectoryCode(ownerSubjectCode);
+        if (nodeSubject !== null && nodeSubject !== row.subject) {
+          throw new BadRequestException(`「${row.title}」与目标目录不属于同一科目`);
+        }
+      }
+      /**
+       * 逐条再问一次科目权限：批量接口最容易变成权限旁路。
+       *
+       * 用 `'upload'` 而不是 `'view'`：这个操作**改变资源的可发现位置**，
+       * 与"把资源放进这个科目"是同一类能力。`checkSubjectPermission` 的
+       * 动作参数只有 view/upload 两种，而归档属于写操作 —— 选 upload。
+       */
+      const allowed = await this.checkSubjectPermission(
+        currentTeacherId,
+        row.program as ProgramCode,
+        row.subject,
+        row.subSubject ?? undefined,
+        'upload',
+      );
+      if (!allowed) {
+        throw new ForbiddenException(`无「${row.title}」所属科目的编辑权限`);
+      }
+    }
+
+    const syncLegacy = input.syncLegacyFolderType === true && targetFolderType !== null;
+
+    const updated = await this.db
+      .update(resources)
+      .set({
+        directoryId: target.id,
+        ...(syncLegacy ? { folderType: targetFolderType as string } : {}),
+        updatedAt: new Date(),
+      })
+      .where(and(this.activeOnly(), inArray(resources.id, uniqueIds)))
+      .returning({ id: resources.id });
+
+    if (updated.length !== uniqueIds.length) {
+      throw new Error(
+        `归档影响行数不符：期望 ${uniqueIds.length}，实际 ${updated.length}（已回滚事务）`,
+      );
+    }
+
+    await this.logAudit({
+      action: 'resource_directory_assign',
+      teacherId: currentTeacherId,
+      program: target.program ?? undefined,
+      subject: target.subject ?? undefined,
+      success: true,
+      ipAddress: ip,
+      detail:
+        `批量归档 ${updated.length} 条到「${target.name}」（${target.code}）` +
+        (syncLegacy ? `，并同步 legacy folder_type → ${String(targetFolderType)}` : '，未改动 legacy folder_type'),
+    });
+
+    return {
+      assigned: updated.length,
+      folderTypeUpdates: syncLegacy ? updated.length : 0,
+      directoryCode: target.code,
+    };
+  }
+
 }

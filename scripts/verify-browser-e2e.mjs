@@ -255,30 +255,38 @@ try {
   else bad('登录后进入工作台', home.slice(0, 90));
 
   // ---- 3. §16：第 51 条之后的资源要能通过「加载更多」到达 ----
-  // /prek/montessori 渲染的是**子科目录**（日常生活/感官/…），资料夹要选定子科后才出现。
-  // 因此先进入子科，再切到条目最多的「课件与示范」（该子科 79 条 > 50，
-  // 正是能暴露"被截断在第 51 条"的用例）。
   //
-  // 上一轮这里是 SKIP：用 DOM 的 `el.click()` 点标签连续 3 次都没让内容切换。
-  // 现在改用 CDP 真实鼠标事件（clickText），把这一点变成可判定 ——
+  // 用例对象是 `prek:montessori` 子树（本机 292 条 > 50），足以暴露
+  // "被截断在第 51 条"这个缺陷。
+  //
+  // 上一轮这里用 DOM 的 `el.click()` 点标签连续 3 次都没让内容切换，于是写成 SKIP；
+  // 后来改用 CDP 真实鼠标事件（clickText）把它变成可判定 ——
   // 「点不动」和「分页坏了」是两件事，不能用一个 SKIP 含糊过去。
-  await goto('/prek/montessori/practical-life', 5500);
-  const tabClicked = await clickText(
-    '课件与示范|Courseware',
-    `(() => {
-       const el = [...document.querySelectorAll('[role=tab]')]
-         .find((e) => /课件与示范|Courseware/.test(e.innerText || ''));
-       return !!el && (el.getAttribute('aria-selected') === 'true' || el.getAttribute('data-state') === 'active');
-     })()`,
-  );
-  if (!tabClicked.clicked) {
-    bad('§16 能点到「课件与示范」标签', tabClicked.reason);
-  } else if (tabClicked.effect !== 'OK') {
-    bad('§16 点击「课件与示范」后该标签进入选中态', `clicked=${tabClicked.text} effect=${tabClicked.effect}`);
+  //
+  // ⚠️ 这一条在本轮又被改写一次：以前它点的是**六个 legacy 资料夹标签**里的
+  // 「课件与示范」。§4/§7 之后浏览视图不再有那六个标签 —— PDF 只规定四个资料夹
+  // （课程大纲 / 教学详案 / 教学资源 / 考核评估），它们现在是**卡片**而不是 Radix Tabs。
+  //
+  // 但这一条要验的**能力没有变**：第 51 条之后的资源必须可达。
+  // 所以改走新的浏览路径，并把"点得动"的断言换成等价强度的新断言：
+  // 点资料夹**卡片**要真的跳进去。
+  await goto('/directory/prek/montessori', 5500);
+  //
+  // 点击目标用**选择器**定位，不靠文字匹配：卡片标题在 `h3[data-testid]` 里，
+  // 而 `clickText` 走的是"找到含这段文字的**最近可点元素**"，遇到容器层级变化就会
+  // 找不到（第一版就是这么 NOT_FOUND 的）。选择器是稳定的。
+  const cardClicked = await clickSelector('[data-dir-card$="_resource"]');
+  if (!cardClicked.clicked) {
+    bad('§16 能点到资料夹卡片', String(cardClicked.reason));
   } else {
-    ok('§16 点击「课件与示范」后该标签进入选中态', tabClicked.text);
-    // 轮询而不是固定 4 秒：79 条的分页文案要等数据回来才渲染，
-    // 固定等待会把"慢"误报成"坏"。超时后把真实文本打出来，便于定位。
+    const intoFolder = await waitFor("location.pathname.includes('_resource')", 15000);
+    if (intoFolder.ok) ok('§16 点资料夹卡片后真的进入了该资料夹', await evalIn('location.pathname'));
+    else bad('§16 点资料夹卡片后真的进入了该资料夹', await evalIn('location.pathname'));
+  }
+
+  // 回到科目页：**子树资源列表**（含挂在科目层的历史数据）才是分页用例的对象。
+  await goto('/directory/prek/montessori', 5500);
+  {
     const readPager = `(() => {
       const txt = document.getElementById('root')?.innerText || '';
       const m = txt.match(/已显示\\s*(\\d+)\\s*\\/\\s*共\\s*(\\d+)\\s*条/);
@@ -302,21 +310,36 @@ try {
         // 第 2 页加载完后 total(79) 不再 > resources.length(79)，那一行会正确地
         // 整块消失 —— 于是读文案会得到 null，把成功误判成失败。
         // 卡片个数才是"第 51 条之后是否真的出现"的直接证据。
-        const cardsBefore = await evalIn(
+        const countCards = () => evalIn(
           "document.querySelector('[data-testid=\"resource-list\"]')?.children.length ?? 0");
-        const clicked = (await clickText('加载更多|Load more')).clicked;
-        const grew = await waitFor(
-          `(document.querySelector('[data-testid="resource-list"]')?.children.length || 0) > ${cardsBefore}`,
-          20000,
-        );
-        const cardsAfter = await evalIn(
-          "document.querySelector('[data-testid=\"resource-list\"]')?.children.length ?? 0");
-        if (clicked && grew.ok && cardsAfter >= total) {
-          ok('§16 点「加载更多」后资源卡片增加且达到总数（第 51 条之后可达）',
-            `卡片 ${cardsBefore} → ${cardsAfter}（共 ${total} 条）`);
+        const cardsBefore = await countCards();
+        /**
+         * 一页是 50 条，而这个子树本机有 292 条 —— **点一次到不了底**。
+         * 第一版沿用旧数据（79 条 = 2 页）的假设，断言"点一次就达到总数"，
+         * 于是它必然失败。要验的能力是「第 51 条之后可达」，
+         * 所以这里反复点、每次都必须**真的涨**，上限 10 次以防死循环。
+         */
+        let clicks = 0;
+        let cardsAfter = cardsBefore;
+        let grewEachTime = true;
+        while (cardsAfter < total && clicks < 10) {
+          const before = cardsAfter;
+          const clicked = (await clickText('加载更多|Load more')).clicked;
+          if (!clicked) { grewEachTime = false; break; }
+          const grew = await waitFor(
+            `(document.querySelector('[data-testid="resource-list"]')?.children.length || 0) > ${before}`,
+            20000,
+          );
+          if (!grew.ok) { grewEachTime = false; break; }
+          cardsAfter = await countCards();
+          clicks += 1;
+        }
+        if (grewEachTime && cardsAfter >= total) {
+          ok('§16 反复点「加载更多」后资源卡片达到总数（第 51 条之后可达）',
+            `卡片 ${cardsBefore} → ${cardsAfter}（共 ${total} 条，点了 ${clicks} 次）`);
         } else {
-          bad('§16 点「加载更多」后资源卡片增加且达到总数',
-            `clicked=${clicked} 卡片 ${cardsBefore} → ${cardsAfter} 期望 ${total}`);
+          bad('§16 反复点「加载更多」后资源卡片达到总数',
+            `点了 ${clicks} 次，卡片 ${cardsBefore} → ${cardsAfter} 期望 ${total}，每次都涨=${grewEachTime}`);
         }
       } else {
         bad('§16 总数超过一页（用例有效：>50）', String(total));
@@ -338,7 +361,8 @@ try {
   // 于是断言读到加载态而误判成"目录页坏了"（第一次对生产跑就是这样，7 条全红）。
   // 但也不能无限等：真失败时要快速落到失败分支，由页面自己的报错文案给出原因。
   await goto(
-    '/directory',
+    // §3/§11：管理树已移到 /directory/manage。
+    '/directory/manage',
     6000,
     "!!document.querySelector('[data-testid=\"directory-tree\"]')" +
       " || /目录加载失败|Failed to load/.test(document.getElementById('root')?.innerText || '')",
@@ -419,7 +443,7 @@ try {
   // 这一条补的是"接口通过 ≠ 界面能用"：按钮要出现、表单要能输入、
   // 提交后**树里真的多出这个节点**、删掉后**真的少掉** —— 全程只看 DOM。
   await goto(
-    '/directory',
+    '/directory/manage',
     6000,
     "!!document.querySelector('[data-testid=\"directory-tree\"]')",
   );

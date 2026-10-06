@@ -168,14 +168,49 @@ let secondCode = null;
 }
 
 // ---------------------------------------------------------------------------
-// 5. 系统节点不可改名/删除（这是"可编辑"最危险的边界）
+// 5. 系统节点：**可改名**，但不可删；code 永远是稳定标识
 // ---------------------------------------------------------------------------
+//
+// ⚠️ 这一节的规则在本轮被业主明确改写过（§5 原话：
+//    「不要再使用 `isSystem => 不允许改名` —— 这是之前擅自增加的限制，不是业主要求。
+//      显示名称可以改；内部稳定 code / id 不变」）。
+//
+// 所以断言从"改名必须 403"改成**三条更精确的断言**：
+//   ① 改名成功（200）；
+//   ② 名字真的变了；
+//   ③ **code 一个字都没变** —— 这才是真正需要保护的稳定标识。
+// 只断言"能改"是不够的：一个把 code 也一起改掉的实现同样会让它通过，
+// 而 code 一变，历史资源归属、审计记录、旧 URL 全部对不上。
+//
+// 跑完恢复原名，避免污染后续断言与开发库。
 {
-  console.log('\n5) PDF 的系统节点不可改、不可删');
-  const ren = await principal.req('PATCH', '/api/directories/node/prek:virtue', {
-    name: '被改掉的美德',
+  console.log('\n5) 系统节点：可改名、code 不变、不可删');
+  // ⚠️ 探针节点选 **`growth:l2`**，不选 `prek:virtue` —— 这是一条真实的隔离教训。
+  //
+  // 第一版改的是 `prek:virtue`（跑完还原）。它单独跑完全正确，但在门禁里
+  // 与其它套件共存时出过一次假红：`ia-consolidation` 断言侧边栏显示「美德」，
+  // 却读到了改名的中间态。根因是**改一个别的套件正在断言的共享节点** ——
+  // 这个节点是全库唯一一份，任何"改了再还原"的窗口对别人都是可见的。
+  // `growth:l2` 同属正式目录（isSystem=true），改名规则完全一样，
+  // 但没有任何其它套件断言它的显示名，于是窗口期不会伤到别人。
+  const PROBE_CODE = 'growth:l2';
+  const PROBE_ENC = 'growth%3Al2';
+  const before = await principal.req('GET', `/api/directories/node?code=${PROBE_ENC}`);
+  const originalName = before.d?.node?.name ?? before.d?.name ?? 'L2 独立胜任';
+
+  const ren = await principal.req('PATCH', `/api/directories/node/${PROBE_CODE}`, {
+    name: '被改掉的名字',
   });
-  check('改系统节点名 → 403', ren.s, 403);
+  check('§5 改系统节点名 → 200（不再是 403）', ren.s, 200);
+  check('§5 名字确实变了', ren.d?.name, '被改掉的名字');
+  check('§5 code 未被改动（稳定标识受保护）', ren.d?.code, PROBE_CODE);
+
+  const restore = await principal.req('PATCH', `/api/directories/node/${PROBE_CODE}`, {
+    name: originalName,
+  });
+  check('§5 恢复原名 → 200', restore.s, 200);
+  check('§5 恢复后名字回到原值', restore.d?.name, originalName);
+  check('§5 恢复后 code 仍未变', restore.d?.code, PROBE_CODE);
 
   const del = await principal.req('DELETE', '/api/directories/node/prek:virtue');
   check('删系统节点 → 403', del.s, 403);

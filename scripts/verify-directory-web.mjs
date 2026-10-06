@@ -15,6 +15,7 @@
  *
  * 断言策略：每一步都问"**发生了什么**"，而不是"我点了什么按钮"。
  */
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -204,7 +205,9 @@ async function main() {
   // ---- 2. 在界面上新建一个目录 ----
   console.log('\n2) 在界面上新建目录');
   if (FAILED === 0) {
-    await openPath('/directory', '!!document.querySelector("[data-dir-code]")');
+        // §3/§11：目录页现在**默认是浏览视图**；管理树移到了 `/directory/manage`。
+    // 这个套件验证的是"管理能力"，所以走管理地址。地址变了，断言强度没有降低。
+await openPath('/directory/manage', '!!document.querySelector("[data-dir-code]")');
     const hasTree = await evalIn('!!document.querySelector("[data-dir-code]")');
     if (hasTree) ok('目录页渲染出目录树');
     else bad('目录页渲染出目录树');
@@ -323,7 +326,7 @@ async function main() {
         let n = c;
         for (let i = 0; i < 6 && n; i += 1) {
           n = n.parentElement;
-          if (n && n.querySelector('label')) return (n.querySelector('label').innerText || '').includes('目录归属');
+          if (n && n.querySelector('label')) return (n.querySelector('label').innerText || '').includes('所属目录');
         }
         return false;
       });
@@ -334,14 +337,14 @@ async function main() {
       return 'OPENED';
     })()`);
     if (opened !== 'OPENED') {
-      bad('上传页能打开「目录归属」下拉', String(opened));
+      bad('上传页能打开「所属目录」下拉', String(opened));
     } else {
       const listed = await waitFor(
         `[...document.querySelectorAll('[role=option]')].some((o) => (o.innerText || '').includes(${JSON.stringify(folderName)}))`,
         15000,
       );
-      if (listed.ok) ok('新目录出现在上传页的「目录归属」候选里（没有改过任何代码）', folderName);
-      else bad('新目录出现在上传页的「目录归属」候选里（没有改过任何代码）', folderName);
+      if (listed.ok) ok('新目录出现在上传页的「所属目录」候选里（没有改过任何代码）', folderName);
+      else bad('新目录出现在上传页的「所属目录」候选里（没有改过任何代码）', folderName);
     }
   } else {
     skip('上传页出现新目录', '未成功创建目录');
@@ -350,11 +353,14 @@ async function main() {
   // ---- 5. 目录页面能查到属于该目录的资源（用户要求第 3 条）----
   console.log('\n5) 目录页面能查到属于该目录的资源（硬要求 3）');
   if (createdFolderCode) {
+    // §8：必须带 directoryId（取「教学详案」，与原 legacy folderType
+    // 'weekly_plans' 是同一类；§7 之后该字段由服务端按目录推导）。
+    const dirProbeA = await folderIdFor(c, { program: 'prek', subject: 'virtue', suffix: 'lesson' });
     const created = await c.req('POST', '/api/resources', {
       title: `目录归属探针 ${stamp}`,
       program: 'prek',
       subject: 'virtue',
-      folderType: 'weekly_plans',
+      directoryId: dirProbeA,
       status: 'published',
     });
     const rid = created.d?.id ?? created.d?.resource?.id ?? null;
@@ -382,6 +388,7 @@ async function main() {
         // （program=prek、subject=english）。写错 subject 会得到一个**正确**的 400
         // 「未知的子科目」——第一版就是这么把自己的笔误报成"功能坏了"的。
         const relink = await c.req('POST', '/api/resources', {
+          directoryId: dirProbeA,
           title: `目录归属探针B ${stamp}`,
           program: 'prek',
           subject: 'english',
@@ -417,7 +424,7 @@ async function main() {
         if (!ridB) {
           skip('界面上点开目录名看到资源', '未成功把资源归属到新目录');
         } else {
-          await openPath('/directory', `!!document.querySelector('[data-testid="directory-tree"]')`);
+          await openPath('/directory/manage', `!!document.querySelector('[data-testid="directory-tree"]')`);
           const hint = await evalIn(`!!document.querySelector('[data-testid="directory-browse-hint"]')`);
           if (hint) ok('目录页说明了"点目录名可查看资源"');
           else bad('目录页说明了"点目录名可查看资源"', '没有 directory-browse-hint');
@@ -488,7 +495,7 @@ async function main() {
     if (!fA.code || !fB.code) {
       skip('排序 / 启停 / 中英文名', `第二个兄弟目录没建出来（A=${fA.status} B=${fB.status}）—— 只有一个子节点时排序无从验证`);
     } else {
-      await openPath('/directory', `!!document.querySelector('[data-testid="directory-tree"]')`);
+      await openPath('/directory/manage', `!!document.querySelector('[data-testid="directory-tree"]')`);
       const reveal = `[data-testid="directory-browse"][data-dir-browse="${fA.code}"]`;
       await expandUntil(reveal, 12);
 

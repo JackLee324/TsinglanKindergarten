@@ -642,6 +642,19 @@ export function roleDefaults(roles: readonly RoleCode[]): Set<PermissionCode> {
 
 export type ScopeKind = 'ALL' | 'PROGRAM' | 'SUBJECT' | 'OWN';
 
+/**
+ * `ScopeKind` 的**运行时可枚举形式**，供 DTO 校验与界面下拉使用。
+ *
+ * 为什么需要它：`ScopeKind` 是类型（编译期就没了），而 `@IsIn(...)` 与
+ * `<Select>` 的选项需要真实数组。手写一份 `['ALL','PROGRAM','SUBJECT','OWN']`
+ * 就成了第二份真相 —— 哪天联合类型多一个成员，这里会静默少一个，
+ * 表现为"界面里选不到那个范围"，而不是报错。
+ *
+ * `as const satisfies` 让二者**互相约束**：数组少成员 → 类型不满足；
+ * 联合类型多成员 → 也编译不过。
+ */
+export const SCOPE_KINDS = ['ALL', 'PROGRAM', 'SUBJECT', 'OWN'] as const satisfies readonly ScopeKind[];
+
 // ProgramCode is declared in ./curriculum.ts, next to the subject / sub-subject /
 // folder vocabulary it belongs with, and re-exported here so every existing
 // `import type { ProgramCode } from '@shared/rbac'` call site keeps working.
@@ -668,12 +681,47 @@ export type { ProgramCode };
  * layer exactly as before. This preserves existing behaviour for the 20 seeded
  * accounts and for any data already in the database.
  */
-export interface ScopeBinding {
+/**
+ * `scopeSatisfies()` 真正读取的字段集合。
+ *
+ * 单独抽出来是为了**消除一处 `as` 强转**：以前它接收 `ScopeBinding`，
+ * 而 `ScopeBinding.program` 被写成了 `ProgramCode`（联合字面量），
+ * 于是"从数据库读回来的 program 是 string"这件事在每个调用点都要强转一次
+ * （`authorization.service.ts` 里那行 `as (ScopeBinding & { permission?: string })[]`
+ * 就是它的产物）。强转掩盖的正是"类型与数据不一致"这个事实本身。
+ * 判定逻辑其实只做**字符串比较**（`target.program !== binding.program`），
+ * 所以这里的 `program` 就是普通字符串。
+ */
+export interface ScopeEvaluable {
   kind: ScopeKind;
-  program?: ProgramCode;
-  subject?: string;
+  program?: ProgramCode | string | null;
+  subject?: string | null;
   subSubject?: string | null;
 }
+
+/** 参与判定的范围绑定（读模型）。 */
+export interface ScopeBinding extends ScopeEvaluable {
+  program?: ProgramCode;
+}
+
+/**
+ * 一条**可写**的范围绑定：比 `ScopeBinding` 多一个 `permission`。
+ *
+ * 为什么分成两个类型而不是给 `ScopeBinding` 加一个可选字段：
+ *   · `ScopeBinding` 是**求值**模型（`scopeSatisfies` 拿它对具体目标做判定），
+ *     在那里出现 `permission` 会让人以为判定要按权限分别处理，其实不是；
+ *   · `WritableScopeBinding` 是**存储 / 管理**模型：管理员在界面上配的是
+ *     "哪个权限、哪种范围"，而 `account_scopes.permission` 确实是库里的一列。
+ * `permission === null` 表示这条绑定对该账号的**所有数据权限**生效。
+ *
+ * 它**不继承** `ScopeBinding`：写路径上的 `program` 是用户输入的普通字符串
+ * （由服务层校验），而不是已经收敛好的 `ProgramCode`。硬套继承只会逼出一个
+ * 无处安放的强转。
+ */
+export interface WritableScopeBinding extends ScopeEvaluable {
+  permission?: string | null;
+}
+
 
 /** The concrete data a permission is being evaluated against. */
 export interface ScopeTarget {
@@ -685,7 +733,7 @@ export interface ScopeTarget {
 }
 
 export function scopeSatisfies(
-  binding: ScopeBinding,
+  binding: ScopeEvaluable,
   target: ScopeTarget,
   actorId: string,
 ): boolean {
@@ -723,8 +771,14 @@ export interface EffectivePermissions {
     granted: PermissionCode[];
     denied: PermissionCode[];
   };
-  /** Scope bindings; empty array means unrestricted (role default). */
-  scopes: ScopeBinding[];
+  /**
+   * 范围绑定；空数组表示不受限（按角色默认）。
+   *
+   * 类型是 `WritableScopeBinding` 而不是 `ScopeBinding`：库里这一行本来就有
+   * `permission` 列，读出来时丢掉它，管理界面就无法回答
+   * 「这条范围是给哪个权限配的」。
+   */
+  scopes: WritableScopeBinding[];
   /**
    * Monotonic version of this account's authorization state. A session is only
    * valid while the version matches, which is what makes "revoke permission ->

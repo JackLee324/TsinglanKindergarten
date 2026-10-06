@@ -160,6 +160,7 @@ async function mintToken(id) {
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const COVER_ASSETS_DIR = join(ROOT, 'server', 'assets', 'prek-english-covers');
@@ -196,12 +197,15 @@ try {
   check('login as principal', (await login(admin)).status, 201);
   const ownerId = (await req('GET', '/api/auth/me')).data?.id;
 
+  // §8：新建资源必须带 directoryId。资料夹 id 从目录树取，口径与页面、
+  // 服务端 `requireLeafFolder` 一致（见 tests/helpers/directory-fixture.mjs）。
+  const probeDirectoryId = await folderIdFor({ req }, { program: 'prek', subject: 'virtue' });
   const created = await req('POST', '/api/resources', {
     title: TITLE_PREFIX + ' lesson plan',
     titleEn: 'Files probe lesson plan',
     program: 'prek',
     subject: 'virtue',
-    folderType: 'curriculum_outline',
+    directoryId: probeDirectoryId,
     semester: 'S1',
     weekNumber: 1,
     description: 'created by scripts/verify-files-http.mjs',

@@ -1064,3 +1064,69 @@ WHERE revoked = false;
 `/api/health` 200、`/api/health/ready` 200（含 checks 明细）、`/api/auth/config` 200、
 未认证访问受保护资源 401、CSRF 四态 403/403/403/404、
 `node scripts/migrate.mjs status` 输出与退出码、`node scripts/verify-api-contracts.mjs` 通过。
+
+
+## 10. 生产高危运维功能：全量数据导出（`POST /api/admin/data-export`）
+
+> **标记：INTERNAL-ONLY / 生产高危运维功能（§14）。**
+> 它**刻意没有界面入口**，只有这一个 HTTP 接口。
+> 这不是"还没做完"，而是一个明确决定 —— 见下面"为什么不做界面"。
+
+### 10.1 它是什么
+
+把**整库**以 NDJSON（每行一张表一条记录）读走，用于异地备份与灾难恢复演练。
+它不是"导出审计日志"（那是界面上的审计页），也不是"导出某个科目的资源"。
+
+### 10.2 闸门（三重，全部在服务端）
+
+| 闸 | 实现 | 说明 |
+|---|---|---|
+| 身份 | `@RequireSuperAdmin()` | 不是"有某个权限"，而是**只有 super_admin**。它不经过角色权限表，也不可被 `permission.grant` 追加给别的角色 |
+| 会话 | 全局 `AuthGuard` | 强制 MFA 与"必须改过初始密码"同样适用；本路由**没有** `@MfaExempt` |
+| 方法 | **POST**，不是 GET | 应用对变更型请求做 CSRF 校验（`csrf-check.middleware.ts` 不覆盖 GET）。放在受保护的方法上，避免一次被诱导的 GET（图片标签 / 链接预取）就触发整库导出 |
+| 留痕 | 审计动作 `data_export` | 记录操作者、IP、表数与行数。事后要能回答"谁在什么时候把整库拉走了" |
+
+### 10.3 怎么调用
+
+```bash
+# 1) 先拿 CSRF + 登录（两步：密码 → TOTP）
+#    这里只给形状，具体 cookie 名以服务端实际下发为准
+curl -s -c jar.txt https://<host>/api/auth/csrf
+curl -s -b jar.txt -c jar.txt -X POST https://<host>/api/auth/login \
+  -H 'content-type: application/json' \
+  -H "x-suda-csrf-token: $(grep suda-csrf-token jar.txt | awk '{print $7}')" \
+  -d '{"username":"...","password":"..."}'
+# 2) 第二因素
+curl -s -b jar.txt -c jar.txt -X POST https://<host>/api/auth/mfa/verify \
+  -H 'content-type: application/json' \
+  -H "x-suda-csrf-token: $(grep suda-csrf-token jar.txt | awk '{print $7}')" \
+  -d '{"code":"123456"}'
+# 3) 导出（响应是 NDJSON 流）
+curl -s -b jar.txt -X POST https://<host>/api/admin/data-export \
+  -H 'content-type: application/json' \
+  -H "x-suda-csrf-token: $(grep suda-csrf-token jar.txt | awk '{print $7}')" \
+  -d '{}' -o prod-export-$(date +%Y%m%d_%H%M%S).ndjson
+```
+
+导出后**必须**：
+
+1. `chmod 600` 产物 —— 它包含整库明文（含教师姓名、审计日志）。
+2. 记下 sha256 与字节数，写进备份台账（见 `DISASTER_RECOVERY.md`）。
+3. 确认审计页出现一条 `data_export`。
+
+### 10.4 为什么不做界面入口
+
+§14 的原话是「必须有 UI 或明确标记为 internal-only，不要让它扩大范围」。
+这里选择**明确标记为 internal-only**，理由有三条，都是具体的：
+
+1. **它是一次性动作，不是日常操作。** 界面按钮会在值班时被误点，而它每被点一次，
+   整库明文就多离开平台一次。
+2. **结果无法在浏览器里使用。** 导出是几百 MB 的 NDJSON 流，浏览器下载之后
+   还是得放到服务器上做恢复演练 —— 界面不省任何一步。
+3. **界面会带来"顺手加功能"的压力。** 一旦有了按钮，下一步就会有人要求
+   "顺便支持只导出某几张表 / 按时间范围导出 / 加个定时"。它现在的价值恰恰在于
+   范围极小且不可配置：**要么整库，要么不导。**
+
+因此：**没有 UI，也不打算加。** 需要它的人本来就该有服务器 shell 权限。
+
+---

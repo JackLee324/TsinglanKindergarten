@@ -6,7 +6,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { and, eq, inArray, isNull, or, sql, gt } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import {
   DRIZZLE_DATABASE,
   type PostgresJsDatabase,
@@ -38,6 +38,7 @@ import {
   type PermissionCode,
   type ProgramCode,
   type ScopeBinding,
+  type WritableScopeBinding,
   type ScopeTarget,
   type EffectivePermissions,
 } from '@shared/rbac';
@@ -152,14 +153,15 @@ export class AuthorizationService {
       .from(accountScopes)
       .where(eq(accountScopes.teacherId, teacherId));
 
-    const scopes: ScopeBinding[] = scopeRows.map((s) => ({
+    const scopes: WritableScopeBinding[] = scopeRows.map((s) => ({
+      permission: s.permission ?? null,
       kind: s.kind as ScopeBinding['kind'],
-      program: (s.program ?? undefined) as ScopeBinding['program'],
+      program: s.program ?? null,
       subject: s.subject ?? undefined,
       subSubject: s.subSubject ?? null,
       // permission is carried through for targeted scoping
       ...(s.permission ? { permission: s.permission } : {}),
-    })) as ScopeBinding[];
+    }));
 
     return {
       teacherId,
@@ -212,9 +214,10 @@ export class AuthorizationService {
     // super_admin bypasses scope entirely (RBAC.md §3.1).
     if (authz.roles.includes(SUPER_ADMIN_ROLE)) return true;
 
-    const relevant = (authz.scopes as (ScopeBinding & { permission?: string })[]).filter(
-      (s) => !s.permission || s.permission === permission,
-    );
+    // 不再强转：`authz.scopes` 的类型本身就带 `permission`
+    // （库里的 `account_scopes.permission` 一直被读出来又被丢掉，
+    // 于是这里只能靠 `as` 把它"变"回来 —— 那是类型定义错了，不是用法特殊）。
+    const relevant = authz.scopes.filter((s) => !s.permission || s.permission === permission);
     if (relevant.length === 0) return true; // no binding => governed by subject_permissions
 
     return relevant.some((binding) => scopeSatisfies(binding, target, authz.teacherId));
@@ -433,6 +436,47 @@ export class AuthorizationService {
     for (const b of bindings) {
       if (b.permission && !isKnownPermission(b.permission)) {
         throw new BadRequestException(`未知权限：${b.permission}`);
+      }
+      /**
+       * **形状校验**：`kind` 决定了哪些字段必须/不得出现。
+       *
+       * WHY: 这条规则**已经**由数据库约束 `account_scopes_shape_check`
+       * （migration 0003）强制着 —— 但只靠它，非法输入会以 Postgres 的
+       * 约束违例冒上来，客户端收到的是 **500**，而不是"你少填了 subject"。
+       * 实测就是这么发现的：`{ kind: 'SUBJECT', program: 'prek' }`（缺 subject）
+       * 返回 500 —— 一次完全正常的表单错误被报成了服务端故障，
+       * 管理员看不出该改什么，监控上还多一条假告警。
+       *
+       * 所以这里**故意**把 DB 约束的规则在代码里再说一遍，但目的不同：
+       * DB 约束是**执行**，这段是**解释**。两者分叉会很难查（一边放行、一边 500），
+       * 因此 `tests/data-scope-shape.test.mjs` 用同一张真值表把两边钉在一起。
+       */
+      switch (b.kind) {
+        case 'ALL':
+        case 'OWN':
+          if (b.program || b.subject || b.subSubject) {
+            throw new BadRequestException(
+              `kind=${b.kind} 表示"全部"或"仅自己创建"，不能再指定 program / subject / subSubject`,
+            );
+          }
+          break;
+        case 'PROGRAM':
+          if (!b.program) {
+            throw new BadRequestException('kind=PROGRAM 必须指定 program（例如 prek / k）');
+          }
+          if (b.subject || b.subSubject) {
+            throw new BadRequestException('kind=PROGRAM 只能指定 program，不能同时指定 subject / subSubject');
+          }
+          break;
+        case 'SUBJECT':
+          if (!b.program || !b.subject) {
+            throw new BadRequestException(
+              'kind=SUBJECT 必须同时指定 program 与 subject（例如 prek + virtue）',
+            );
+          }
+          break;
+        default:
+          throw new BadRequestException(`未知的数据范围 kind：${String(b.kind)}`);
       }
     }
 

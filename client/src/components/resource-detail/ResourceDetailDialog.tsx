@@ -5,6 +5,7 @@ import { resources as resourcesApi } from '../../api';
 import { useTranslation } from '../../i18n/useTranslation';
 import type { TranslationKey } from '../../i18n/translations';
 import type { Resource, ResourceStatus, ResourceVersion } from '@shared/api.interface';
+import { useDirectory } from '@client/src/directory/DirectoryProvider';
 
 /**
  * 资源详情（§14）。
@@ -76,9 +77,33 @@ export function ResourceDetailDialog({
     return () => window.removeEventListener('keydown', onKey);
   }, [resourceId, onClose]);
 
+  /**
+   * 这份资源所属目录的**完整路径**（从根到该节点），名字直接来自目录树。
+   *
+   * 为什么用路径而不是单个节点名：`prek:virtue_outline` 之类只显示「课程大纲」
+   * 的话，四个科目的资料夹长得一模一样，看不出它属于哪个科目。
+   * `useDirectory()` 是全站唯一的前端目录数据源 —— 侧边栏、首页、面包屑、
+   * 上传页读的都是它，所以这里显示的名字与它们必然一致（§2）。
+   *
+   * ⚠️ 这个 hook **必须在下面那个 `if (resourceId === null) return null` 之前**。
+   * 第一版我把它放在了后面 —— 那正是上一轮在 `DirectoryBrowser` 里踩过的同一个坑：
+   * 首帧（resourceId 为 null）提前 return 不调用它，第二帧才调用，
+   * React 报 "Rendered more hooks than during the previous render"，整个详情弹窗炸掉。
+   */
+  const { pathTo, byId } = useDirectory();
+
   if (resourceId === null) return null;
 
   const dash = t('detail.notProvided');
+
+  const directoryPath = (() => {
+    const id = resource?.directoryId;
+    if (id === null || id === undefined) return '';
+    // 资源存的是 directoryId，先反查节点，再取祖先链。
+    const node = byId.get(id);
+    if (node === undefined) return '';
+    return pathTo(node.code).map((n) => n.name).join(' / ');
+  })();
 
   return (
     <div
@@ -133,6 +158,19 @@ export function ResourceDetailDialog({
               <Field label={t('detail.program')}>{resource.program}</Field>
               <Field label={t('detail.subject')}>
                 {resource.subSubject ? `${resource.subject} / ${resource.subSubject}` : resource.subject}
+              </Field>
+              {/*
+                §2：改目录名之后，**详情页也必须同步**。
+                这一格以前**根本不存在** —— 详情里只有 legacy 的 `folderType`
+                （六个历史值之一），完全没有"这份资源属于目录树的哪个节点"。
+                于是管理员把「美德」改成「美德课程」，详情页看不出任何变化。
+                这里显示目录树的**完整路径**（从根到该节点），名字取自数据库，
+                因此与侧边栏、首页、面包屑天然一致。
+              */}
+              <Field label={t('detail.directory')}>
+                <span data-testid="detail-directory">
+                  {directoryPath !== null && directoryPath !== '' ? directoryPath : dash}
+                </span>
               </Field>
               <Field label={t('detail.folderType')}>{resource.folderType}</Field>
               <Field label={t('detail.semester')}>

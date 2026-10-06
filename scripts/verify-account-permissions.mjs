@@ -166,6 +166,121 @@ try {
   check('追加 role.assign 并重登后，同样的改角色请求 → 200（证明这条权限真的在起作用）',
     afterGrant.s, 200);
 
+  // ---- 5b. §12 数据范围（ALL / PROGRAM / SUBJECT / OWN）可查看、可编辑 ----
+  //
+  // WHY 这一段在这里：`AuthorizationService.setScopes()` 与 `account_scopes` 表
+  // 早就存在，但**长期没有任何 API 或界面能调用它们** —— 于是"把某位主任的数据范围
+  // 限制到只有 Pre-K"这件事，在库里定义完整、在界面上完全不可达。
+  // 本轮补了 `GET/POST /api/teachers/:id/scopes` 与权限面板里的编辑区；
+  // 这一段就是它的自动化回归 —— 没有它，将来一次改动可以静默把这条能力改坏。
+  console.log('\n5b) §12 数据范围：查看与编辑');
+  {
+    const before = await principal.req('GET', `/api/teachers/${targetId}/scopes`);
+    check('GET scopes → 200 且形如 { scopes: [...] }', before.s === 200 && Array.isArray(before.d?.scopes), true);
+    check('  → 新账号默认没有任何显式绑定（空数组 = 按角色默认）', before.d?.scopes?.length, 0);
+
+    const set1 = await principal.req('POST', `/api/teachers/${targetId}/scopes`, {
+      scopes: [{ permission: null, kind: 'PROGRAM', program: 'prek' }],
+    });
+    check('POST scopes（PROGRAM / prek）→ 201', set1.s, 201);
+    check('  → 返回值就是新的绑定集合', JSON.stringify(set1.d?.scopes), JSON.stringify([
+      { permission: null, kind: 'PROGRAM', program: 'prek', subSubject: null },
+    ]));
+
+    // 必须**从生效权限快照里也读得到** —— 只回显写入内容不算数。
+    const eff = await principal.req('GET', `/api/teachers/${targetId}/effective-permissions`);
+    const effScopes = eff.d?.scopes ?? [];
+    check('  → 生效权限快照里也带上了这条绑定（不是只回显）',
+      effScopes.some((x) => x.kind === 'PROGRAM' && x.program === 'prek'), true);
+
+    // 换成 SUBJECT，并把 permission 绑定到具体权限码上 —— 整表替换语义。
+    const set2 = await principal.req('POST', `/api/teachers/${targetId}/scopes`, {
+      scopes: [{ permission: 'resource.view', kind: 'SUBJECT', program: 'prek', subject: 'virtue' }],
+    });
+    check('POST scopes（SUBJECT / prek:virtue，绑定到 resource.view）→ 201', set2.s, 201);
+    check('  → 旧绑定被替换掉（整表替换，不是追加）', JSON.stringify(set2.d?.scopes), JSON.stringify([
+      { permission: 'resource.view', kind: 'SUBJECT', program: 'prek', subject: 'virtue', subSubject: null },
+    ]));
+
+    /**
+     * 形状真值表 —— 逐个形状真的发给服务端。
+     *
+     * 这张表与 `tests/data-scope-shape.test.mjs` 里那张、以及数据库约束
+     * `account_scopes_shape_check` 是同一条规则的三处表述。
+     * 之所以用 12 个请求把它全跑一遍，而不是只测"四种 kind 都能用"：
+     * 加这一段之前，`kind=SUBJECT` 缺 `subject` **返回 500** ——
+     * 数据库约束把它拦下了，但客户端拿到的是服务端故障而不是"你少填了 subject"。
+     * 只测合法形状的用例**永远发现不了这个**。
+     */
+    const SHAPES = [
+      ['ALL',     null,   null,     null,   true,  '全部'],
+      ['ALL',     'prek', null,     null,   false, 'ALL 不能带 program'],
+      ['ALL',     null,   'virtue', null,   false, 'ALL 不能带 subject'],
+      ['OWN',     null,   null,     null,   true,  '仅自己创建'],
+      ['OWN',     null,   'virtue', null,   false, 'OWN 不能带 subject'],
+      ['PROGRAM', 'prek', null,     null,   true,  '按班型'],
+      ['PROGRAM', null,   null,     null,   false, 'PROGRAM 缺 program'],
+      ['PROGRAM', 'prek', 'virtue', null,   false, 'PROGRAM 不能带 subject'],
+      ['PROGRAM', 'prek', null, 'practical_life', false, 'PROGRAM 不能带 subSubject'],
+      ['SUBJECT', 'prek', 'virtue', null,   true,  '按科目'],
+      ['SUBJECT', 'prek', null,     null,   false, 'SUBJECT 缺 subject'],
+      ['SUBJECT', null,   'virtue', null,   false, 'SUBJECT 缺 program'],
+    ];
+    for (const [kind, program, subject, subSubject, legal, label] of SHAPES) {
+      const r = await principal.req('POST', `/api/teachers/${targetId}/scopes`, {
+        scopes: [{ permission: null, kind, program, subject, subSubject }],
+      });
+      if (legal) {
+        check(`形状 ${label}（${kind}）→ 201`, r.s, 201);
+      } else {
+        // 非法形状必须是 **400**，而不是 500。
+        // 500 意味着"约束在数据库层才被拦下"，客户端拿不到可读原因 ——
+        // 这正是这一段要防的回归。
+        check(`形状 ${label}（${kind}）→ 400（不是 500）`, r.s, 400);
+        check(`  → ${label} 给出了可读原因`,
+          typeof r.d?.error?.message === 'string' && r.d.error.message.length > 0, true);
+      }
+    }
+
+    // 拒绝路径。这三条都要**具体**断言，不能只看"失败了"。
+    const unknownPerm = await principal.req('POST', `/api/teachers/${targetId}/scopes`, {
+      scopes: [{ permission: 'not.a.permission', kind: 'ALL' }],
+    });
+    check('未知权限码 → 400', unknownPerm.s, 400);
+    check('  → 报的是"未知权限"而不是笼统的 400',
+      /未知权限/.test(String(unknownPerm.d?.error?.message ?? '')), true);
+
+    const badKind = await principal.req('POST', `/api/teachers/${targetId}/scopes`, {
+      scopes: [{ kind: 'NOWHERE' }],
+    });
+    check('非法 kind → 400', badKind.s, 400);
+
+    // `scopes` 必传：省略与"清空"必须能区分，否则一次漏传字段的请求会静默
+    // 把人的数据范围放大到角色默认 —— 那是**扩大**权限的方向。
+    const omitted = await principal.req('POST', `/api/teachers/${targetId}/scopes`, {});
+    check('省略 scopes 字段 → 400（省略 ≠ 清空）', omitted.s, 400);
+
+    // 清空：显式空数组 = 回到角色默认。
+    const cleared = await principal.req('POST', `/api/teachers/${targetId}/scopes`, { scopes: [] });
+    check('POST scopes（空数组）→ 201', cleared.s, 201);
+    check('  → 显式清空后绑定为空（回到角色默认）', cleared.d?.scopes?.length, 0);
+
+    // 权限闸：`permission.grant` 是写路径的门槛。操作者此时已被追加 role.assign，
+    // 但**没有** permission.grant —— 它必须被挡住。
+    const actorWrite = await actor2.req('POST', `/api/teachers/${targetId}/scopes`, {
+      scopes: [{ permission: null, kind: 'ALL' }],
+    });
+    check('无 permission.grant 的账号写 scope → 403', actorWrite.s, 403);
+    // 读路径的门槛是 `permission.view`，与"登录了"无关。
+    //
+    // ⚠️ 第一版这里断言的是 200，**是我写错了**：这个操作者默认角色是 prek_head，
+    // 而 `permission.view` 只在 principal / curriculum_director / super_admin 手上。
+    // 403 才是对的 —— 而且它恰好是更有价值的一条断言：证明这条路由是
+    // "按能力"而不是"按是否登录"守的。（前面 `principal` 读成功那条已覆盖 200 分支。）
+    const actorRead = await actor2.req('GET', `/api/teachers/${targetId}/scopes`);
+    check('无 permission.view 的账号读 scope → 403（按能力守，不是按登录守）', actorRead.s, 403);
+  }
+
   // ---- 6. 审计：每次授权变更都留痕 ----
   if (DB_URL) {
     console.log('\n6) 授权变更必须留审计');
@@ -179,6 +294,18 @@ try {
     const joined = rows.map((r) => String(r.detail)).join(' | ');
     check('  → 审计里记录了权限码', /role\.assign/.test(joined), true);
     check('  → 审计里记录了生效方向（追加/禁止/清除）', /(追加授权|显式禁止|清除覆盖项)/.test(joined), true);
+
+    // §12：数据范围变更与覆盖项变更是**同一类事**（都改了某个账号的授权），
+    // 所以复用同一个动作码 `permission_change`。这里验证它真的被记下来了 ——
+    // 否则"谁把谁的数据范围缩小到了哪个班型"事后查不到。
+    const scopeRows = await sql`
+      select detail from audit_logs
+       where action = 'permission_change' and teacher_id = ${targetId}
+       order by _created_at desc limit 20`;
+    const scopeJoined = scopeRows.map((r) => String(r.detail)).join(' | ');
+    check('数据范围变更也进了 permission_change 审计', scopeJoined.includes('设置数据范围'), true);
+    check('  → 审计里写出了范围与目标（kind / program）',
+      /PROGRAM\/prek|SUBJECT\/prek\/virtue|ALL|OWN/.test(scopeJoined), true);
     await sql.end();
   } else {
     console.log('\n6) 跳过审计检查（未设置 DATABASE_URL）');

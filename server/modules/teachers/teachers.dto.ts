@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsIn,
@@ -12,6 +13,8 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { SCOPE_KINDS } from '@shared/rbac';
+import type { ScopeKind } from '@shared/rbac';
 import type {
   CreateTeacherRequest,
   ProgramCode,
@@ -174,4 +177,55 @@ export class PermissionOverrideDto {
   @IsString()
   @MaxLength(500)
   reason?: string;
+}
+
+/**
+ * §12 一条数据范围绑定（写模型）。
+ *
+ * `kind` 用 `@IsIn(['ALL','PROGRAM','SUBJECT','OWN'])` 而不是 `@IsEnum`：
+ * 这四个值是 `shared/rbac.ts` 里的 `ScopeKind` 联合类型，不是 TS enum ——
+ * 枚举字面量在这里会变成**第二份真相**。用数组常量，且引用同一处定义。
+ */
+export class ScopeBindingDto {
+  /**
+   * 该绑定作用于哪个权限；省略 = 对该账号的**所有数据权限**生效。
+   * 值必须是权限目录里的真实权限码，由服务层用 `isKnownPermission` 校验。
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  permission?: string | null;
+
+  @IsIn(SCOPE_KINDS)
+  kind!: ScopeKind;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(16)
+  program?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  subject?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  subSubject?: string | null;
+}
+
+/**
+ * §12 整表替换数据范围。
+ *
+ * `scopes` **必传**（哪怕是空数组）：省略与"清空"必须能区分 ——
+ * 允许省略的话，一次忘记带字段的请求会静默把人的数据范围放大到角色默认，
+ * 而那是**扩大权限**的方向，不能靠"调用方大概会传"来兜底。
+ */
+export class SetScopesDto {
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => ScopeBindingDto)
+  scopes!: ScopeBindingDto[];
 }

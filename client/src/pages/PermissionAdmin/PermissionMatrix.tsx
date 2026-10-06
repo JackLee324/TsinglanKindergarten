@@ -30,7 +30,7 @@ const PermissionMatrix: React.FC<PermissionMatrixProps> = ({
   permissions,
   isAutoGranted,
   onPermChange,
-  selectedTeacherId,
+  selectedTeacherId: _selectedTeacherId,
 }) => {
   const { t, language } = useTranslation();
 

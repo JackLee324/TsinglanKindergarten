@@ -1,6 +1,5 @@
 import React from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
 
 import type { RoleCode } from '@shared/api.interface';
 import { hasAnyRole } from '@shared/rbac';

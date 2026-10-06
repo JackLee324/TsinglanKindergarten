@@ -77,4 +77,19 @@ module.exports = tseslint.config(
     files: ['tests/**/*.mjs'],
     languageOptions: { sourceType: 'module' },
   },
+  {
+    /**
+     * `server/database/schema.ts` 是 **drizzle-kit 生成的**（首行就写着
+     * "auto generated, do not edit"）。它带一句整体 `/* eslint-disable *\/`，
+     * 而当前恰好没有任何规则会在这个文件里报错 —— 于是 ESLint 把那条指令
+     * 判成"没用上"。
+     *
+     * 不改文件本身：下次重新生成会把它原样写回来，那种"改完就消失"的修复
+     * 只是把问题藏一轮。也不全局关掉 `reportUnusedDisableDirectives` ——
+     * 那会连带掩盖手写文件里真正多余的指令（本轮刚清掉 4 条）。
+     * 只对这个生成物关掉，范围恰好等于它。
+     */
+    files: ['server/database/schema.ts'],
+    linterOptions: { reportUnusedDisableDirectives: 'off' },
+  },
 );

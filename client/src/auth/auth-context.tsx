@@ -62,7 +62,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
       setUser(null);
       return false;
-    } catch (err) {
+    } catch {
       logger.warn('[Auth] Failed to fetch current user (network error), keeping state');
       return false;
     }

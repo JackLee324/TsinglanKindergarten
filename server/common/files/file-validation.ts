@@ -112,7 +112,6 @@ export function maxUploadBytes(): number {
  *   * the Unicode line/paragraph separators, which some log and header parsers
  *     treat as line breaks.
  */
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 const UNSAFE_CHARS = /[\\/<>:"|?*`'"\u2028\u2029]/g;
 
@@ -231,7 +230,6 @@ export function sanitizeFileName(rawName: unknown): string {
 export function isPathTraversalSafe(storedPath: unknown): boolean {
   if (typeof storedPath !== 'string') return false;
   if (storedPath.length === 0 || storedPath.length > 500) return false;
-  // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f-\u009f]/.test(storedPath)) return false;
   if (/^[a-zA-Z]:/.test(storedPath)) return false;
   // Any leading backslash, and doubled leading separators, are not platform key

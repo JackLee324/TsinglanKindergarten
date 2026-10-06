@@ -102,6 +102,16 @@ export default function DirectoryPage() {
    * 英文界面（en-US）读 `nameEn`，丢掉它就等于英文界面看不到自己改的名字。
    */
   const [draftNameEn, setDraftNameEn] = useState<string>('');
+  /**
+   * 中文说明（§5「说明/内容可编辑」）。
+   *
+   * ⚠️ 这一格此前**根本不存在**：数据库有 `directories.description` 列、
+   * 服务层也接受并写入它，但管理界面只有名称与英文名两个输入框 ——
+   * 于是"说明"在界面上**完全不可编辑**。一个"库里支持、界面上够不着"的字段，
+   * 等价于没有。§16 把"目录说明可编辑"单独列成一条验收项，正是因为这种
+   * "后端有、前端没有"的半成品最难被发现：接口测试全绿。
+   */
+  const [draftDescription, setDraftDescription] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -113,6 +123,10 @@ export default function DirectoryPage() {
         return;
       }
       const nameEn = draftNameEn.trim();
+      // 说明可以留空 —— 留空表示**清空说明**（服务端把空串落成 NULL）。
+      // 所以这里总是把输入框的当前值传下去，让"清空"成为一个可执行的操作，
+      // 而不是靠"不传字段"来表达（那会变成"不改动"，两者语义完全不同）。
+      const description = draftDescription.trim();
       setBusy(true);
       setActionError(null);
       try {
@@ -129,11 +143,13 @@ export default function DirectoryPage() {
           await directoriesApi.updateDirectoryNode(parentOrSelfCode, {
             name,
             ...(nameEn === '' ? {} : { nameEn }),
+            description,
           });
         }
         setEditing(null);
         setDraftName('');
         setDraftNameEn('');
+        setDraftDescription('');
         await load();
       } catch (e) {
         // 失败必须显示出来。吞掉错误会让"点了没反应"变成用户唯一能得到的反馈，
@@ -143,7 +159,7 @@ export default function DirectoryPage() {
         setBusy(false);
       }
     },
-    [draftName, draftNameEn, load, t],
+    [draftName, draftNameEn, draftDescription, load, t],
   );
 
   const removeNode = useCallback(
@@ -344,23 +360,29 @@ export default function DirectoryPage() {
               setActionError(null);
               setDraftName('');
               setDraftNameEn('');
+              setDraftDescription('');
               setEditing({ mode: 'create', code });
             }}
-            onStartRename={(code, current, currentEn) => {
+            onStartRename={(code, current, currentEn, currentDesc) => {
               setActionError(null);
               setDraftName(current);
-              // 英文名一并预填：只预填中文会让用户在不知情的情况下**清空**英文名。
+              // 英文名与说明一并预填：只预填中文会让用户在不知情的情况下
+              // **清空**英文名与说明（保存时我们把输入框的值原样提交）。
               setDraftNameEn(currentEn ?? '');
+              setDraftDescription(currentDesc ?? '');
               setEditing({ mode: 'rename', code });
             }}
             onDraftChange={setDraftName}
             onDraftNameEnChange={setDraftNameEn}
+            onDraftDescriptionChange={setDraftDescription}
             draftNameEn={draftNameEn}
+            draftDescription={draftDescription}
             onSubmitEdit={submitEdit}
             onCancelEdit={() => {
               setEditing(null);
               setDraftName('');
               setDraftNameEn('');
+              setDraftDescription('');
             }}
             onDelete={removeNode}
             onMove={moveNode}
@@ -504,10 +526,17 @@ interface TreeNodeActions {
   draftName: string;
   busy: boolean;
   onStartCreate: (code: string) => void;
-  onStartRename: (code: string, currentName: string, currentNameEn?: string) => void;
+  onStartRename: (
+    code: string,
+    currentName: string,
+    currentNameEn?: string,
+    currentDescription?: string | null,
+  ) => void;
   onDraftChange: (value: string) => void;
   onDraftNameEnChange: (value: string) => void;
+  onDraftDescriptionChange: (value: string) => void;
   draftNameEn: string;
+  draftDescription: string;
   onSubmitEdit: (code: string, mode: 'create' | 'rename') => void;
   onCancelEdit: () => void;
   onDelete: (code: string, name: string) => void;
@@ -547,12 +576,27 @@ function TreeNode({
   // 与服务层的规则一致（服务端仍会独立校验，这里只是不显示点不动的按钮）。
   const canCreateHere =
     actions.canManage && (node.allowCustomFolders || (node.type === 'folder' && !node.isSystem));
-  const canRenameHere = actions.canManage && !node.isSystem;
+  /**
+   * ⚠️ **改名对所有节点开放（含正式目录）**，这不是疏忽，是 §5 的明确要求：
+   *   「删除 isSystem => 不允许改名的限制（那是之前擅自增加的）……
+   *     显示名可改，内部稳定 code 不变。」
+   *
+   * 上一轮我只删掉了**服务端**那条 403，却漏了界面上这个开关 ——
+   * 于是"能不能改名"在界面上仍然是否定的：管理员根本看不到改名按钮。
+   * 而当时的验证走的是 **API**（直接 PATCH），所以看起来是通过的：
+   * 一个"接口能做、界面做不到"的半成品，接口测试全绿。
+   * 这正是必须**真浏览器**回归的理由。
+   *
+   * 删除**仍然**只对自建节点开放：`is_system` 的行是 PDF 权威结构，
+   * 删掉它会让历史资源与审计失去锚点。§5 放宽的是"改名"，不是"删除"。
+   */
+  const canRenameHere = actions.canManage;
   const canDeleteHere = actions.canManage && !node.isSystem;
   const isCreating = actions.editing?.mode === 'create' && actions.editing.code === node.code;
   const isRenaming = actions.editing?.mode === 'rename' && actions.editing.code === node.code;
   const isDisabled = !node.enabled;
-  // 排序与启停都属于"改结构"，范围与改名一致（系统节点可排序/可停用，但不可改名/不可删）。
+  // 排序与启停都属于"改结构"。改名已对全部节点开放（见上），
+  // 删除仍限自建节点；排序/启停对全部节点开放（不改任何业务含义）。
   const canSortHere = actions.canManage && siblings.length > 1;
   const canMoveUp = canSortHere && siblingIndex > 0;
   const canMoveDown = canSortHere && siblingIndex < siblings.length - 1;
@@ -668,7 +712,9 @@ function TreeNode({
             <button
               type="button"
               data-dir-rename={node.code}
-              onClick={() => actions.onStartRename(node.code, node.name, node.nameEn)}
+              onClick={() =>
+                actions.onStartRename(node.code, node.name, node.nameEn, node.description)
+              }
               title={t('directory.rename')}
               className="rounded-lg p-1.5 text-[#6B6878] hover:bg-[#FAF8FF] hover:text-primary-dark"
             >
@@ -760,6 +806,24 @@ function TreeNode({
             placeholder={t('directory.nameEnPlaceholder')}
             className="rounded-lg border border-[#E8E4F0] px-3 py-1.5 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
           />
+          {/*
+            说明（§5「说明/内容可编辑」）。
+            刻意**只在重命名态**出现：新建一个文件夹时先写说明没有意义，
+            而且会让新建行变得很宽、把树的位置感挤掉。
+          */}
+          {isRenaming && (
+            <input
+              value={actions.draftDescription}
+              data-dir-desc-input={node.code}
+              onChange={(e) => actions.onDraftDescriptionChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') actions.onSubmitEdit(node.code, 'rename');
+                if (e.key === 'Escape') actions.onCancelEdit();
+              }}
+              placeholder={t('directory.descriptionPlaceholder')}
+              className="min-w-[14rem] flex-1 rounded-lg border border-[#E8E4F0] px-3 py-1.5 text-sm focus:border-primary focus:ring-2 focus:ring-primary/20"
+            />
+          )}
           <button
             type="button"
             data-dir-submit={node.code}

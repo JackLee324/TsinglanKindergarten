@@ -104,6 +104,10 @@ export type AuditAction =
   // 单独一个动作而不是复用 audit.export：后者导出的是**审计日志**，
   // 前者把**整库**读走 —— 事后追查"谁在什么时候把整库拉走了"必须能单独筛出来。
   | 'data_export'
+  // §8 批量归档：管理员把"只到科目层/完全未归属"的资源补到具体资料夹。
+  // 它是一个**改数据的运维动作**，必须能单独筛出来 —— 谁在什么时候
+  // 把哪 20 条资源挪去了哪里，事后要查得到。
+  | 'resource_directory_assign'
   | 'resource_file_register'
   | 'resource_download_failed'
   | 'file_validation_rejected';
@@ -266,12 +270,18 @@ export interface CreateResourceRequest {
   program: ProgramCode;
   subject: string;
   subSubject?: string;
-  folderType: FolderType;
   /**
-   * 目录归属（可编辑目录树的节点 id）。可选：不传表示"尚未指定"。
-   * 服务端会校验该节点存在、已启用，且调用方对它有权限 scope。
+   * legacy 资料夹分类。**新建时可省略**（§7）：
+   * 服务端按 `directoryId` 指向的目录节点自动推导并维护这一列。
+   * 只有需要显式覆盖（迁移、或目录无法自动推导）时才传。
    */
-  directoryId?: string;
+  folderType?: FolderType;
+  /**
+   * 目录归属（可编辑目录树的节点 id）。**新建时必填**（§8）。
+   * 服务端会校验该节点存在、已启用、是资料夹叶节点，
+   * 且与 `program`/`subject` 属于同一科目。
+   */
+  directoryId: string;
   semester?: string;
   weekNumber?: number;
   theme?: string;
@@ -436,6 +446,13 @@ export interface DirectoryNode {
   code: string;
   name: string;
   nameEn: string;
+  /**
+   * 中文说明（可空）。
+   *
+   * 之前这一列**没有暴露到 API**，于是管理员在 `/directory` 里既看不到也改不了它，
+   * 而数据库里它一直存在 —— 典型的"字段存在但没人能碰"。现在它跟着节点一起出去。
+   */
+  description: string | null;
   type: DirectoryNodeType;
   /** 所属班型；根/教师成长分支下为 null。 */
   program: ProgramCode | null;
@@ -454,8 +471,15 @@ export interface DirectoryNode {
    */
   allowCustomFolders: boolean;
   /**
-   * true = 来自 PDF 的权威节点（不可改名、不可删除）；
-   * false = 管理员自建（可改名、可删除，无子节点时）。
+   * true = 来自 PDF《教师平台》的正式目录节点；false = 管理员自建。
+   *
+   * ⚠️ **这个标记不表示"不可改名"** —— 业主的规则是：
+   *   显示名称（`name` / `nameEn` / `description`）随时可改，
+   *   内部稳定标识（`code` / `id`）不可改。
+   * 早期版本把它当成"正式目录不许改名"，是错的（保护错了对象：
+   * code 才是稳定标识）。现在 `isSystem` 只用于两件事：
+   *   1. 自建文件夹的父节点必须 `allowCustomFolders`；
+   *   2. UI 上区分"正式目录"与"自建文件夹"。
    * 由数据库列 `is_system` 提供，不是"看 code 里有没有某段字符串"推出来的。
    */
   isSystem: boolean;
@@ -499,6 +523,46 @@ export interface ResourceVersion {
   changeKind: ResourceVersionChangeKind;
   changedBy: string;
   changedAt: string;
+}
+
+/**
+ * §8 一条"待补齐"资源的只读投影。
+ *
+ * 它带着目录节点的 code/name/type，而 `Resource` 只带 `directoryId` ——
+ * 管理页要显示"这条现在挂在哪个节点上"，光有 id 显示不出任何有意义的东西。
+ * 刻意**不**并进 `Resource`：那会让每个资源列表接口都多背三个 join 字段，
+ * 而那些列表并不需要它们。
+ */
+export interface UnderFiledResource {
+  id: string;
+  title: string;
+  program: string;
+  subject: string;
+  subSubject: string | null;
+  folderType: string;
+  status: string;
+  /** 当前 `directory_id` 指向节点的 code；NULL 归属时为 null。 */
+  directoryCode: string | null;
+  directoryName: string | null;
+  /** 指向节点的类型；NULL 归属时为 null。 */
+  directoryType: string | null;
+  /**
+   * 为什么进入这个列表。**两种情况的处理方式完全不同**：
+   * `unassigned`（`directory_id IS NULL`）要"选一个目录"；
+   * `subject_level`（挂在科目/子科上）要"往下再走一层到资料夹"。
+   * 混成一个"未归档"标签，管理员会以为 349 条都无处安放。
+   */
+  reason: 'unassigned' | 'subject_level';
+  updatedAt: string;
+}
+
+export interface UnderFiledListResponse {
+  items: UnderFiledResource[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** 两种原因各有多少条（不受分页影响），供界面上的说明使用。 */
+  counts: { unassigned: number; subjectLevel: number };
 }
 
 export interface DirectoryTreeResponse {

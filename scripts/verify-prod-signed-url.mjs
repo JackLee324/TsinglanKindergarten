@@ -97,7 +97,9 @@ try {
 
   const created = await req('POST', '/api/resources', {
     title: `签名探针 ${STAMP}`, program: leaf.program, subject: leaf.subject, directoryId: leaf.id,
-    folderType: 'materials', semester: 'S1', week: 1, description: '预签名安全属性验证（跑完删除并 purge）',
+    // §7：legacy folderType **不再由调用方指定** —— 服务端按 directoryId 推导。
+    // 探针必须走真实契约，否则它验证的是一条用户根本走不到的路。
+    semester: 'S1', week: 1, description: '预签名安全属性验证（跑完删除并 purge）',
   });
   resourceId = created.d?.id ?? created.d?.resource?.id ?? null;
   if (!resourceId) { bad('建探针资源', `HTTP ${created.s}`); throw new Error('create'); }

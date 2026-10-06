@@ -92,13 +92,19 @@
   - 体育 Sports
   - 攀岩 Rock Climbing
 
-### 六类资料夹（每个末级科目下）
+### 资料夹（挂在末级科目/子科目下）
 1. 课程大纲 Curriculum Outline
 2. 周次教案 Weekly Lesson Plans
 3. 课件与示范 Courseware & Demonstration
 4. 素材与工作单 Materials & Worksheets
 5. 观察与评价 Observation & Assessment
 6. 教研归档 Teaching Research Archive
+
+> §7 之后**老师不再自己选这 6 个之一**。上传时只选「所属目录」（目录树里的资料夹
+> 叶节点），`folder_type` 由服务端按目录 code 的反缀推导
+> （`server/modules/directories/legacy-folder-mapping.ts`）。
+> `folder_type` 列**仍然存在**，审核台 / 回收站 / 我的资源仍在**显示**它 ——
+> 那是历史分类的展示，不是分类入口。**不要把「资料夹」下拉加回上传页。**
 
 ## 资源状态
 - draft 草稿
@@ -129,19 +135,45 @@
 
 ### 受保护页面
 - / 首页 / Dashboard
-- /prek Pre-K 首页（科目目录）
-- /prek/:subject Pre-K 科目详情（资料夹列表 + 资源）
-- /k K 首页（科目目录 + Theme 列表）
-- /k/:subject K 科目详情
-- /k/english/:theme K 英文 Theme 详情
-- /virtue 美德课程（跨班型）
-- /montessori 蒙特梭利资料（Pre-K 专属）
-- /upload 资源上传（授权教师）
+- /directory 课程目录浏览根（教育教学 + 教师成长两个根）
+- /directory/:path 任意目录节点（按 **directory code** 推导，如
+  `/directory/prek/virtue`、`/directory/k/chinese/reading`）；科目层也列出其子树资源
+- /directory/manage 目录管理（管理员：新建文件夹 / 改名 / 改英文名 / 改说明 / 停用 / 删除）
+- /growth/:path 教师成长分支的一等入口（如
+  `/growth/l1/safety/plan/disease`）；它是根节点 `root:growth`，地址前缀与教育教学**不同**
+- /admin/unassigned-resources 待补齐目录归属（管理员）
+- /upload 资源上传（需 `resource.create`；**必须选「所属目录」**）
 - /my-resources 我的资源
-- /admin/teachers 教师管理（管理员）
-- /admin/permissions 权限管理（管理员）
-- /admin/audit 审计日志（管理员）
-- /review 审核工作台（教学主任）
+- /admin/teachers 教师管理（`account.view`）
+- /admin/permissions 权限管理（`permission.view`）
+- /admin/audit 审计日志（`audit.view`）
+- /review 审核工作台（`review.view`）
+
+> ⚠️ **不要再新增 `/prek`、`/k`、`/virtue`、`/montessori` 这类旧地址页面。**
+> 它们曾经各自持有**一份写死的科目数组**，是"第二份目录真相"的载体，已在信息架构
+> 收口时连同页面文件一起删除（`client/src/pages/{PreKHome,KHome,Chinese,English,
+> Montessori,PE,Subject}/`）。旧地址的兼容由 `client/src/directory/DirectoryRoutes.tsx`
+> 的 `LegacyDirectoryRedirect` 负责（把 URL 反解回 directory code 再重定向），
+> **不需要页面文件**。
+>
+> 目录的唯一真相是数据库 `directories` 表，经 `GET /api/directories/tree` 暴露；
+> 前端只有一个 `client/src/directory/DirectoryProvider.tsx` 持有它，侧边栏
+> （`Layout.tsx`）、目录浏览、面包屑、上传页「所属目录」、资源详情读的都是它。
+> URL 由 `codeToPath()` **唯一**推导。改一个目录的中文名，侧边栏 / 首页卡片 /
+> 面包屑 / 上传页下拉 / 资源详情会同时变 —— 这是验收项，不是巧合。
+> 这条约束由 `tests/no-legacy-directory-truth.test.mjs` 强制（已做变异验证：
+> 把一份"第二真相"放回去，它确实会红）。
+>
+> **权限判定用能力码**：路由用 `<ProtectedRoute requiredPermission="…">`，
+> 后端用 `@RequirePermission('…')`，两侧同一份 `shared/rbac.ts`。
+> **不要**在页面里写 `roles.includes('principal')` 或角色白名单数组。
+
+## 其他已实现能力（容易漏读）
+- 角色**数据范围**（`account_scopes`）：ALL / OWN / PROGRAM / SUBJECT 四种形态，
+  在权限管理界面可视化编辑；非法形态由服务端在事务前拒绝（400），不是 500。
+- 回收站：软删除 + 到期自动清理；`resource.purge` 是硬删除（需单独权限）。
+- 审计日志：登录/拒绝/下载/上传/编辑/权限变更/数据导出都会落 `audit_logs`。
+
 
 ## 双语规范
 - 中文模式下，除英文专业学科外，界面只显示中文

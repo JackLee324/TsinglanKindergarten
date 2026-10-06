@@ -32,6 +32,8 @@ interface DirectoryRow {
   code: string;
   name: string;
   nameEn: string;
+  /** 中文说明，可空。数据库列一直存在，只是以前没读、没暴露、改不了。 */
+  description: string | null;
   type: string;
   program: string | null;
   subject: string | null;
@@ -160,6 +162,7 @@ export class DirectoriesService {
         code: directories.code,
         name: directories.name,
         nameEn: directories.nameEn,
+        description: directories.description,
         type: directories.type,
         program: directories.program,
         subject: directories.subject,
@@ -288,6 +291,7 @@ export class DirectoriesService {
       code: row.code,
       name: row.name,
       nameEn: row.nameEn,
+      description: row.description ?? null,
       type: row.type as DirectoryNodeType,
       program: row.program as ProgramCode | null,
       subject: this.canonicalSubjectFor(row, rowsById),
@@ -503,7 +507,22 @@ export class DirectoriesService {
     return node;
   }
 
-  /** 重命名 / 改描述 —— 只允许自建节点。 */
+  /**
+   * 重命名 / 改描述 / 改排序 / 改启用状态。
+   *
+   * ⚠️ **正式目录（isSystem）也允许改名与改说明** —— 这是业主明确要求的：
+   *   「显示名称可以改；内部稳定 code/id 不变」。
+   *   例：美德 → 美德课程，而 code 仍是 `prek:virtue`，
+   *   于是历史资源、审计、外键、旧 URL 全部不受影响。
+   *
+   * 之前这里对 isSystem 抛 403（"来自 PDF《教师平台》，不能改名"）。
+   * **那条限制是我擅自加的，业主从未要求** —— 而且它与现实冲突：
+   *   * 学校改课程名是常态（合并科目、改叫法），把它挡在代码里等于要求改 PDF 再改种子数据；
+   *   * 它保护的其实是 **code**（稳定标识），而代码里保护的却是 **name**（显示名）——
+   *     保护错了对象。真正必须不变的是 code 与 is_system 标记，不是给人看的名字。
+   * 所以现在：名称/说明/排序/启停对**所有**节点开放；code 与 is_system 不可写
+   * （它们本来就不在可写字段里）。
+   */
   async updateNode(
     code: string,
     input: {
@@ -520,16 +539,11 @@ export class DirectoriesService {
     const target = rows.find((r) => r.code === code);
     if (!target) throw new NotFoundException(`目录节点不存在：${code}`);
 
-    // 改名/改描述受系统节点保护（它们来自 PDF，改名会让 PDF 与库里的名字对不上）；
-    // 但**排序与启用/停用对所有节点开放** —— 这两件事不改任何业务含义：
-    // 「这一学期不开这门课」是学校的正常操作，靠停用表达，而不是去改 PDF。
     const wantsRename =
       input.name !== undefined || input.nameEn !== undefined || input.description !== undefined;
-    if (target.isSystem && wantsRename) {
-      throw new ForbiddenException(
-        '系统目录节点来自 PDF《教师平台》，不能改名；如需调整请先改 PDF 与种子数据',
-      );
-    }
+    // **这里刻意不再对 target.isSystem 抛 403** —— 见方法头的说明：
+    // 显示名可改，code / is_system 不可写。审计里仍然区分"改名"与"改属性"，
+    // 于是事后能查出"谁把美德改名成了什么"。
 
     if (input.sortOrder !== undefined) {
       if (!Number.isInteger(input.sortOrder) || input.sortOrder < -100000 || input.sortOrder > 100000) {

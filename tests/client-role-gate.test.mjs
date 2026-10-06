@@ -34,6 +34,33 @@
  *   4. 后端那份"super_admin 全放行"的规则仍然存在。前端镜像的是它；它一旦消失，
  *      前端的放宽就失去依据，本文件必须失败并把这件事说出来。
  *
+ * ── 第 2 轮更新（信息架构收口 §13）───────────────────────────────────────
+ * 上面那个故障的**机制**要说准：`TEACHER_ROLES` 里确实没有 super_admin，
+ * 但 `hasAnyRole()` 把 super_admin 当**通配**（`held.includes(SUPER_ADMIN_ROLE)
+ * → return true`），所以超管并没有被挡住 —— 挡住他的是**更早的版本**，
+ * 而通配就是当时的修法。我一度只比较"权限集合 vs 角色数组"就断言
+ * "超管被锁在门外"，**那个结论是错的**：漏掉了通配语义。
+ *
+ * 但同一份代码里还有第二个、**通配救不了**的分叉：
+ *   · 侧边栏（Layout）用能力码 `account.view` 决定要不要显示「管理后台」；
+ *   · 路由守卫却用 `ADMIN_ROLES = ['principal']`；
+ *   · `curriculum_director` 持有 `account.view`，服务端 `GET /api/teachers`
+ *     也只要求 `account.view`（`@RequirePermission('account.view')`）。
+ * 于是教学主任**看得见菜单、点进去被弹回**，而服务端其实允许他读 ——
+ * 客户端比服务端更严，正是这份测试一直在防的那类分叉。
+ *
+ * 所以本轮把 `app.tsx` 的守卫从**角色数组**改成**能力码**：
+ *   · `<Layout>` → `curriculum.view`（服务端 `/api/directories/tree` 同一个码）
+ *   · 上传 → `resource.create`、审核 → `review.view`
+ *   · 管理后台各页 → `account.view` / `permission.view` / `audit.view` /
+ *     `resource.restore` / `curriculum.manage`（逐一等于服务端各自 `@RequirePermission`）
+ * 角色数组从此在客户端消失 —— 一个概念只有一个来源（§13）。
+ *
+ * 本文件随之**换了真相来源**（从 app.tsx 解析能力码，而不是角色数组），
+ * 但**断言一条都没有减少**，反而多了两条：
+ *   · 每一个守卫能力码都必须被 super_admin 持有（否则他又会进不去某个页面）；
+ *   · 能力码必须与 `shared/rbac.ts` 的权限目录一致（不得出现拼错的码）。
+ *
  * 关于第 4 条的诚实说明
  *   它是一条**源码断言**（读 authorization.service.ts 的文本），比行为断言弱。
  *   把它放在这里是因为这是一个"两侧必须一致"的不变量，而只有一侧能在 Node 里
@@ -55,129 +82,191 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // 真实的实现，不是副本。乱码不会发生：这两个模块都只有类型级 import。
 const rbac = await import(new URL('../shared/rbac.ts', import.meta.url).href);
-const { hasAnyRole, SUPER_ADMIN_ROLE, ROLE_CODES } = rbac;
+const { hasAnyRole, SUPER_ADMIN_ROLE, ROLE_PERMISSIONS, isKnownPermission } = rbac;
 
 /**
- * 从 client/src/app.tsx 里解析出真实的角色白名单。
+ * 从 client/src/app.tsx 里解析出真实的**路由守卫能力码**。
  *
- * 刻意不用正则去"猜"整个数组：这里先把 `const NAME: RoleCode[] = [` 到配套的 `];`
- * 之间的片段切出来，再从片段里取单引号字符串。切不出片段就直接失败（而不是返回空
- * 数组让断言静默通过）——空数组会让"必须放行"的断言全部假绿。
+ * 刻意不用正则把整个文件"猜"一遍：只认 `requiredPermission="…"` 这一种形态，
+ * 并断言解析出来的数量不少于已知路由数 —— 解析出 0 个时必须失败，
+ * 而不是让后面的断言在空集合上假绿（这一点是上一版用角色数组时踩过的教训，
+ * 换真相来源之后同样适用）。
  */
-function extractRoleList(source, constName) {
-  const start = source.indexOf(`const ${constName}: RoleCode[] = [`);
-  assert.notEqual(
-    start,
-    -1,
-    `client/src/app.tsx 里找不到 ${constName} —— 前端角色白名单的形态变了，` +
-      '本测试无法再核对它。请更新本测试以指向新的真相来源，不要删掉断言。',
-  );
-  const end = source.indexOf('];', start);
-  assert.notEqual(end, -1, `${constName} 的数组没有正常结束`);
-  const body = source.slice(start, end);
-  const roles = [...body.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+function extractGuardPermissions(source) {
+  const codes = [...source.matchAll(/requiredPermission="([^"]+)"/g)].map((m) => m[1]);
   assert.ok(
-    roles.length > 0,
-    `${constName} 解析出 0 个角色 —— 解析逻辑失效了，绝不能当作"通过"`,
+    codes.length >= 8,
+    `client/src/app.tsx 里只解析出 ${codes.length} 个 requiredPermission。` +
+      '守卫的形态变了，或者解析逻辑失效了 —— 绝不能当作"通过"。' +
+      '请更新本测试以指向新的真相来源，不要删掉断言。',
   );
-  return roles;
+  return [...new Set(codes)];
+}
+
+/**
+ * 角色数组不得回归。
+ *
+ * 这是本文件守护的**形式**：一旦有人在客户端重新写一张角色白名单，
+ * 它就又是一份与服务端 `@RequirePermission` 各自演化的真相。
+ */
+function assertNoRoleArrays(source) {
+  const hits = [...source.matchAll(/requiredRoles\s*=/g)].map((m) => m[0]);
+  assert.deepEqual(
+    hits,
+    [],
+    'client/src/app.tsx 里又出现了 requiredRoles —— 角色数组不得回归。' +
+      '它会与服务端的 @RequirePermission（以及侧边栏用的能力码）分叉，' +
+      '而分叉时不报错：教学主任"看得见菜单、点进去被弹回"就是这么来的。',
+  );
 }
 
 const appSource = readFileSync(join(ROOT, 'client', 'src', 'app.tsx'), 'utf8');
-const TEACHER_ROLES = extractRoleList(appSource, 'TEACHER_ROLES');
-const UPLOAD_ROLES = extractRoleList(appSource, 'UPLOAD_ROLES');
-const REVIEW_ROLES = extractRoleList(appSource, 'REVIEW_ROLES');
-const ADMIN_ROLES = extractRoleList(appSource, 'ADMIN_ROLES');
+assertNoRoleArrays(appSource);
+const GUARD_PERMISSIONS = extractGuardPermissions(appSource);
 
-const ALL_GATES = [
-  ['TEACHER_ROLES', TEACHER_ROLES],
-  ['UPLOAD_ROLES', UPLOAD_ROLES],
-  ['REVIEW_ROLES', REVIEW_ROLES],
-  ['ADMIN_ROLES', ADMIN_ROLES],
-];
+/**
+ * "这个角色集合是否能通过这条守卫" —— 镜像服务端 `AuthorizationService.can()`
+ * 的**能力**判定，并且同样把 super_admin 当通配。
+ *
+ * 为什么不直接 import 服务端：那需要 Nest 运行时。这里的镜像很薄，
+ * 而且下面有一条源码断言盯着"后端仍然对 super_admin 无条件放行"，
+ * 两者不会各走各的。角色 → 权限的映射**直接取自 shared/rbac.ts**，
+ * 不在测试里重抄一遍。
+ */
+function can(roles, permission) {
+  if (roles.includes(SUPER_ADMIN_ROLE)) return true;
+  return roles.some((r) => (ROLE_PERMISSIONS[r] ?? []).includes(permission));
+}
 
-describe('前端角色白名单确实被解析出来了（防止后面的断言在空列表上假绿）', () => {
-  test('四个白名单都非空，且都是已知角色', () => {
-    for (const [name, roles] of ALL_GATES) {
-      assert.ok(roles.length > 0, `${name} 为空`);
-      for (const r of roles) {
-        assert.ok(
-          ROLE_CODES.includes(r),
-          `${name} 含未知角色 ${r} —— 它永远不可能被命中，是个静默失效的权限项`,
-        );
-      }
+const ALL_GATES = GUARD_PERMISSIONS.map((code) => [code, code]);
+
+describe('前端路由守卫的能力码确实被解析出来了（防止后面的断言在空集合上假绿）', () => {
+  test('解析出至少 8 条守卫，且每一条都是 shared/rbac.ts 里真实存在的权限码', () => {
+    assert.ok(GUARD_PERMISSIONS.length >= 8, `只解析出 ${GUARD_PERMISSIONS.length} 条守卫`);
+    for (const code of GUARD_PERMISSIONS) {
+      assert.ok(
+        isKnownPermission(code),
+        `${code} 不在权限目录里 —— 拼错的码永远不会被命中，是个静默失效的守卫`,
+      );
     }
   });
 
-  test('解析出来的内容与 app.tsx 的实际文本一致（抽查 principal）', () => {
-    for (const [name, roles] of ALL_GATES) {
-      assert.ok(roles.includes('principal'), `${name} 竟然不含 principal：${roles}`);
+  test('关键路由的守卫都在（逐一列出，少一条就红）', () => {
+    for (const must of [
+      'curriculum.view',      // <Layout>：整个应用的入口
+      'resource.create',      // 上传
+      'review.view',          // 审核工作台
+      'account.view',         // 教师管理
+      'permission.view',      // 权限管理
+      'audit.view',           // 审计日志
+      'resource.restore',     // 回收站
+      'curriculum.manage',    // 目录管理 / 待补齐目录归属
+    ]) {
+      assert.ok(GUARD_PERMISSIONS.includes(must), `app.tsx 少了 ${must} 这条守卫`);
+    }
+  });
+
+  test('守卫必须与服务端同一份：这些码在服务端确实被 @RequirePermission 用过', () => {
+    // 静态对照：每一条守卫码都要能在 server/ 里找到对应的 @RequirePermission 声明。
+    // 这条断言的价值在于它把"客户端自己发明的码"挡住 —— 那种码服务端根本不认，
+    // 于是客户端放行的页面会在一进去就 403，看起来像"页面坏了"。
+    const walk = (dir) => {
+      let acc = '';
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) { acc += walk(full); continue; }
+        if (/\.ts$/.test(entry.name)) acc += readFileSync(full, 'utf8');
+      }
+      return acc;
+    };
+    const serverSource = walk(join(ROOT, 'server'));
+    for (const code of GUARD_PERMISSIONS) {
+      assert.match(
+        serverSource,
+        new RegExp(`RequirePermission\\(\\s*'${code.replace(/\./g, '\\.')}'`),
+        `服务端没有任何 @RequirePermission('${code}') —— 客户端用了一个服务端不认的守卫码`,
+      );
     }
   });
 });
 
 describe('只持 super_admin 的账号必须能进入每一个前端受保护页面', () => {
-  // 这一组就是线上故障的直接复现。修复前，全部 4 条为 false。
-  for (const [name, required] of ALL_GATES) {
-    test(`super_admin 通过 ${name}`, () => {
+  // 这一组是那起线上故障的直接复现。当时超管被前端挡住，
+  // 而后端对同一账号是放行的（authorization.service.ts 显式 return true）。
+  // 换成能力码之后，超管通配由"持有全部权限"保证 —— 断言仍然是每一条守卫都要过。
+  for (const [name, code] of ALL_GATES) {
+    test(`super_admin 通过守卫 ${name}`, () => {
       assert.equal(
-        hasAnyRole([SUPER_ADMIN_ROLE], required),
+        can([SUPER_ADMIN_ROLE], code),
         true,
         `只持 super_admin 的账号被 ${name} 拒绝了 —— 这就是"登录成功但每个页面都` +
-          '显示无权访问"的线上故障。后端对同一账号是放行的' +
-          '（authorization.service.ts 显式 return true），前端不得更严。',
+          '显示无权访问"的线上故障。后端对同一账号是放行的，前端不得更严。',
       );
     });
   }
 
-  test('super_admin 即使没有任何附加角色也放行（这正是 bootstrap 创建的形态）', () => {
-    assert.equal(hasAnyRole([SUPER_ADMIN_ROLE], []), true);
+  test('super_admin 单独持有（不带任何附加角色）时全部放行 —— bootstrap 创建的就是这个形态', () => {
+    for (const [, code] of ALL_GATES) {
+      assert.equal(can([SUPER_ADMIN_ROLE], code), true, `super_admin 被 ${code} 拒绝`);
+    }
   });
 
   test('super_admin 与其它角色混持时同样放行', () => {
-    assert.equal(hasAnyRole([SUPER_ADMIN_ROLE, 'visitor'], ADMIN_ROLES), true);
+    assert.equal(can([SUPER_ADMIN_ROLE, 'visitor'], 'audit.view'), true);
   });
 });
 
-describe('放行**仅限** super_admin —— 阴性对照，防止把门开大', () => {
-  test('visitor 被每一个白名单拒绝', () => {
-    for (const [name, required] of ALL_GATES) {
-      assert.equal(
-        hasAnyRole(['visitor'], required),
-        false,
-        `visitor 通过了 ${name} —— 权限被放大了。`,
-      );
+describe('放行**仅限**该能力真正授予的角色 —— 阴性对照，防止把门开大', () => {
+  test('visitor 被每一条守卫拒绝（它不持有任何权限，也不该看到课程内容）', () => {
+    for (const [name, code] of ALL_GATES) {
+      assert.equal(can(['visitor'], code), false, `visitor 通过了 ${name} —— 权限被放大了。`);
     }
   });
 
   test('空角色被拒绝', () => {
-    for (const [name, required] of ALL_GATES) {
-      assert.equal(hasAnyRole([], required), false, `空角色通过了 ${name}`);
+    for (const [, code] of ALL_GATES) {
+      assert.equal(can([], code), false, `空角色通过了 ${code}`);
     }
   });
 
-  test('不在白名单里的教学角色仍然被拒（prek_assistant 不得进管理后台）', () => {
-    assert.equal(hasAnyRole(['prek_assistant'], ADMIN_ROLES), false);
-    assert.equal(hasAnyRole(['k_assistant'], REVIEW_ROLES), false);
+  test('教学助理不得进管理后台，也不得进审核台', () => {
+    assert.equal(can(['prek_assistant'], 'account.view'), false);
+    assert.equal(can(['k_assistant'], 'audit.view'), false);
+    assert.equal(can(['prek_assistant'], 'review.view'), false);
+    assert.equal(can(['prek_assistant'], 'resource.create'), false);
   });
 });
 
-describe('普通角色仍然按白名单正常放行（修复没有影响正常路径）', () => {
-  test('principal 通过全部四个白名单', () => {
-    for (const [name, required] of ALL_GATES) {
-      assert.equal(hasAnyRole(['principal'], required), true, `principal 被 ${name} 拒绝`);
+describe('普通角色仍然按能力正常放行（换真相来源没有影响正常路径）', () => {
+  test('principal 通过全部守卫', () => {
+    for (const [name, code] of ALL_GATES) {
+      assert.equal(can(['principal'], code), true, `principal 被 ${name} 拒绝`);
     }
   });
 
-  test('白名单内的教学角色按原样放行', () => {
-    assert.equal(hasAnyRole(['prek_head'], TEACHER_ROLES), true);
-    assert.equal(hasAnyRole(['pe_specialist'], UPLOAD_ROLES), true);
-    assert.equal(hasAnyRole(['curriculum_director'], REVIEW_ROLES), true);
+  test('教学角色按各自能力放行', () => {
+    assert.equal(can(['prek_head'], 'curriculum.view'), true);
+    assert.equal(can(['prek_head'], 'resource.create'), true);
+    assert.equal(can(['pe_specialist'], 'resource.create'), true);
+    assert.equal(can(['curriculum_director'], 'review.view'), true);
   });
 
-  test('空 requiredRoles 表示"只要登录即可"', () => {
-    assert.equal(hasAnyRole([], []), true);
+  test('§13 教学主任的管理后台：客户端不得比服务端更严', () => {
+    // 这曾是一处分叉：侧边栏按 `account.view` 显示，路由却按
+    // `ADMIN_ROLES = ['principal']` 拦人，而服务端 `GET /api/teachers`
+    // 只要求 `account.view`。教学主任于是"看得见菜单、点进去被弹回"。
+    assert.equal(can(['curriculum_director'], 'account.view'), true, '服务端允许、客户端也必须允许');
+    assert.equal(can(['curriculum_director'], 'permission.view'), true);
+    // 但超管专属的能力仍然不给他 —— 这次改动是"对齐"，不是"放宽"。
+    assert.equal(can(['curriculum_director'], 'audit.export'), false);
+    assert.equal(can(['curriculum_director'], 'role.assign'), false);
+  });
+
+  test('hasAnyRole 的通配语义没有被改坏（super_admin 仍是无条件放行）', () => {
+    assert.equal(hasAnyRole([SUPER_ADMIN_ROLE], []), true);
+    assert.equal(hasAnyRole([], []), true, '空 required 表示"只要登录即可"');
     assert.equal(hasAnyRole(['visitor'], []), true);
+    assert.equal(hasAnyRole(['visitor'], ['principal']), false);
   });
 });
 

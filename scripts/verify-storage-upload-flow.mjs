@@ -14,6 +14,8 @@
  * 它必须跑在一个**配置了 S3 后端**的服务端上 —— 未配置时服务端会（正确地）503，
  * 那样这一步就变成"验证了它拒绝"，所以脚本会明确检查配置并跳过而不是假通过。
  */
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
+import { purgeProbeResources } from '../tests/helpers/probe-cleanup.mjs';
 const BASE = process.env.MFA_BASE || `http://127.0.0.1:${process.env.SERVER_PORT || 3200}`;
 const DB_URL = process.env.DATABASE_URL || process.env.AUTHZ_TEST_DB || null;
 const PW = process.env.SEQ_PROBE_PASSWORD || 'SeqProbe!2026x';
@@ -72,13 +74,19 @@ const PAYLOAD = Buffer.from(
 
 try {
   console.log('1) 建资源并申请直传地址');
+  // §8：必须带 directoryId；§7：legacy folderType 由服务端按目录推导。
+  const storageProbeDir = await folderIdFor(c, { program: 'prek', subject: 'virtue' });
   const created = await c.req('POST', '/api/resources', {
     title: `上传链路探针 ${Date.now().toString().slice(-6)}`,
-    program: 'prek', subject: 'virtue', folderType: 'curriculum_outline',
+    program: 'prek', subject: 'virtue', directoryId: storageProbeDir,
   });
   check('创建资源 → 201', created.s, 201);
   resourceId = created.d?.id ?? null;
-  if (!resourceId) throw new Error('创建响应没有 id');
+  if (!resourceId) {
+    // 把服务端的真实原因打出来。只说"没有 id"会让人以为服务端没返回，
+    // 而实际上它返回了 400 与原因。
+    throw new Error('创建响应没有 id：' + JSON.stringify(created.d));
+  }
 
   const urlRes = await c.req('POST', `/api/resources/${resourceId}/upload-url`, { fileName: '周次教案 第1周 (v2).pdf' });
   if (urlRes.s === 503) {
@@ -146,11 +154,19 @@ try {
   }
 } finally {
   if (resourceId) {
-    const del = await c.req('DELETE', `/api/resources/${resourceId}`);
-    console.log(`\n清理：删除探针资源 → HTTP ${del.s}`);
-  }
-  if (DB_URL) {
-    // 行被软删，版本与审计随之保留；这里只确认没有留下活跃资源。
+    // ⚠️ `DELETE` 是软删除（进回收站）。本套件以前只做它，于是每跑一次就往回收站
+    // 留一行 `上传链路探针 <ts>` —— 实测积了 57 行。现在真正删掉并**核实**。
+    const purged = await purgeProbeResources({
+      req: (m, p, b) => c.req(m, p, b),
+      ids: [resourceId],
+      dbUrl: DB_URL,
+      label: '上传链路探针',
+    });
+    console.log(
+      `\n清理：探针 ${resourceId} → 接口 purge ${purged.purgedViaApi} 条 / SQL 硬删 ${purged.purgedViaSql} 条` +
+        (purged.remaining.length ? `；**仍残留 ${purged.remaining.length} 条**` : '；残留 0'),
+    );
+    for (const id of purged.remaining) { bad('探针清理', `仍残留 ${id}`); }
   }
 }
 

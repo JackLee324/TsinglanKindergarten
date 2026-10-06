@@ -1,3 +1,4 @@
+import { folderIdFor } from '../tests/helpers/directory-fixture.mjs';
 /**
  * scripts/verify-curriculum-scope.mjs —— §2 与 §3 的**行为**验证（不是结构断言）。
  *
@@ -148,39 +149,47 @@ try {
     if (id) createdResourceIds.push(id);
     return { s: r.s, id, err: String(r.d?.error?.message ?? '').slice(0, 60) };
   };
+  // §8：必须带 directoryId，且资料夹要与资源自身科目一致 —— 用 english 的资料夹。
+  // 这一条本身就在验证「归属正确」：目录选错会被服务端 400 拒绝。
+  const pDir = await folderIdFor(prekC, { program: 'prek', subject: 'english', suffix: 'resource' });
   const pRes = await mkRes(prekC, {
     title: `范围探针 prek-english ${stamp}`, program: 'prek', subject: 'english',
-    folderType: 'materials',
+    directoryId: pDir,
   });
   if (pRes.s === 201 && pRes.id) ok('prek_head 在 prek/english 建资源 → 201（§2 归属成立）');
   else bad('prek_head 在 prek/english 建资源', `HTTP ${pRes.s} ${pRes.err}`);
 
+  const kDir = await folderIdFor(kC, { program: 'k', subject: 'chinese:arts', suffix: 'resource' });
   const kRes = await mkRes(kC, {
     title: `范围探针 k-arts ${stamp}`, program: 'k', subject: 'chinese', subSubject: 'arts',
-    folderType: 'materials',
+    directoryId: kDir,
   });
   if (kRes.s === 201 && kRes.id) ok('k_head 在 k/chinese/arts 建资源 → 201（§2 归属成立）');
   else bad('k_head 在 k/chinese/arts 建资源', `HTTP ${kRes.s} ${kRes.err}`);
 
   // ---- 4) 越不过去：归属 ≠ 所有人都有权 -----------------------------------
   console.log('\n4) 越界必须被拒（否则"归属"退化成"所有人都有权"）');
+  // 越界探针也必须带一个**合法**的 directoryId —— 否则它会被"缺 directoryId"的
+  // 400 拦下，于是"越界被拒"这条断言会**因为错误的理由通过**（400 而非 403）。
+  // 这正是"断言通过但没验证到目标行为"的典型，必须避免。
   const cross1 = await mkRes(prekC, {
     title: `越界探针 prek→k ${stamp}`, program: 'k', subject: 'chinese', subSubject: 'arts',
-    folderType: 'materials',
+    directoryId: kDir,
   });
   if (cross1.s === 403) ok('prek_head 在 k/chinese/arts 建资源被拒 → 403');
   else bad('prek_head 在 k/chinese/arts 建资源被拒', `HTTP ${cross1.s}（期望 403）`);
 
   const cross2 = await mkRes(kC, {
     title: `越界探针 k→prek ${stamp}`, program: 'prek', subject: 'english',
-    folderType: 'materials',
+    directoryId: pDir,
   });
   if (cross2.s === 403) ok('k_head 在 prek/english 建资源被拒 → 403');
   else bad('k_head 在 prek/english 建资源被拒', `HTTP ${cross2.s}（期望 403）`);
 
+  const roDir = await folderIdFor(roC, { program: 'prek', subject: 'virtue', suffix: 'resource' });
   const roCreate = await mkRes(roC, {
     title: `对照探针 readonly ${stamp}`, program: 'prek', subject: 'virtue',
-    folderType: 'materials',
+    directoryId: roDir,
   });
   if (roCreate.s === 403) ok('prek_assistant 建资源被拒 → 403（对照：拒绝来自权限，不是 scope 巧合）');
   else bad('prek_assistant 建资源被拒', `HTTP ${roCreate.s}（期望 403）`);

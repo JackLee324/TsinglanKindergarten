@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
@@ -9,6 +9,7 @@ import {
   X,
   Upload,
   FolderOpen,
+  GraduationCap,
   ClipboardCheck,
   Settings,
   LogOut,
@@ -29,9 +30,11 @@ import { LanguageToggle } from '@client/src/i18n/LanguageToggle';
 import { useTranslation } from '@client/src/i18n/useTranslation';
 import { useIsMobile } from '@client/src/hooks/use-mobile';
 import { useAuth } from '@client/src/auth/useAuth';
-import type { ProgramCode } from '@shared/api.interface';
+import type { DirectoryNode, ProgramCode } from '@shared/api.interface';
 // 单一真相：班型/科目可见性直接问 shared/rbac.ts，页面不再维护角色数组。
 import { programsVisibleForStructure, roleScopeCovers, roleSubjectScope } from '@shared/rbac';
+// 目录项**不再由本文件定义**：课程结构问数据库（见 §11 / DirectoryProvider）。
+import { codeToPath, useDirectory } from '@client/src/directory/DirectoryProvider';
 
 /**
  * 导航项按**能力**声明可见性，而不是按角色字面量。
@@ -49,7 +52,19 @@ import { programsVisibleForStructure, roleScopeCovers, roleSubjectScope } from '
  */
 interface MenuItem {
   path: string;
-  labelKey: string;
+  /**
+   * 应用页面的 i18n key（首页/上传/审核/管理…）。
+   * 与 `label` 二选一，见下面的说明。
+   */
+  labelKey?: string;
+  /**
+   * **字面标签**，来自数据库（目录节点的 `name`）。
+   *
+   * WHY: 目录项的名字是数据，不是代码里的文案 —— 管理员把「美德」改成
+   * 「美德课程」之后，侧边栏必须跟着变。若是 i18n key，改名就得改代码发版，
+   * 那正是业主说的「侧边导航叫 C」的来源（侧边栏是另一份写死的名字）。
+   */
+  label?: string;
   icon?: React.ReactNode;
   children?: MenuItem[];
   /** 服务端同一套权限码；例：`resource.create`、`review.view`、`account.view`。 */
@@ -63,14 +78,23 @@ interface MenuItem {
 const Layout: React.FC = () => {
   const { t } = useTranslation();
   const { user, logout, hasPermission } = useAuth();
+  const { roots } = useDirectory();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(!isMobile);
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({
-    prek: false,
-    k: false,
-    admin: false,
-  });
+  /**
+   * 展开状态。键就是**菜单项自身的 path**，不做任何字符串裁剪。
+   *
+   * 第一版是 `item.path.replace('/', '')` —— 当路径是 `/prek` 时凑巧得到 `prek`，
+   * 看起来能用；换成数据库驱动的 `/directory/prek` 之后就得到 `directory/prek`，
+   * 而初始表里写的是 `prek`，两边永远对不上，于是**子菜单永远打不开**。
+   * 这类"用字符串裁剪从路径里抠 key"的写法，路径一变就静默失效。
+   *
+   * 初始为空 = 全部收起，与改造前一致（原来三项也都是 false），
+   * 同时也不再需要在这里写死 `/prek`、`/k`、`/admin` 这些路径 ——
+   * 班型路径现在由数据库决定，写死就是第二份真相。
+   */
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   const toggleExpanded = (key: string): void => {
@@ -130,31 +154,59 @@ const Layout: React.FC = () => {
     t(`role.${r}` as Parameters<typeof t>[0]),
   ) || [];
 
+  /**
+   * 目录导航项 —— **从数据库那棵树生成**，本文件不再持有科目表。
+   *
+   * 以前这里手写 `/prek` 与 `/k` 两组、各自列死科目与 i18n key。那是最要命的
+   * 第二份真相：数据库里 `prek:english` 存在，侧边栏却不知道；管理员把
+   * 「美德」改名成「美德课程」，侧边栏仍显示「美德」；`k:pe` 下面在数据库里
+   * 没有子科，侧边栏却凭 `nav.pe` 的旧常量长得像有。
+   *
+   * 现在：服务端按调用方角色**已经剪过枝**，所以这里不需要再判班型/科目权限 ——
+   * 树里没有的东西，本来就不该显示。这也顺手删掉了 `program`/`subject`
+   * 这两个字段在目录项上的第二种用途。
+   */
+  const directoryMenuItems = useMemo<MenuItem[]>(() => {
+    const items: MenuItem[] = [];
+
+    // 教育教学下的班型 → 科目（两层，与既有侧边栏的视觉层级完全一致）。
+    const eduRoot = roots.find((r) => r.code === 'root:edu');
+    for (const program of eduRoot?.children ?? []) {
+      items.push({
+        // 路径**一律**由 codeToPath 决定，本文件不拼任何前缀 ——
+        // 教师成长有自己的 `/growth` 前缀，无脑拼 `/directory` 就会造出
+        // `/directory/growth/l1` 这种"看着能用、其实和侧边栏另一个地址不一致"的链接。
+        path: codeToPath(program.code),
+        label: program.name,
+        icon: <BookOpen className="size-5" />,
+        children: program.children.map((subject: DirectoryNode) => ({
+          path: codeToPath(subject.code),
+          label: subject.name,
+        })),
+      });
+    }
+
+    // 教师成长（§10：一等导航入口，不藏在"课程目录"里面）。
+    const growthRoot = roots.find((r) => r.code === 'root:growth');
+    if (growthRoot !== undefined) {
+      items.push({
+        path: '/growth',
+        label: growthRoot.name,
+        icon: <GraduationCap className="size-5" />,
+        children: growthRoot.children.map((level: DirectoryNode) => ({
+          path: codeToPath(level.code),
+          label: level.name,
+        })),
+      });
+    }
+
+    return items;
+  }, [roots]);
+
   const menuItems: MenuItem[] = [
     { path: '/', labelKey: 'nav.home', icon: <Home className="size-5" /> },
-    {
-      path: '/prek',
-      labelKey: 'nav.prek',
-      icon: <BookOpen className="size-5" />,
-      program: 'prek',
-      children: [
-        { path: '/prek/virtue', labelKey: 'nav.virtue', subject: { program: 'prek', subject: 'virtue' } },
-        { path: '/prek/montessori', labelKey: 'nav.montessori', subject: { program: 'prek', subject: 'montessori' } },
-        { path: '/prek/pe', labelKey: 'nav.pe', subject: { program: 'prek', subject: 'physical_education' } },
-      ],
-    },
-    {
-      path: '/k',
-      labelKey: 'nav.k',
-      icon: <BookOpen className="size-5" />,
-      program: 'k',
-      children: [
-        { path: '/k/virtue', labelKey: 'nav.virtue', subject: { program: 'k', subject: 'virtue' } },
-        { path: '/k/chinese', labelKey: 'nav.chinese', subject: { program: 'k', subject: 'chinese' } },
-        { path: '/k/english', labelKey: 'nav.english', subject: { program: 'k', subject: 'english' } },
-        { path: '/k/pe', labelKey: 'nav.pe', subject: { program: 'k', subject: 'physical_education' } },
-      ],
-    },
+    // 目录导航插在首页之后、上传之前，保持与改造前一致的阅读顺序。
+    ...directoryMenuItems,
     {
       path: '/upload',
       labelKey: 'nav.upload',
@@ -167,7 +219,7 @@ const Layout: React.FC = () => {
       icon: <FolderOpen className="size-5" />,
     },
     {
-      // 目录页对**所有**教师角色开放：服务端按角色剪枝，
+      // 课程目录（完整浏览入口）。对所有教师角色开放：服务端按角色剪枝，
       // 用户只会看到自己范围内的分支（visitor 会被 curriculum.view 挡住）。
       path: '/directory',
       labelKey: 'nav.directory',
@@ -194,6 +246,12 @@ const Layout: React.FC = () => {
         { path: '/admin/teachers', labelKey: 'nav.admin.teachers', permission: 'account.view' },
         { path: '/admin/permissions', labelKey: 'nav.admin.permissions', permission: 'permission.view' },
         { path: '/admin/audit', labelKey: 'nav.admin.audit', permission: 'audit.view' },
+        // §8 待补齐目录归属：与服务端同权限码（curriculum.manage）。
+        {
+          path: '/admin/unassigned-resources',
+          labelKey: 'nav.admin.unassigned',
+          permission: 'curriculum.manage',
+        },
         // §回收站：唯一入口，按服务端同一权限码 resource.restore 显示。
         { path: '/admin/recycle-bin', labelKey: 'nav.admin.recycleBin', permission: 'resource.restore' },
       ],
@@ -202,15 +260,15 @@ const Layout: React.FC = () => {
 
   const visibleMenuItems = filterMenu(menuItems);
 
-  const renderMenuItem = (item: MenuItem, depth = 0): React.ReactNode => {
+  const renderMenuItem = (item: MenuItem): React.ReactNode => {
     const hasChildren = item.children && item.children.length > 0;
-    const isExpanded = expanded[item.path.replace('/', '')] ?? false;
+    const isExpanded = expanded[item.path] ?? false;
 
     if (hasChildren) {
       return (
         <div key={item.path} className="mb-1">
           <button
-            onClick={() => toggleExpanded(item.path.replace('/', ''))}
+            onClick={() => toggleExpanded(item.path)}
             data-testid="nav-group-toggle"
             data-nav={item.path}
             aria-expanded={isExpanded}
@@ -218,7 +276,7 @@ const Layout: React.FC = () => {
           >
             <span className="flex items-center gap-3">
               {item.icon}
-              {t(item.labelKey as Parameters<typeof t>[0])}
+              {item.label ?? t(item.labelKey as Parameters<typeof t>[0])}
             </span>
             {isExpanded ? (
               <ChevronDown className="size-4" />
@@ -245,7 +303,7 @@ const Layout: React.FC = () => {
                     }`
                   }
                 >
-                  {t(child.labelKey as Parameters<typeof t>[0])}
+                  {child.label ?? t(child.labelKey as Parameters<typeof t>[0])}
                 </NavLink>
               ))}
             </div>
@@ -273,7 +331,7 @@ const Layout: React.FC = () => {
         }
       >
         {item.icon}
-        {t(item.labelKey as Parameters<typeof t>[0])}
+        {item.label ?? t(item.labelKey as Parameters<typeof t>[0])}
       </NavLink>
     );
   };
