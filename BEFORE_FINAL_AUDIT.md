@@ -1451,3 +1451,81 @@ PASS  资源行上的 directoryId 正是该目录  -> bd7769ab-…
 #### 门禁
 
 复跑全绿：16 套件。基线模式 810 断言；配置存储模式 903。
+
+### 第 8 轮追加：§6 超级管理员安全引导 —— 整条链实测 26/26，并**修掉一个走不通的引导顺序**
+
+新增 `scripts/verify-admin-bootstrap.mjs`（已接入门禁，`admin-bootstrap` 26 通过 / 0 失败 /
+0 跳过）。用**独立探针账号**跑完整条链，跑完删除（复查残留 0），不动任何既有账号：
+引导脚本走的是 entrypoint 调用的同一个 `provision-super-admin.mjs`。
+
+```
+1) bootstrap：建号成功，且置 must_change_password=true
+2) 首次登录：登录成功 / mustChangePassword=true / 未改密前受保护接口 403 PASSWORD_CHANGE_REQUIRED
+3) 改强密码：**成功**（见下方缺陷）；弱口令被服务端拒绝 400
+4) 重登：新密码有效，mustChangePassword 已清除
+5) MFA 强制：未绑 MFA 的 super_admin 被拦在受保护接口外（403 强制绑定）
+6) enrollment：返回 TOTP 密钥 + otpauth URI
+7) confirmation：用**独立实现的 TOTP** 确认成功，一次性返回 10 个恢复码；
+   mfa/status 显示 enabled，recoveryCodesRemaining=10
+8) 重登第二因素：拿到 challengeToken / 错误码 401 被拒 / 正确码 201 通过 /
+   随后受保护接口 200
+9) INITIAL_ADMIN_PASSWORD 不长期保留：复刻 entrypoint 的守卫（先查存在性），
+   已改过的新密码仍然有效，bootstrap 口令 401 失效
+10) 秘密不外泄：审计详情里没有密钥、前端产物里没有密钥
+```
+
+#### 途中发现并修掉一个真实缺陷：**首次登录的引导顺序走不通**
+
+`MFA_ENFORCE_SUPER_ADMIN=true` 时，AuthGuard 有**两套各自为政的豁免**：
+
+* 「强制改密」那一关豁免了 `/api/auth/change-password`（`PASSWORD_CHANGE_EXEMPT_PREFIXES`）；
+* 「强制 MFA」那一关只看 `@MfaExempt()` 装饰器，而 change-password **没有**标记。
+
+于是两条规则的前提**恰好互相矛盾**：账号被告知"必须先改密码"，改密码却被拒
+"必须先绑 MFA"。实测：
+
+    3) 修改高强度密码
+      FAIL  改密成功  -> HTTP 403 该账号角色强制要求 MFA，请先完成绑定后再使用系统
+
+后果是**首次登录的管理员被送到改密页、却在改密页被挡回来**，而这正是加了两道
+强制之后最需要顺利走通的那条路。用户 §6 给出的顺序也正是"先改强密码，再绑 MFA"。
+
+修法：给 `change-password` 加 `@MfaExempt()`，并在该处写清"这不是放松要求，
+而是让两条强制规则能够共存"。**不削弱任何东西**：未绑 MFA 的账号本来就能登记、
+确认、看 `/api/auth/me`，但碰不到任何课程/资源数据；绑定后其余接口照旧要求第二因素。
+修后改密 201，整条链打通。
+
+#### 我自己在这一轮犯的错（都记下来）
+
+1. **用 `mfaRequired` 判断"强制是否开启"** —— 那是"已绑定、需第二步"的语义；
+   "强制但未绑定"表现为登录照常 201、`mfaRequired=false`、**其余请求 403**。
+   于是我把"强制已开启"误判成"未开启"而整段跳过。
+2. **猜错了字段名**：第二因素用的是 `challengeToken`，我写成 `mfaToken`
+   → 401「缺少验证信息」。**更糟的是它让"错误验证码被拒绝"变成一条假 PASS** ——
+   拒绝的原因根本不是码错。已改为从响应取 `challengeToken`，并断言它必须存在。
+3. **裸调 provision 脚本去测"密码不被写回"**：真正的守卫在 `entrypoint.sh`
+   （先查存在性再决定是否创建）。直接调脚本当然会覆盖密码 —— 我测的是生产启动
+   路径上永远不会发生的调用，却把它记成产品缺陷。已改为复刻 entrypoint 的守卫
+   （用同一个 `admin-account-exists.mjs`）。
+4. **清理被数据库正确拒绝**：migration 0003 的守卫禁止普通角色改/删 super_admin
+   （"A principal cannot manage a super_admin"）。改用 0003 给出的受认可方式
+   （`set_config('app.rbac_actor_super_admin','on',true)`）后清理干净。
+
+#### ⚠️ 生产部分的阻塞（如实标注，不是我漏做）
+
+生产现状实测（`https://tsinglankindergarten.zeabur.app`）：
+登录 201、`mfaRequired=false`，`/api/auth/mfa/status` 返回
+`{"pending":false,"enabled":false,"recoveryCodesRemaining":0,"required":false}` ——
+**生产超级管理员尚未绑定 MFA，强制开关也是关的**。
+
+用户 §6 要求生产 `MFA_ENFORCE_SUPER_ADMIN=true`。这一条**我做不到**：
+该值是 Zeabur 上的环境变量，而我没有 Zeabur 的 CLI / API / 控制台凭据。
+另外，即使开关打开，为他人的生产账号绑定 MFA 会产生**必须安全交付的恢复码**，
+而当前唯一的交付渠道是这个对话 —— 把它写进聊天记录不是"秘密不进 Git/logs/前端"
+的合格做法。
+
+因此：
+* **可验证的部分已全部实测**（上面 26 条，本机、MFA 强制打开）；
+* **生产执行标记为需要你操作**：在 Zeabur 上设 `MFA_ENFORCE_SUPER_ADMIN=true`，
+  然后由你（或授权我）用 `TsinglanAdmin` 登录 → 绑 MFA → 抄下恢复码。
+  我已修掉的那个引导顺序缺陷正是这条路上的拦路石，修完它才走得通。

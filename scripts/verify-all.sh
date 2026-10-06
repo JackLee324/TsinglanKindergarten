@@ -237,6 +237,10 @@ if [ -n "${BROWSER_E2E_USER:-}" ] && [ -n "${BROWSER_E2E_PASS:-}" ]; then
   #   ③ 目录页面能按目录查到归属其中的资源。
   # verify-browser-e2e 的 §24 建完文件夹就删、**从不刷新**，所以①此前是裸奔的。
   run "directory-web"     node scripts/verify-directory-web.mjs
+  # §6 超级管理员安全引导：bootstrap→首次登录→改强密码→MFA 登记→确认→恢复码→
+  # 重登第二因素；外加"再次引导不得写回 INITIAL_ADMIN_PASSWORD"与
+  # "秘密不进审计详情/前端产物"。用独立探针账号，跑完删除。
+  run "admin-bootstrap"   node scripts/verify-admin-bootstrap.mjs
   # **业务全链路**（§9）：新建→选班型/科目/目录→上传真实文件→保存草稿→我的资源→
   # 详情→提交审核→审核→发布→目录出现→下载逐字节一致；外加大编辑刷新、删除回收站恢复、
   # 授权重登生效、撤销后旧 Session 失效。单点都对、串起来断掉，是这类系统最常见

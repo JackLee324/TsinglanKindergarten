@@ -331,6 +331,28 @@ export class AuthController {
     return { success: true };
   }
 
+  /**
+   * 修改自己的密码。
+   *
+   * `@MfaExempt()` **不是**放松要求，而是让两条强制规则能够共存 ——
+   * 没有它会出现一个走不通的引导顺序：
+   *
+   *   1. entrypoint 建好的超级管理员带 `must_change_password = true`；
+   *   2. 若同时开启 `MFA_ENFORCE_SUPER_ADMIN=true`，AuthGuard 的 MFA 那一关
+   *      会拦下**除登记流程以外**的所有请求；
+   *   3. 而"强制改密"那一关**豁免**了本接口（见 AuthGuard 的
+   *      PASSWORD_CHANGE_EXEMPT_PREFIXES），于是两条规则的前提**恰好互相矛盾**：
+   *      用户被告知"必须先改密码"，改密码却被拒"必须先绑 MFA"。
+   *
+   * 实测（本机、两处开关都打开）：改密返回
+   *   403 该账号角色强制要求 MFA，请先完成绑定后再使用系统
+   * 于是首次登录的管理员被送到改密页，却在改密页被挡回来。
+   *
+   * 放行本接口**不削弱任何东西**：未绑 MFA 的账号本来就能登记、确认、看
+   * `/api/auth/me`，但**碰不到任何课程/资源数据**；而改自己的密码正是这个账号
+   * 此刻被要求做的事。绑定 MFA 之后，其余所有接口仍照旧要求第二因素。
+   */
+  @MfaExempt()
   @Post('change-password')
   async changePassword(
     @Body() body: ChangePasswordRequest,
