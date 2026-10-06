@@ -2011,3 +2011,41 @@ PASS  英文名已落库
 清理已扩展到"本轮建的所有探针目录"，删除顺序**倒序**（先子后父，
 否则"必须无子节点才能删"会把父节点挡住）。跑完复查：
 探针目录 0、未删除探针资源 0、探针账号 0。
+
+#### 13.5 本轮推送后的生产核对（B-2 再次关闭）
+
+推送 `82897c2..4f075ec` 后 Zeabur 自动重建（没有 API key 也能确认：
+轮询生产首页拿到新的 bundle 文件名 `index-DxKmKXaR.js`）。
+
+产物核对（只核对"新增的在不在"分辨不出"部署到了旧产物"，所以两边都看）：
+
+```
+directory-show-disabled     1      data-dir-move-up        1
+data-dir-move-down          1      data-dir-toggle-enabled 1
+data-dir-disabled-badge     1      data-dir-name-en-input  1
+ROLE_AUTO_PERMISSIONS       0   ← 本轮删除的仍然不在
+```
+
+真实浏览器在**生产**上打开目录页：
+
+```
+登录 + 第二因子 -> /
+目录树渲染: true
+「显示已停用」开关: true
+可点目录名数: 67
+带「启用/停用」按钮的节点数: 67
+带「上移/下移」按钮的节点数: 67
+页面控制台错误数: 0
+```
+
+#### 13.6 §6 的"秘密不进前端"做了一次正向核查
+
+不是"应该没写进去"，而是拿**生产实际发布的 bundle** 去搜：
+
+```
+S3_SECRET 0      MFA_ENCRYPTION_KEY 0     DOWNLOAD_TOKEN_SECRET 0
+INITIAL_ADMIN_PASSWORD 0                   cloudflarestorage.com 0
+```
+
+以及最近 6 个提交的 diff 里没有任何密钥形状的字符串。
+生产凭据只在 `credentials/`（gitignored、mode 600）。
