@@ -9,7 +9,7 @@ import { Badge } from './ui/Badge'
  * （业主明确要求教师界面不出现 RBAC / scope / grant / deny / override）。
  */
 export function Header() {
-  const { user, logout } = useAuth()
+  const { user, capabilities, logout } = useAuth()
   const navigate = useNavigate()
 
   const onLogout = async () => {
@@ -32,7 +32,8 @@ export function Header() {
               <UserRound className="size-4 text-muted-foreground" />
               <span data-testid="header-user-name">{user.name}</span>
             </span>
-            {user.role === 'ADMIN' && (
+            {/* 「管理员」这个标签来自服务端的能力位，前端不比较角色。 */}
+            {capabilities?.isAdmin === true && (
               <Badge variant="secondary" data-testid="header-role-badge">
                 管理员
               </Badge>

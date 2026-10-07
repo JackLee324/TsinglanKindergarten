@@ -1,6 +1,17 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { ChevronDown, ChevronRight, ClipboardCheck, FolderTree, Home, Layers, Settings } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  ClipboardCheck,
+  FolderTree,
+  Home,
+  Layers,
+  ScrollText,
+  Settings,
+  ShieldCheck,
+  Users,
+} from 'lucide-react'
 import { useDirectory } from '../directory/DirectoryProvider'
 import { directoryUrl, isWithinPath } from '../directory/path'
 import { useAuth } from '../auth/useAuth'
@@ -18,6 +29,17 @@ import { cn } from './ui/cn'
 export function Sidebar() {
   const { roots, loading, ready } = useDirectory()
   const { capabilities } = useAuth()
+
+  /**
+   * 管理分组要不要出现。
+   *
+   * 注意这里**没有**判断角色：三个能力位都是服务端算出来的
+   * （`capabilitiesFor()`），前端只负责显示。
+   */
+  const showAdminGroup =
+    capabilities?.canManageUsers === true ||
+    capabilities?.canManageDirectories === true ||
+    capabilities?.canViewAudit === true
   const location = useLocation()
   const currentPath = location.pathname.startsWith('/directory/')
     ? location.pathname.slice('/directory/'.length)
@@ -80,16 +102,51 @@ export function Sidebar() {
           ))}
         </div>
 
-        {capabilities?.canManageDirectories === true && (
-          <div className="mt-3 border-t border-white/15 pt-3">
-            <NavItem
-              to="/directory/manage"
-              label="目录管理"
-              icon={<Settings className="size-5" />}
-              testId="nav-directory-manage"
-            />
-          </div>
-        )}
+
+      {/*
+        ── 管理分组（业主 Stage 8 §22）────────────────────────────────────────
+        每一项都由服务端的 `capabilities` 决定要不要出现。
+        前端没有任何 `role === 'ADMIN'`，也没有角色白名单数组 ——
+        能不能做由接口逐条判定，界面只是"不要把点了必然失败的东西摆出来"。
+      */}
+      {showAdminGroup && (
+        <div className="border-t border-white/15 pb-4" data-testid="sidebar-admin">
+          <p className="px-6 py-2 text-xs font-medium text-white/60" data-testid="sidebar-admin-title">
+            管理
+          </p>
+          <nav className="px-3" data-testid="sidebar-admin-nav">
+            {capabilities?.canManageUsers === true && (
+              <>
+                <NavItem to="/admin/users" label="教师账号" icon={<Users className="size-5" />} testId="nav-admin-users" />
+                <NavItem
+                  to="/admin/permissions"
+                  label="权限"
+                  icon={<ShieldCheck className="size-5" />}
+                  testId="nav-admin-permissions"
+                />
+              </>
+            )}
+            {capabilities?.canManageDirectories === true && (
+              <NavItem
+                to="/admin/directories"
+                label="目录"
+                icon={<Settings className="size-5" />}
+                // testId 保持 stage 4 起的名字：位置从 /directory/manage 搬到
+                // /admin/directories，但"进入目录管理"这件事没有变。
+                testId="nav-directory-manage"
+              />
+            )}
+            {capabilities?.canViewAudit === true && (
+              <NavItem
+                to="/admin/audit"
+                label="审计"
+                icon={<ScrollText className="size-5" />}
+                testId="nav-admin-audit"
+              />
+            )}
+          </nav>
+        </div>
+      )}
       </nav>
     </aside>
   )

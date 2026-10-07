@@ -49,13 +49,40 @@ export class AuditService {
     }
   }
 
+  /**
+   * 审计查询（业主 Stage 8 §14）。
+   *
+   * 支持的筛选就是"查问题时真的会用到的那几个"：
+   *   · 动作（谁改过密码？谁停用过目录？）
+   *   · 谁做的（这位管理员上任以来都做了什么？）
+   *   · 对哪个对象（这条资源/这个目录都经历过什么？）
+   *   · 结果（只看被拒的）
+   *   · 时间区间
+   *
+   * 不做统计聚合 —— 业主明确说"不要先做复杂统计"。
+   */
   async query(options: {
     limit: number
     offset: number
     action?: string
     result?: string
     actorId?: string
+    targetType?: string
+    targetId?: string
+    from?: string
+    to?: string
   }): Promise<{ items: Record<string, unknown>[]; total: number }> {
+    const filter = {
+      action: options.action ?? null,
+      result: options.result ?? null,
+      actorId: options.actorId ?? null,
+      targetType: options.targetType ?? null,
+      targetId: options.targetId ?? null,
+      // 时间按**字符串**传进 SQL 再转 timestamptz：客户端的 HTML datetime-local
+      // 给的是本地时间，由数据库按同一个会话时区解释，避免前端自己算出偏差。
+      from: options.from ?? null,
+      to: options.to ?? null,
+    }
     const rows = await this.sql<
       {
         id: string
@@ -72,17 +99,26 @@ export class AuditService {
     >`
       SELECT id::text, actor_id, actor_name, action, target_type, target_id, result, detail, ip, created_at
       FROM audit_logs
-      WHERE (${options.action ?? null}::text IS NULL OR action = ${options.action ?? null})
-        AND (${options.result ?? null}::text IS NULL OR result = ${options.result ?? null})
-        AND (${options.actorId ?? null}::uuid IS NULL OR actor_id = ${options.actorId ?? null}::uuid)
+      WHERE (${filter.action}::text IS NULL OR action = ${filter.action}::text)
+        AND (${filter.result}::text IS NULL OR result = ${filter.result}::text)
+        AND (${filter.actorId}::uuid IS NULL OR actor_id = ${filter.actorId}::uuid)
+        AND (${filter.targetType}::text IS NULL OR target_type = ${filter.targetType}::text)
+        AND (${filter.targetId}::text IS NULL OR target_id = ${filter.targetId}::text)
+        AND (${filter.from}::text IS NULL OR created_at >= ${filter.from}::timestamptz)
+        AND (${filter.to}::text IS NULL OR created_at <= ${filter.to}::timestamptz)
       ORDER BY created_at DESC, id DESC
       LIMIT ${options.limit} OFFSET ${options.offset}
     `
+    // 总数必须用**同一套筛选条件** —— 否则分页会显示"共 500 条"，而筛出来的只有 3 条。
     const totalRows = await this.sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM audit_logs
-      WHERE (${options.action ?? null}::text IS NULL OR action = ${options.action ?? null})
-        AND (${options.result ?? null}::text IS NULL OR result = ${options.result ?? null})
-        AND (${options.actorId ?? null}::uuid IS NULL OR actor_id = ${options.actorId ?? null}::uuid)
+      WHERE (${filter.action}::text IS NULL OR action = ${filter.action}::text)
+        AND (${filter.result}::text IS NULL OR result = ${filter.result}::text)
+        AND (${filter.actorId}::uuid IS NULL OR actor_id = ${filter.actorId}::uuid)
+        AND (${filter.targetType}::text IS NULL OR target_type = ${filter.targetType}::text)
+        AND (${filter.targetId}::text IS NULL OR target_id = ${filter.targetId}::text)
+        AND (${filter.from}::text IS NULL OR created_at >= ${filter.from}::timestamptz)
+        AND (${filter.to}::text IS NULL OR created_at <= ${filter.to}::timestamptz)
     `
     return {
       items: rows.map((r) => ({

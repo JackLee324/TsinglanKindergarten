@@ -229,6 +229,24 @@ export class Browser {
 
 
   /**
+   * 选中一个 `<select>` 的某个 option。
+   *
+   * ⚠️ 必须用原型上的 value setter + change 事件：React 会劫持 select 的 value，
+   * 直接 `el.value = x` 不会触发 onChange（和 fill() 里 input 的坑是同一个）。
+   */
+  async select(selector, value) {
+    const ok = await this.session.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)})
+      if (!el) return false
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+      setter.call(el, ${JSON.stringify(value)})
+      el.dispatchEvent(new Event('change', { bubbles: true }))
+      return true
+    })()`)
+    if (!ok) throw new Error(`选择失败：找不到 ${selector}`)
+  }
+
+  /**
    * 往 `<input type="file">` 里塞一个真实文件（阶段 6 的上传验收要用）。
    *
    * 为什么必须走 CDP 而不是"点一下选择文件"：点它只会弹出操作系统的文件选择框，

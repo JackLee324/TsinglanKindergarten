@@ -9,6 +9,7 @@ import {
 } from '../../shared/resource-status'
 import { ADMIN_ROLE, PERMISSIONS, requiresOwnership } from '../../shared/permissions'
 import { SQL } from '../db/database.module'
+import { AppError } from '../common/http-error'
 import type { AuthUser, AuthorizationDecision } from '../common/auth-user'
 
 export interface PermissionGrantRow {
@@ -321,6 +322,8 @@ export class AuthorizationService {
    */
   async capabilitiesFor(user: AuthUser): Promise<{
     role: string
+    /** 这个账号是不是管理员（**展示用**：界面上的「管理员」标签）。 */
+    isAdmin: boolean
     permissions: string[]
     canManageDirectories: boolean
     canManageUsers: boolean
@@ -334,6 +337,7 @@ export class AuthorizationService {
     const admin = this.isAdmin(user)
     return {
       role: user.role,
+      isAdmin: admin,
       permissions: [...codes],
       canManageDirectories: admin || codes.has('directory.manage'),
       canManageUsers: admin || codes.has('user.manage'),
@@ -439,6 +443,39 @@ export class AuthorizationService {
    */
   isOwnOnly(permission: PermissionCode): boolean {
     return requiresOwnership(permission)
+  }
+
+  /**
+   * 这个角色是不是管理员。
+   *
+   * ⚠️ **只用于"展示"与"不变量"**（列表上那个「管理员」标签、系统至少要留一个
+   * 管理员的检查）。**任何"能不能做某件事"的判定都必须走 `can()`** —— 那才是
+   * 唯一的放行入口。它存在的另一个目的，是让 `role === 'ADMIN'` 这个比较
+   * 继续只出现在本文件里（静态测试会扫全仓库）。
+   */
+  isAdminRole(role: string): boolean {
+    return role === ADMIN_ROLE
+  }
+
+  /**
+   * 系统必须**至少留一个能用的管理员**。
+   *
+   * 这条不变量放在这里而不是账号服务里，理由和别的判定一样：
+   * "管理员"这个概念的定义只在本文件（`ADMIN_ROLE` 的绕过也在这里），
+   * 换一个地方再写一遍 `role === 'ADMIN'`，就等于开了第二个解释权。
+   *
+   * 一旦没有管理员，界面上再也加不回来（唯一的路是直接改数据库），
+   * 所以停用 / 降级最后一个管理员的请求必须在这里被拒。
+   */
+  async assertSystemKeepsAnAdmin(excludingUserId: string): Promise<void> {
+    const rows = await this.sql<{ n: number }[]>`
+      SELECT count(*)::int AS n
+      FROM users
+      WHERE role = ${ADMIN_ROLE} AND status = 'active' AND id <> ${excludingUserId}
+    `
+    if ((rows[0]?.n ?? 0) === 0) {
+      throw AppError.badRequest('系统至少需要一名管理员。', 'LAST_ADMIN')
+    }
   }
 
   /**

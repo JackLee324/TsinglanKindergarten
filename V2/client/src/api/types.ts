@@ -18,6 +18,13 @@ export interface SessionUser {
 
 export interface Capabilities {
   readonly role: UserRole
+  /**
+   * 这个账号是不是管理员。**展示用**（界面上的「管理员」标签）。
+   *
+   * 前端自己不比较角色：能不能做某件事一律看下面的能力位，
+   * 而"是不是管理员"这件事由服务端算好告诉界面。
+   */
+  readonly isAdmin: boolean
   readonly permissions: readonly string[]
   readonly canManageDirectories: boolean
   readonly canManageUsers: boolean
@@ -133,6 +140,74 @@ export interface DirectoryNodeDetail extends Omit<DirectoryNode, 'children'> {
 
 /** 列表排序（与 `shared/resource-query.ts` 的白名单同一份，由 shared 推导）。 */
 export type ResourceSortKey = 'updated_desc' | 'updated_asc' | 'created_desc' | 'title_asc'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 管理员（阶段 8）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 一条授权：权限 + 目录。`directoryId = null` 表示全平台。 */
+export interface PermissionGrant {
+  readonly permission: string
+  readonly directoryId: string | null
+}
+
+/** 列表上的权限摘要（人事化说法，不出现权限码）。 */
+export interface PermissionSummaryEntry {
+  readonly permission: string
+  readonly label: string
+  readonly directoryCount: number
+  /** 全平台授权（不针对某个目录）。 */
+  readonly global: boolean
+}
+
+export interface AdminUserRow {
+  readonly id: string
+  /** 展示用（列表上的「管理员」标签）；判定不在前端。 */
+  readonly isAdmin: boolean
+  readonly username: string
+  readonly name: string
+  readonly nameEn: string | null
+  readonly role: UserRole
+  readonly status: 'active' | 'inactive'
+  readonly createdAt: string
+  readonly updatedAt: string
+  /** 最后一次登录时间（来自会话表；从未登录过是 null）。 */
+  readonly lastLoginAt: string | null
+  readonly permissionCount: number
+  readonly directoryCount: number
+  readonly permissionSummary: readonly PermissionSummaryEntry[]
+}
+
+export interface AdminUserDetail extends AdminUserRow {
+  readonly permissions: readonly PermissionGrant[]
+}
+
+export interface UserListPage {
+  readonly items: readonly AdminUserRow[]
+  readonly total: number
+  readonly page: number
+  readonly pageSize: number
+  readonly totalPages: number
+}
+
+export interface AuditLogRow {
+  readonly id: string
+  readonly actorId: string | null
+  readonly actorName: string
+  readonly action: string
+  readonly actionLabel?: string
+  readonly targetType: string
+  readonly targetId: string | null
+  readonly result: 'success' | 'denied' | 'failed'
+  readonly detail: Record<string, unknown> | null
+  readonly ip: string | null
+  readonly createdAt: string
+}
+
+export interface AuditLogPage {
+  readonly items: readonly AuditLogRow[]
+  readonly total: number
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 文件（阶段 6）

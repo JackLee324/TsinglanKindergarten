@@ -17,6 +17,9 @@ export const AUDIT_ACTIONS = {
   'user.create': '账号创建',
   'user.update': '账号修改',
   'user.disable': '账号停用',
+  // 管理员替别人设置新口令。**与用户自己改口令（auth.change_password）分开记**：
+  // "是谁改的"在两种情况下答案完全不同，合并了就没法追。
+  'user.password_change': '管理员重置密码',
   'user.permissions.update': '权限修改',
 
   'directory.create': '目录新增',
@@ -24,6 +27,10 @@ export const AUDIT_ACTIONS = {
   'directory.reorder': '目录排序',
   'directory.move': '目录移动',
   'directory.delete': '目录删除',
+  // 启停单独记：它们改变的是"老师还能不能看到这一块"，
+  // 混在 directory.update 里会让"谁把某个目录关掉了"查不出来。
+  'directory.enable': '目录启用',
+  'directory.disable': '目录停用',
 
   'resource.create': '资源上传',
   'resource.update': '资源编辑',

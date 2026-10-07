@@ -160,6 +160,55 @@ describe('资源所有权判断必须收口到 AuthorizationService', () => {
 })
 
 describe('ADMIN 绕过只允许一处', () => {
+  /**
+   * 上面那条只扫了 `ADMIN_ROLE` 这个**常量**，于是 `role === 'ADMIN'` 这种
+   * 字面量写法能溜过去 —— Stage 8 加"最后一个管理员"保护时就是这么溜过去的
+   * （在 users.service.ts 里写了一次角色比较）。这条把它堵上。
+   */
+  test("server/ 下 `'ADMIN'` 这个角色字面量也只出现在 authorization.service.ts", () => {
+    const files = walk(SERVER, (name) => name.endsWith('.ts'))
+    const offenders = []
+    for (const file of files) {
+      const rel = relative(ROOT, file)
+      if (rel.endsWith(join('authz', 'authorization.service.ts'))) continue
+      // `shared/permissions.ts` 里定义角色的取值集合，那是定义处不是判定处。
+      if (rel.endsWith(join('shared', 'permissions.ts'))) continue
+      const code = stripComments(readFileSync(file, 'utf8'))
+      const hits = code
+        .split('\n')
+        .filter((l) => /['"]ADMIN['"]/.test(l) && l.trim() !== '')
+        // SQL 里按角色取值筛选（`WHERE role = 'ADMIN'`）不算"判定放行"，
+        // 但为了不留后门，这里连它一起管：要查管理员请走 AuthorizationService。
+        .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+      if (hits.length > 0) offenders.push(`${rel}: ${hits[0].trim()}`)
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `角色字面量 'ADMIN' 只允许出现在 authorization.service.ts：\n  ${offenders.join('\n  ')}\n` +
+        '"管理员"这个概念必须只有一处定义，否则它的含义会在各处慢慢分叉。',
+    )
+  })
+
+  test('client/src 里不比较角色（用服务端给的 capabilities）', () => {
+    const files = walk(join(ROOT, 'client', 'src'), (name) => /\.(ts|tsx)$/.test(name))
+    const offenders = []
+    for (const file of files) {
+      const rel = relative(ROOT, file)
+      const code = stripComments(readFileSync(file, 'utf8'))
+      const hits = code
+        .split('\n')
+        .filter((l) => /(role\s*===|roles\s*\.includes)/.test(l) && l.trim() !== '')
+      if (hits.length > 0) offenders.push(`${rel}: ${hits[0].trim()}`)
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `前端不得比较角色：\n  ${offenders.join('\n  ')}\n` +
+        '能不能做某件事由服务端的 capabilities 决定；"是不是管理员"也是服务端算好的。',
+    )
+  })
+
   test('server/ 下 ADMIN_ROLE 只出现在 authorization.service.ts（注释与 import 不算）', () => {
     const files = walk(SERVER, (name) => name.endsWith('.ts'))
     const offenders = []

@@ -1,6 +1,7 @@
-import { Body, Controller, Get, Param, Patch, Post, Put } from '@nestjs/common'
+import { Body, Controller, Get, Param, Patch, Post, Put, Query } from '@nestjs/common'
 import { UsersService } from './users.service'
-import { CreateUserDto, SetPermissionsDto, UpdateUserDto } from './users.dto'
+import { CreateUserDto, ListUsersDto, SetPermissionsDto, UpdateUserDto } from './users.dto'
+import { DEFAULT_PAGE_SIZE } from '../../shared/resource-query'
 import { CurrentUser, RequirePermission } from '../common/decorators'
 import type { AuthUser } from '../common/auth-user'
 
@@ -17,10 +18,20 @@ import type { AuthUser } from '../common/auth-user'
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
+  /**
+   * 教师账号列表：**服务端搜索 + 分页**（业主 §28）。
+   * 默认每页 20，与资源列表同一个常量 —— 界面上两处"每页多少条"不该有两个数。
+   */
   @Get()
   @RequirePermission('user.manage')
-  async list() {
-    return { items: await this.users.list() }
+  async list(@Query() query: ListUsersDto) {
+    return this.users.list({
+      q: query.q ?? null,
+      role: query.role ?? null,
+      status: query.status ?? null,
+      page: query.page ?? 1,
+      pageSize: query.pageSize ?? DEFAULT_PAGE_SIZE,
+    })
   }
 
   @Get(':id')

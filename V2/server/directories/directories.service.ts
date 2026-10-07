@@ -447,10 +447,22 @@ export class DirectoriesService {
       values as never[],
     ) as unknown as NodeRow[]
 
+    /*
+     * 审计：启停**单独记一条**（业主 §15 点名要 directory.enable / directory.disable）。
+     *
+     * 混在 `directory.update` 里的后果很具体：某天某个目录对老师们"消失"了，
+     * 你想查"谁把它关掉的"，按动作筛 `directory.update` 会捞出一堆改名记录，
+     * 而真正的元凶躲在 detail.changed 里 —— 那不是能用来查问题的形状。
+     */
+    const enabledChanged = input.enabled !== undefined && input.enabled !== before.enabled
     await this.audit.write({
       actorId: actor.id,
       actorName: actor.name,
-      action: 'directory.update',
+      action: enabledChanged
+        ? input.enabled === true
+          ? 'directory.enable'
+          : 'directory.disable'
+        : 'directory.update',
       targetType: 'directory',
       targetId: id,
       result: 'success',

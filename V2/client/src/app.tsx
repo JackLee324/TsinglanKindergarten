@@ -11,6 +11,9 @@ import { DirectoryManagePage } from './pages/DirectoryManagePage'
 import { ResourceDetailPage } from './pages/ResourceDetailPage'
 import { MyResourcesPage } from './pages/MyResourcesPage'
 import { ReviewQueuePage } from './pages/ReviewQueuePage'
+import { AdminUsersPage } from './pages/AdminUsersPage'
+import { AdminPermissionsPage } from './pages/AdminPermissionsPage'
+import { AdminAuditPage } from './pages/AdminAuditPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { Spinner } from './components/ui/Spinner'
 import { EmptyState } from './components/ui/EmptyState'
@@ -52,9 +55,26 @@ export function App() {
               */}
               <Route path="resources/:id" element={<ResourceDetailPage />} />
               <Route path="directory" element={<DirectoryBrowsePage />} />
-              {/* 目录管理要放在通配之前，否则会被 `/directory/*` 吃掉 */}
+              {/*
+                目录管理放在 `/admin/directories`（业主 Stage 8 §8 / §22 把它归到"管理"下面）。
+                `/directory/manage` 保留为**别名**：阶段 4 起就存在的地址，
+                没有理由让收藏了它的人突然 404。两条路由渲染同一个页面，没有第二份实现。
+              */}
               <Route path="directory/manage" element={<RequireDirectoryManage><DirectoryManagePage /></RequireDirectoryManage>} />
               <Route path="directory/*" element={<DirectoryBrowsePage />} />
+
+              {/* ── 管理（业主 Stage 8 §22）────────────────────────────────── */}
+              <Route path="admin/users" element={<AdminUsersPage />} />
+              <Route path="admin/permissions" element={<AdminPermissionsPage />} />
+              <Route path="admin/audit" element={<AdminAuditPage />} />
+              <Route
+                path="admin/directories"
+                element={
+                  <RequireDirectoryManage>
+                    <DirectoryManagePage />
+                  </RequireDirectoryManage>
+                }
+              />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Routes>

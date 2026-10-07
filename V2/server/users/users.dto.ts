@@ -1,17 +1,49 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
   MinLength,
   ValidateNested,
-  IsBoolean,
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import { PERMISSION_CODES, USER_ROLES } from '../../shared/permissions'
+
+export class ListUsersDto {
+  /** 服务端搜索：姓名或用户名（业主 §28）。 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  q?: string
+
+  @IsOptional()
+  @IsIn(USER_ROLES as unknown as string[])
+  role?: string
+
+  @IsOptional()
+  @IsIn(['active', 'inactive'] as const)
+  status?: string
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number
+}
 
 export class PermissionGrantDto {
   @IsIn(PERMISSION_CODES as unknown as string[], { message: '未知的权限' })
