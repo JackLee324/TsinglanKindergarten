@@ -60,14 +60,21 @@ export const REVIEW_QUEUE_TABS = [
 
 export type ReviewQueueTabKey = (typeof REVIEW_QUEUE_TABS)[number]['key']
 
-/** 「我的资源」的分栏。顺序即界面上的顺序。 */
+/**
+ * 「我的资源」的分栏。顺序即界面上的顺序。
+ *
+ * `recycle` 这一栏走的是**另一个接口**（回收站只看 `deleted_at IS NOT NULL`），
+ * 所以它不能只靠 `status` 表达 —— 但它仍然属于同一份清单定义：
+ * 界面不许自己再写一份分栏数组（那正是 V1"第二份真相"的老毛病）。
+ */
 export const MY_RESOURCE_TABS = [
-  { key: 'ALL', label: '全部', status: null },
-  { key: 'DRAFT', label: '草稿', status: 'DRAFT' },
-  { key: 'PENDING_REVIEW', label: '待审核', status: 'PENDING_REVIEW' },
-  { key: 'PUBLISHED', label: '已发布', status: 'PUBLISHED' },
-  { key: 'REJECTED', label: '已退回', status: 'REJECTED' },
-  { key: 'RECALLED', label: '已撤回', status: 'RECALLED' },
+  { key: 'ALL', label: '全部', status: null, recycle: false },
+  { key: 'DRAFT', label: '草稿', status: 'DRAFT', recycle: false },
+  { key: 'PENDING_REVIEW', label: '待审核', status: 'PENDING_REVIEW', recycle: false },
+  { key: 'PUBLISHED', label: '已发布', status: 'PUBLISHED', recycle: false },
+  { key: 'REJECTED', label: '已退回', status: 'REJECTED', recycle: false },
+  { key: 'RECALLED', label: '已撤回', status: 'RECALLED', recycle: false },
+  { key: 'RECYCLE', label: '回收站', status: null, recycle: true },
 ] as const
 
 export type MyResourceTabKey = (typeof MY_RESOURCE_TABS)[number]['key']

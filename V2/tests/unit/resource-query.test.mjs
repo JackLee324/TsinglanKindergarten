@@ -51,9 +51,18 @@ describe('服务端分页的计算', () => {
 describe('「我的资源」的分栏与业主清单一致', () => {
   const { MY_RESOURCE_TABS } = resourceQuery
 
-  test('六栏，顺序固定', () => {
+  test('六栏（业主清单）+ 回收站一栏，顺序固定', () => {
+    /*
+      业主清单是六栏：全部 / 草稿 / 待审核 / 已发布 / 已退回 / 已撤回。
+      阶段 10 的验收要求「删除 → 进回收站 → 恢复」在**界面上**能走通，
+      而回收站不是"某个状态"（它按 `deleted_at IS NOT NULL` 取），
+      所以它是**第七栏**、与那六栏并列但不同源。
+      这条断言把两件事分开钉住：六栏的清单与顺序不许变，回收站必须是一个
+      没有状态、走回收站接口的独立栏。
+    */
+    const statusTabs = MY_RESOURCE_TABS.filter((t) => t.recycle !== true)
     assert.deepEqual(
-      MY_RESOURCE_TABS.map((t) => `${t.key}:${t.label}`),
+      statusTabs.map((t) => `${t.key}:${t.label}`),
       [
         'ALL:全部',
         'DRAFT:草稿',
@@ -63,12 +72,16 @@ describe('「我的资源」的分栏与业主清单一致', () => {
         'RECALLED:已撤回',
       ],
     )
+    const recycleTabs = MY_RESOURCE_TABS.filter((t) => t.recycle === true)
+    assert.equal(recycleTabs.length, 1, '回收站只能有一栏')
+    assert.equal(recycleTabs[0].label, '回收站')
+    assert.equal(recycleTabs[0].status, null, '回收站不是一个状态，它按 deleted_at 取')
   })
 
   test('只有「全部」不带状态，其余各自对应一个状态', () => {
     const all = MY_RESOURCE_TABS.find((t) => t.key === 'ALL')
     assert.equal(all.status, null)
-    for (const tab of MY_RESOURCE_TABS.filter((t) => t.key !== 'ALL')) {
+    for (const tab of MY_RESOURCE_TABS.filter((t) => t.key !== 'ALL' && t.recycle !== true)) {
       assert.equal(tab.status, tab.key)
     }
   })

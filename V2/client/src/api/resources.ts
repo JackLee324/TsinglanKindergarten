@@ -76,6 +76,29 @@ export const resourcesApi = {
   recall: (id: string, comment?: string | null) =>
     api.post<ResourceDetail>(`/api/resources/${id}/recall`, { comment: comment ?? null }),
 
+  /**
+   * 删除资源（**软删除**：进回收站，不是抹掉）。
+   *
+   * 业主 §14 的回收站要求"删了能恢复"，所以界面上的词是「删除」，
+   * 而数据库里发生的是 `deleted_at` 被写上 —— 历史、审核记录、审计都还在。
+   */
+  remove: (id: string) => api.del<ResourceDetail>(`/api/resources/${id}`),
+
+  /** 从回收站恢复。 */
+  restore: (id: string) => api.post<ResourceDetail>(`/api/resources/${id}/restore`),
+
+  /** 回收站：教师看自己的，管理员看全部（服务端决定范围）。 */
+  recycleBin: (query: { page?: number; pageSize?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (query.page != null) params.set('page', String(query.page))
+    if (query.pageSize != null) params.set('pageSize', String(query.pageSize))
+    const suffix = params.toString()
+    return api.get<ResourceListPage>(`/api/resources/mine/recycle-bin${suffix ? `?${suffix}` : ''}`)
+  },
+
+  /** 管理员视角的回收站（全部人的）。 */
+  allRecycleBin: () => api.get<ResourceListPage>('/api/resources/recycle-bin'),
+
   /** 完整审核时间线（业主 §7：多次审核全部保留）。 */
   reviewHistory: (id: string) =>
     api.get<{ items: readonly ResourceReviewRecord[] }>(`/api/resources/${id}/review-history`),

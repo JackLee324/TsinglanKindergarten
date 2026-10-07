@@ -4,6 +4,7 @@ import { ApiError } from '../api/http'
 import type { ResourceListItem, ResourceStatus } from '../api/types'
 import { MY_RESOURCE_TABS } from '@shared/resource-query'
 import { useDirectory } from '../directory/DirectoryProvider'
+import { useAuth } from '../auth/useAuth'
 import { ResourceCard } from '../components/resource/ResourceCard'
 import { resourcesApi } from '../api/resources'
 import { humanMessage } from '../components/resource/errors'
@@ -24,7 +25,9 @@ import { cn } from '../components/ui/cn'
  */
 export function MyResourcesPage() {
   const { resolve } = useDirectory()
+  const { capabilities } = useAuth()
   const navigate = useNavigate()
+  const isAdmin = capabilities?.isAdmin === true
   const [tab, setTab] = useState<(typeof MY_RESOURCE_TABS)[number]['key']>('ALL')
   const [actionError, setActionError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -35,7 +38,9 @@ export function MyResourcesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const status = MY_RESOURCE_TABS.find((t) => t.key === tab)?.status ?? null
+  const currentTab = MY_RESOURCE_TABS.find((t) => t.key === tab)
+  const status = currentTab?.status ?? null
+  const recycle = currentTab?.recycle === true
 
   const [reloadToken, setReloadToken] = useState(0)
 
@@ -47,8 +52,15 @@ export function MyResourcesPage() {
     let cancelled = false
     setLoading(true)
     setError(null)
-    resourcesApi
-      .mine({ status: status as ResourceStatus | null, page, pageSize: 12 })
+    /*
+      回收站是**另一个接口**：它按 `deleted_at IS NOT NULL` 取，而不是按状态。
+      管理员要多看一步 —— 他要能管理**全部人**删掉的东西（业主 §14），
+      所以管理员走 `/recycle-bin`（服务端返回全部），教师走 `/mine/recycle-bin`。
+    */
+    const request = recycle
+      ? (isAdmin ? resourcesApi.allRecycleBin() : resourcesApi.recycleBin({ page, pageSize: 12 }))
+      : resourcesApi.mine({ status: status as ResourceStatus | null, page, pageSize: 12 })
+    request
       .then((res) => {
         if (cancelled) return
         setItems(res.items)
@@ -67,7 +79,7 @@ export function MyResourcesPage() {
     return () => {
       cancelled = true
     }
-  }, [status, page, reloadToken])
+  }, [status, recycle, isAdmin, page, reloadToken])
 
   /** 提交审核：草稿才允许（REJECTED / RECALLED 必须先编辑回草稿）。 */
   async function submitForReview(id: string) {
@@ -78,6 +90,20 @@ export function MyResourcesPage() {
       await reload()
     } catch (e) {
       setActionError(humanMessage(e, '提交审核失败'))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  /** 从回收站恢复（业主 §14：删了要能恢复，历史与审核记录都还在）。 */
+  async function restoreResource(id: string) {
+    setBusyId(id)
+    setActionError(null)
+    try {
+      await resourcesApi.restore(id)
+      await reload()
+    } catch (e) {
+      setActionError(humanMessage(e, '恢复失败'))
     } finally {
       setBusyId(null)
     }
@@ -95,7 +121,11 @@ export function MyResourcesPage() {
         我的资源
       </h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        这里是你上传的全部资源，包括别人看不到的草稿与待审核内容（共 {total} 条）。
+        {recycle
+          ? isAdmin
+            ? `回收站：全部人删除的资源（共 ${total} 条）。恢复之后它会回到原来的目录。`
+            : `回收站：你删除的资源（共 ${total} 条）。恢复之后它会回到原来的目录。`
+          : `这里是你上传的全部资源，包括别人看不到的草稿与待审核内容（共 ${total} 条）。`}
       </p>
 
       <div className="mt-5 flex flex-wrap gap-2" data-testid="my-resources-tabs">
@@ -192,8 +222,23 @@ export function MyResourcesPage() {
                         审核中，暂时不能再提交
                       </span>
                     )}
+                    {/*
+                      回收站里只有一件事可做：恢复。
+                      **不提供"彻底删除"** —— 业主明确不要 purge 界面（阶段 8 的范围决定）。
+                    */}
+                    {recycle && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busyId === item.id}
+                        onClick={() => void restoreResource(item.id)}
+                        data-testid="my-resource-restore"
+                      >
+                        恢复
+                      </Button>
+                    )}
                       <span className="ml-auto text-xs text-muted-foreground" data-testid="my-resource-status">
-                        {RESOURCE_STATUS_LABEL[item.status]}
+                        {recycle ? '已删除' : RESOURCE_STATUS_LABEL[item.status]}
                       </span>
                     </div>
                   }

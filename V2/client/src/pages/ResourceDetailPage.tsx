@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Pencil } from 'lucide-react'
+import { ArrowLeft, Pencil, Trash2 } from 'lucide-react'
 import { resourcesApi } from '../api/resources'
 import { ApiError } from '../api/http'
 import type { ResourceDetail } from '../api/types'
@@ -12,6 +12,8 @@ import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Input, Label, Textarea } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
+import { Dialog } from '../components/ui/Dialog'
+import { humanMessage } from '../components/resource/errors'
 import { EDITABLE_STATUSES } from '@shared/resource-status'
 import { EmptyState } from '../components/ui/EmptyState'
 import { formatDate } from '../components/resource/ResourceCard'
@@ -46,6 +48,9 @@ export function ResourceDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [busyDelete, setBusyDelete] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -86,6 +91,27 @@ export function ResourceDetailPage() {
   // 面包屑来自**目录树**（parentId 链），所以管理员改名之后这里自动跟着变。
   const chain = resolve(resource.directoryPath.split('/')).chain
 
+  /*
+    删除（软删除 → 回收站）。删完回到目录页 —— 那条资源已经不在公开列表里了。
+
+    写成箭头函数常量而不是 `function`：函数声明会被提升，TypeScript 因此
+    认为它可能在 `resource === null` 那个守卫**之前**被调用，于是拒绝收窄类型
+    （编译期报 "possibly null"）。这不是风格问题，是类型安全的问题。
+  */
+  const confirmDelete = async () => {
+    setBusyDelete(true)
+    setDeleteError(null)
+    try {
+      await resourcesApi.remove(resource.id)
+      setDeleting(false)
+      navigate(directoryUrl(resource.directoryPath))
+    } catch (e) {
+      setDeleteError(humanMessage(e, '删除失败'))
+    } finally {
+      setBusyDelete(false)
+    }
+  }
+
   return (
     <div data-testid="resource-detail-page" data-resource-id={resource.id} data-resource-status={resource.status}>
       <button
@@ -122,6 +148,21 @@ export function ResourceDetailPage() {
               <Pencil className="size-4" /> 编辑
             </Button>
           )}
+          {/*
+            删除 = **软删除**（进回收站，可以恢复）。业主 §14 要的是"删了能找回来"，
+            所以按钮上的词是「删除」而数据库里写的是 `deleted_at` —— 历史、
+            审核记录、审计一条都不会掉。这里刻意**不做**"彻底删除"（业主明确不要）。
+          */}
+          {resource.capabilities.canDelete && !editing && !deleting && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleting(true)}
+              data-testid="resource-detail-delete"
+            >
+              <Trash2 className="size-4" /> 删除
+            </Button>
+          )}
         </div>
       </div>
 
@@ -131,6 +172,33 @@ export function ResourceDetailPage() {
         只是动作不同（由服务端的 capabilities 决定）。
       */}
       <ReviewActions resource={resource} onChanged={load} />
+
+      <Dialog
+        open={deleting}
+        title={`删除「${resource.title}」`}
+        onClose={() => {
+          if (!busyDelete) setDeleting(false)
+        }}
+        testId="resource-delete-dialog"
+      >
+        <p className="text-sm text-foreground">
+          删掉之后它会进**回收站**，在「我的资源 → 回收站」里可以恢复，
+          审核记录与审计都不会丢。
+        </p>
+        {deleteError !== null && (
+          <p className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="resource-delete-error">
+            {deleteError}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <Button type="button" variant="outline" disabled={busyDelete} onClick={() => setDeleting(false)}>
+            取消
+          </Button>
+          <Button type="button" disabled={busyDelete} onClick={() => void confirmDelete()} data-testid="resource-delete-confirm">
+            {busyDelete ? '正在删除…' : '删除'}
+          </Button>
+        </div>
+      </Dialog>
 
       {editing ? (
         <EditForm

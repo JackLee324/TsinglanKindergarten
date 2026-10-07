@@ -37,6 +37,8 @@ class Session {
     this.ws = ws
     this.nextId = 1
     this.pending = new Map()
+    /** CDP 事件订阅（没有 id 的消息）。键是方法名，值是处理函数数组。 */
+    this.listeners = new Map()
     ws.addEventListener('message', (event) => {
       const msg = JSON.parse(event.data)
       if (msg.id !== undefined && this.pending.has(msg.id)) {
@@ -44,8 +46,26 @@ class Session {
         this.pending.delete(msg.id)
         if (msg.error) reject(new Error(`${msg.error.message} (${JSON.stringify(msg.error.data ?? '')})`))
         else resolve(msg.result)
+        return
+      }
+      // 事件：`{ method, params }`。订阅者抛错不能影响页面继续跑。
+      if (typeof msg.method === 'string' && this.listeners.has(msg.method)) {
+        for (const handler of this.listeners.get(msg.method)) {
+          try {
+            handler(msg.params ?? {})
+          } catch {
+            // 采集器的异常不该让被测流程失败
+          }
+        }
       }
     })
+  }
+
+  /** 订阅一个 CDP 事件。 */
+  on(method, handler) {
+    const list = this.listeners.get(method) ?? []
+    list.push(handler)
+    this.listeners.set(method, list)
   }
 
   send(method, params = {}) {
@@ -310,6 +330,92 @@ export class Browser {
    * 本地存储写得太快，几 MB 的文件一眨眼就传完了，取消按钮根本来不及点。
    * 用 CDP 把上行限到几十 KB/s，上传过程就变成一个可以稳定观察与打断的状态。
    */
+  /**
+   * 开始采集 **console 与网络**的问题（业主 Stage 10 §19）。
+   *
+   * 为什么必须用 CDP 事件而不是"页面里挂个 window.onerror"：
+   *   · `window.onerror` 抓不到**资源 404**（script/link 加载失败不冒泡到它）；
+   *   · 抓不到被浏览器吞掉的 CORS 失败（只有一个 console 提示）；
+   *   · 也抓不到 500 的 API 响应（那不是 JS 异常）。
+   * 所以三个域都要开：Runtime（console + 未捕获异常）、
+   * Log（浏览器自己记的严重条目，含 CORS/混合内容）、Network（响应码与加载失败）。
+   */
+  async startProblemWatch() {
+    this.problems = []
+    const push = (entry) => this.problems.push(entry)
+
+    this.session.on('Runtime.consoleAPICalled', (params) => {
+      const level = params.type
+      if (level !== 'error' && level !== 'warning' && level !== 'assert') return
+      const text = (params.args ?? [])
+        .map((a) => a.value ?? a.description ?? a.unserializableValue ?? '')
+        .join(' ')
+      push({ kind: 'console', level, text })
+    })
+    this.session.on('Runtime.exceptionThrown', (params) => {
+      const d = params.exceptionDetails ?? {}
+      push({
+        kind: 'exception',
+        level: 'error',
+        text: d.exception?.description ?? d.text ?? '未捕获异常',
+      })
+    })
+    this.session.on('Log.entryAdded', (params) => {
+      const e = params.entry ?? {}
+      if (e.level !== 'error') return
+      push({ kind: 'log', level: 'error', text: `${e.source}: ${e.text}`, url: e.url ?? null })
+    })
+    this.session.on('Network.responseReceived', (params) => {
+      const r = params.response ?? {}
+      if (r.status < 400) return
+      push({ kind: 'http', level: 'error', status: r.status, url: r.url, mimeType: r.mimeType ?? '' })
+    })
+    this.session.on('Network.loadingFailed', (params) => {
+      // 用户主动取消（比如离开页面）不算问题
+      if (params.canceled === true) return
+      if (params.blockedReason === 'inspector') return
+      push({
+        kind: 'network',
+        level: 'error',
+        text: params.errorText ?? '加载失败',
+        url: params.requestId ?? null,
+      })
+    })
+
+    await this.session.send('Runtime.enable')
+    await this.session.send('Log.enable')
+    await this.session.send('Network.enable')
+  }
+
+  /** 当前采集到的问题（可随时读，不清空）。 */
+  watchedProblems() {
+    return this.problems ?? []
+  }
+
+  /** 清空已采集的问题（每一段流程开始前调用，便于定位是哪一步出的问题）。 */
+  clearProblems() {
+    this.problems = []
+  }
+
+  /**
+   * 只保留"真的算错"的那些。
+   *
+   * 刻意**不**把 warning 当失败：V2 自己也有一条 React 的 dev 提示之类的噪音，
+   * 判据要是"有 warning 就红"，这条门禁第一天就会被关掉，那就等于没有。
+   * HTTP 4xx/5xx 也一样：流程里**主动制造**的 401/403/404/409 是正常响应，
+   * 由调用方用 `allow` 精确列出（例如 `['/api/auth/login']`），而不是在这里一刀切。
+   * 这样"允许的失败"永远是显式的：少写一个就是红灯，而不是悄悄放过。
+   */
+  problemReport({ allow = [] } = {}) {
+    const urlAllowed = (url) => (url ? allow.some((a) => String(url).includes(a)) : false)
+    return this.watchedProblems().filter((p) => {
+      if (p.kind === 'console' && p.level === 'warning') return false
+      if (urlAllowed(p.url)) return false
+      if (p.text !== undefined && urlAllowed(p.text)) return false
+      return true
+    })
+  }
+
   async setUploadThroughput(bytesPerSecond) {
     await this.session.send('Network.enable')
     await this.session.send('Network.emulateNetworkConditions', {

@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Upload } from 'lucide-react'
+import { FolderPlus, Upload } from 'lucide-react'
 import { useAuth } from '../auth/useAuth'
 import { Button } from '../components/ui/Button'
 import { UploadResourceDialog } from '../components/resource/UploadResourceDialog'
 import { useDirectory } from '../directory/DirectoryProvider'
+import { directoryUrl } from '../directory/path'
 import { DirectoryBrowser } from '../directory/DirectoryBrowser'
 import { Breadcrumb } from '../components/Breadcrumb'
 import { Spinner } from '../components/ui/Spinner'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ResourceList } from '../components/resource/ResourceList'
+import { CreateFolderDialog } from '../components/directory/CreateFolderDialog'
 
 /**
  * 目录浏览页。
@@ -24,9 +26,10 @@ export function DirectoryBrowsePage() {
   const params = useParams()
   const navigate = useNavigate()
   const segments = (params['*'] ?? '').split('/').filter((s) => s.length > 0)
-  const { roots, ready, loading, resolve } = useDirectory()
+  const { roots, ready, loading, resolve, refresh } = useDirectory()
   const { capabilities } = useAuth()
   const [uploading, setUploading] = useState(false)
+  const [creatingFolder, setCreatingFolder] = useState(false)
 
   if (!ready && loading) return <Spinner label="正在加载目录…" />
 
@@ -75,15 +78,33 @@ export function DirectoryBrowsePage() {
               而且只有服务端说"你可以上传"（canUpload = resource.create）时才出现。
               这仍然不是安全边界 —— 接口自己会拒 —— 但界面不该把一个必然失败的操作摆出来。
             */}
-            {target.node.allowFiles && capabilities?.canUpload === true && (
-              <Button
-                type="button"
-                onClick={() => setUploading(true)}
-                data-testid="directory-upload"
-              >
-                <Upload className="size-4" /> 上传资源
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {/*
+                「新建文件夹」只在**服务端说可以**的时候出现
+                （`canCreateFolder` = 该目录 allow_custom_folders + 本人有
+                `directory.create_folder` 且覆盖到这个目录）。
+                它不是安全边界 —— 接口自己会拒 —— 但界面不该摆出一个必然失败的操作。
+              */}
+              {target.node.capabilities.canCreateFolder && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setCreatingFolder(true)}
+                  data-testid="directory-create-folder"
+                >
+                  <FolderPlus className="size-4" /> 新建文件夹
+                </Button>
+              )}
+              {target.node.allowFiles && capabilities?.canUpload === true && (
+                <Button
+                  type="button"
+                  onClick={() => setUploading(true)}
+                  data-testid="directory-upload"
+                >
+                  <Upload className="size-4" /> 上传资源
+                </Button>
+              )}
+            </div>
           </div>
           {target.node.description !== null && target.node.description !== '' ? (
             <p className="mt-1 text-sm text-muted-foreground" data-testid="directory-description">
@@ -120,6 +141,18 @@ export function DirectoryBrowsePage() {
         上传弹窗：`directoryId` 与路径都来自**当前这个目录页** ——
         老师不需要（也没有机会）在这里重选班型/科目/资料夹。
       */}
+      {/* 新建文件夹：名称 + 可选英文名。建完直接进去（老师建它的目的就是往里放东西）。 */}
+      <CreateFolderDialog
+        open={creatingFolder}
+        parent={target.node}
+        onClose={() => setCreatingFolder(false)}
+        onCreated={(node) => {
+          setCreatingFolder(false)
+          refresh()
+          navigate(directoryUrl(node.path))
+        }}
+      />
+
       {uploading && target.node !== null && (
         <UploadResourceDialog
           open={uploading}
