@@ -31,6 +31,35 @@ export function clampPage(page: number, totalPages: number): number {
   return Math.min(Math.floor(page), Math.max(1, totalPages))
 }
 
+/**
+ * 列表排序方式（**白名单**）。
+ *
+ * 白名单而不是"把参数拼进 ORDER BY"：那个参数来自客户端，
+ * 拼进 SQL 就是注入。而且排序字段一旦随便传，分页的不重不漏也会被破坏。
+ */
+export const RESOURCE_SORTS = [
+  { key: 'updated_desc', label: '最近更新', sql: 'updated_desc' },
+  { key: 'updated_asc', label: '最早更新', sql: 'updated_asc' },
+  { key: 'created_desc', label: '最近创建', sql: 'created_desc' },
+  { key: 'title_asc', label: '按标题', sql: 'title_asc' },
+] as const
+
+export type ResourceSortKey = (typeof RESOURCE_SORTS)[number]['key']
+export const DEFAULT_RESOURCE_SORT: ResourceSortKey = 'updated_desc'
+
+export function isResourceSortKey(value: unknown): value is ResourceSortKey {
+  return typeof value === 'string' && RESOURCE_SORTS.some((s) => s.key === value)
+}
+
+/** 审核队列的分栏。与资源状态一一对应，界面直接用。 */
+export const REVIEW_QUEUE_TABS = [
+  { key: 'PENDING_REVIEW', label: '待审核' },
+  { key: 'PUBLISHED', label: '已发布' },
+  { key: 'REJECTED', label: '已退回' },
+] as const
+
+export type ReviewQueueTabKey = (typeof REVIEW_QUEUE_TABS)[number]['key']
+
 /** 「我的资源」的分栏。顺序即界面上的顺序。 */
 export const MY_RESOURCE_TABS = [
   { key: 'ALL', label: '全部', status: null },

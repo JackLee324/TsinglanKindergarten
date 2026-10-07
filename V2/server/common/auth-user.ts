@@ -21,6 +21,8 @@ export interface AuthorizationDecision {
     | 'not-owner'
   /** 该资源的状态对这个人不可见（例如别人的草稿）。 */
   | 'status-hidden'
+  /** 不能审核自己上传的资源（即使持有审核权限）。 */
+  | 'self-review'
     | 'target-missing'
   readonly permission: PermissionCode
   readonly directoryId: string | null

@@ -60,6 +60,45 @@ export class UpdateResourceDto {
   directoryId?: string | null
 }
 
+export class ReviewQueueDto {
+  /** 只看某个目录（含子树）下的待审资源。 */
+  @IsOptional()
+  @IsUUID('4')
+  directoryId?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  q?: string
+
+  /** 排序白名单；不传就是"最近更新在前"。 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  sort?: string
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number
+}
+
+export class RecallResourceDto {
+  /** 撤回原因（可选）。给了就记进审核时间线，方便日后回答"为什么下架"。 */
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string | null
+}
+
 export class ReviewResourceDto {
   /** 只有 approve / reject。撤回有独立接口 —— 审核操作不混用。 */
   @IsIn(['approve', 'reject'])

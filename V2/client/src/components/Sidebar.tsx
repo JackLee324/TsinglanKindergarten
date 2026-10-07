@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { ChevronDown, ChevronRight, FolderTree, Home, Layers, Settings } from 'lucide-react'
+import { ChevronDown, ChevronRight, ClipboardCheck, FolderTree, Home, Layers, Settings } from 'lucide-react'
 import { useDirectory } from '../directory/DirectoryProvider'
 import { directoryUrl, isWithinPath } from '../directory/path'
 import { useAuth } from '../auth/useAuth'
@@ -48,6 +48,15 @@ export function Sidebar() {
           icon={<Layers className="size-5" />}
           testId="nav-my-resources"
         />
+        {/* 审核工作台只对有审核权限的人显示（能力位来自服务端，前端不判断角色）。 */}
+        {capabilities?.canReview === true && (
+          <NavItem
+            to="/review"
+            label="审核工作台"
+            icon={<ClipboardCheck className="size-5" />}
+            testId="nav-review"
+          />
+        )}
 
         {/*
           目录区：一级栏目全部来自数据库。

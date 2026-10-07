@@ -16,6 +16,8 @@ import { EDITABLE_STATUSES } from '@shared/resource-status'
 import { EmptyState } from '../components/ui/EmptyState'
 import { formatDate } from '../components/resource/ResourceCard'
 import { FileList } from '../components/resource/FileList'
+import { ReviewActions } from '../components/resource/ReviewActions'
+import { ReviewHistory } from '../components/resource/ReviewHistory'
 
 const STATUS_LABEL = {
   DRAFT: '草稿',
@@ -123,6 +125,13 @@ export function ResourceDetailPage() {
         </div>
       </div>
 
+      {/*
+        流程动作：提交审核 / 通过并发布 / 退回 / 撤回。
+        业主 §22 明确要求**不要**再做一个"审核详情页" —— 审核员看到的也是这一页，
+        只是动作不同（由服务端的 capabilities 决定）。
+      */}
+      <ReviewActions resource={resource} onChanged={load} />
+
       {editing ? (
         <EditForm
           resource={resource}
@@ -165,6 +174,9 @@ export function ResourceDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* 审核时间线（业主 §7：多次审核全部保留，不覆盖） */}
+      <ReviewHistory resourceId={resource.id} />
 
       {/* 文件区域：真实的文件列表 + 预览 + 下载 + 添加/删除 */}
       <Card className="mt-5">

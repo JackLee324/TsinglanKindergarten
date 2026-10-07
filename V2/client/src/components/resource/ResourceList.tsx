@@ -42,7 +42,11 @@ export function ResourceList({
     setLoading(true)
     setError(null)
     resourcesApi
-      .list({ directoryId, page, pageSize, q: appliedQuery })
+      // 目录浏览**只看已发布**（业主 Stage 7 §17）：
+      // 老师自己那份还没发布的草稿在「我的资源」里管理，
+      // 目录里看到的永远是"大家都能用的东西"。这也让"这条资源上线了吗"
+      // 在界面上有一个唯一、不会误解的答案。
+      .list({ directoryId, status: 'PUBLISHED', page, pageSize, q: appliedQuery })
       .then((res) => {
         if (cancelled) return
         setItems(res.items)

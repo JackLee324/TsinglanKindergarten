@@ -3,6 +3,7 @@ import { ResourcesService, type ResourceFilters } from './resources.service'
 import {
   CreateResourceDto,
   ListResourcesDto,
+  RecallResourceDto,
   ReviewResourceDto,
   UpdateResourceDto,
 } from './resources.dto'
@@ -120,12 +121,20 @@ export class ResourcesController {
     return this.resources.review(actor, id, dto.action, dto.comment ?? null)
   }
 
-  /** 撤回：独立动作、独立接口，绝不调用 reject。 */
+  /**
+   * 撤回：独立动作、独立接口，**绝不调用 reject**。
+   *
+   * 原因可选（业主 §25 界面上会让人填一句），给了就记进审核时间线。
+   */
   @Post(':id/recall')
   @RequirePermission('resource.submit')
   @DirectoryScope({ kind: 'resource', param: 'id' })
-  async recall(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
-    return this.resources.recall(actor, id)
+  async recall(
+    @CurrentUser() actor: AuthUser,
+    @Param('id') id: string,
+    @Body() dto: RecallResourceDto,
+  ) {
+    return this.resources.recall(actor, id, dto.comment ?? null)
   }
 
   @Delete(':id')

@@ -191,10 +191,26 @@ describe('退回与撤回（两种操作不能混用）', () => {
     assert.equal(asTeacher.data.reviewComment, '请补充教学目标')
   })
 
-  test('被退回后可以重新提交（REJECTED → PENDING_REVIEW）', async () => {
+  test('被退回后：原样直接再交一次 → 409（必须先编辑）', async () => {
     const id = await makeResource('重新提交', true)
     await teacher.post(`/api/resources/${id}/submit`)
     await admin.post(`/api/resources/${id}/review`, { action: 'reject', comment: '再来一次' })
+    // 阶段 7：REJECTED → PENDING_REVIEW 这条转换已经去掉。
+    const res = await teacher.post(`/api/resources/${id}/submit`)
+    assert.equal(res.status, 409, JSON.stringify(res.data))
+    assert.equal(res.data.code, 'ILLEGAL_TRANSITION')
+  })
+
+  test('被退回后：编辑 → 变成草稿 → 再提交 → 重新进入待审', async () => {
+    const id = await makeResource('重新提交2', true)
+    await teacher.post(`/api/resources/${id}/submit`)
+    await admin.post(`/api/resources/${id}/review`, { action: 'reject', comment: '补充课程目标' })
+
+    // 编辑动作本身就把 REJECTED 变回 DRAFT（状态机里的 REJECTED→DRAFT）。
+    const edited = await teacher.patch(`/api/resources/${id}`, { description: '已补充课程目标' })
+    assert.equal(edited.status, 200, JSON.stringify(edited.data))
+    assert.equal(edited.data.status, 'DRAFT')
+
     const res = await teacher.post(`/api/resources/${id}/submit`)
     assert.equal(res.status, 201, JSON.stringify(res.data))
     assert.equal(res.data.status, 'PENDING_REVIEW')

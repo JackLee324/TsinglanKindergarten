@@ -63,10 +63,12 @@ describe('审计写入前的凭据剔除', () => {
       'directory.delete',
       'resource.create',
       'resource.update',
-      'resource.submit',
-      'review.approve',
-      'review.reject',
-      'review.recall',
+      // 阶段 7 起动作名与业主 §20 的清单逐字一致（原来的 resource.submit /
+      // review.approve / review.reject / review.recall 就是这四个）。
+      'resource.submit_review',
+      'resource.approve',
+      'resource.reject',
+      'resource.recall',
       'resource.delete',
       'resource.restore',
       'resource.purge',

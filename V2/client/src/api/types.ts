@@ -71,6 +71,8 @@ export interface ResourceListItem {
   readonly uploaderName: string | null
   readonly fileCount: number
   readonly hasFile: boolean
+  /** 最新一条退回意见（业主 §16：列表上就要能看到"为什么被退回来了"）。 */
+  readonly latestReviewComment: string | null
   readonly publishedAt: string | null
   readonly deletedAt: string | null
   readonly createdAt: string
@@ -90,14 +92,47 @@ export interface ResourceDetail extends ResourceListItem {
   readonly reviewComment: string | null
   /** 资源里的文件（阶段 6）。**不含** storage key —— 那不该到前端来。 */
   readonly files: readonly ResourceFileSummary[]
-  /** 服务端算出的能力位 —— 前端不判断"我是不是上传者"。 */
-  readonly capabilities: { readonly canEdit: boolean }
+  /**
+   * 服务端算出的能力位 —— 前端不判断"我是不是上传者""我是不是审核员"。
+   *
+   * 它**不是**安全边界：每个动作的接口都会用同一套授权再拒一次。
+   * 它只决定"这个按钮要不要摆出来"（业主：不允许假成功、不摆必然失败的按钮）。
+   */
+  readonly capabilities: ResourceCapabilities
+}
+
+export interface ResourceCapabilities {
+  readonly canEdit: boolean
+  readonly canSubmit: boolean
+  /** 「通过并发布」是一步（业主 §14），所以只有待审核时才为 true。 */
+  readonly canApprove: boolean
+  readonly canReject: boolean
+  readonly canRecall: boolean
+  readonly canDelete: boolean
+  /** 审核类动作被拒的原因（例如 `self-review`），界面据此解释而不是只说"没权限"。 */
+  readonly reviewDeniedReason: string | null
+}
+
+/** 审核时间线的一条（业主 §7：多次审核全部保留，不覆盖）。 */
+export interface ResourceReviewRecord {
+  readonly id: string
+  readonly action: string
+  readonly actionLabel: string
+  readonly fromStatus: string
+  readonly toStatus: string
+  readonly comment: string | null
+  readonly actorId: string | null
+  readonly actorName: string | null
+  readonly createdAt: string
 }
 
 export interface DirectoryNodeDetail extends Omit<DirectoryNode, 'children'> {
   readonly children: readonly DirectoryNode[]
   readonly ancestors: readonly DirectoryNode[]
 }
+
+/** 列表排序（与 `shared/resource-query.ts` 的白名单同一份，由 shared 推导）。 */
+export type ResourceSortKey = 'updated_desc' | 'updated_asc' | 'created_desc' | 'title_asc'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 文件（阶段 6）

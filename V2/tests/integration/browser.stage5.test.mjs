@@ -34,15 +34,17 @@ const PAGE_SIZE = 12
 const PUBLISHED_COUNT = 15
 
 /**
- * 浏览页里这位老师**能看到**的东西 = 15 条已发布 + **他自己的 1 条草稿**。
+ * 浏览页里能看到的就是 **15 条已发布**。
  *
- * 这不是漏洞，而是 §4 可见性规则在"浏览页"上的正确结果：
- *   已发布 → 有该目录权限的人都能看到；未发布 → 只有上传者自己能看到。
- * 观察者就是上传者，所以他自己的草稿带着「草稿」徽章出现在这里；
- * **别人的**草稿在任何情况下都不出现（下面有专门的用例钉住这一点）。
- * 第一版测试把它当成"浏览页只该有已发布"，于是断言错了 —— 错的是测试，不是代码。
+ * ⚠️ 阶段 7 改过一次：阶段 5/6 时浏览页会带上"我自己那份还没发布的草稿"，
+ * 因为可见性规则是"已发布 ∪ 自己上传的"。业主 Stage 7 §17 明确要求
+ * **目录浏览默认只显示已发布**，自己那份未发布的资源只在「我的资源」里管理。
+ *
+ * 于是"这条资源上线了吗"在界面上只有一个不会误解的答案：
+ * 目录里看到 = 已发布；草稿/待审/已退回/已撤回只出现在「我的资源」。
+ * 下面还有一条用例专门钉住"自己的草稿也不在浏览页里"。
  */
-const VISIBLE_IN_BROWSE = PUBLISHED_COUNT + 1
+const VISIBLE_IN_BROWSE = PUBLISHED_COUNT
 
 const BROWSE_URL = `${TEST_BASE}/directory/education/pre-k/virtue/resources`
 const LESSON_URL = `${TEST_BASE}/directory/education/pre-k/virtue/lesson`
@@ -206,13 +208,12 @@ describe('目录浏览页：资源卡片', () => {
     for (let i = 0; i < statuses.length; i += 1) {
       assert.equal(label[statuses[i]], badges[i], `状态 ${statuses[i]} 的徽章文案应是「${label[statuses[i]]}」`)
     }
-    // 只允许出现这两种状态：浏览页里不该有"别人的待审核/已退回"。
-    assert.equal(
-      statuses.every((x) => x === 'PUBLISHED' || x === 'DRAFT'),
-      true,
-      `浏览页出现了不该出现的状态：${statuses.join('、')}`,
+    // 阶段 7 §17：浏览页**只有**已发布。所以每一张卡片的徽章都必须是「已发布」。
+    assert.deepEqual(
+      [...new Set(statuses)],
+      ['PUBLISHED'],
+      `浏览页只该出现已发布，实际：${statuses.join('、')}`,
     )
-    assert.equal(statuses.filter((x) => x === 'DRAFT').length <= 1, true, '至多只有"我自己的那一条草稿"')
   })
 
   test('卡片上没有下载 / 预览 / 上传按钮（阶段 5 不给假按钮）', async () => {
@@ -221,14 +222,25 @@ describe('目录浏览页：资源卡片', () => {
     assert.deepEqual(labels, [], `不该出现这些按钮：${labels.join('、')}`)
   })
 
-  test('**别人的**草稿绝不出现在浏览页（自己的草稿可以，带草稿徽章）', async () => {
+  test('未发布的资源一律不在浏览页（别人的和自己的都不在，业主 §17）', async () => {
     await openDirectory(BROWSE_URL)
     // 目录下 15 条已发布 + 1 条自己的草稿 + 1 条别人的草稿。
     const total = await browser.text('[data-testid="resource-total"]')
-    assert.equal(total, `共 ${VISIBLE_IN_BROWSE} 条`, '别人的草稿不能被列出来')
+    assert.equal(total, `共 ${VISIBLE_IN_BROWSE} 条`, '未发布的资源不该被列出来')
     const titles = await browser.allTexts('[data-testid="resource-card-title"]')
     assert.equal(titles.some((t) => /别人的草稿/.test(t ?? '')), false, '别人的草稿泄露了')
-    assert.equal(titles.some((t) => /我的草稿/.test(t ?? '')), true, '自己的草稿应当可见')
+    assert.equal(
+      titles.some((t) => /我的草稿/.test(t ?? '')),
+      false,
+      '自己的草稿也不该出现在目录浏览里 —— 它在「我的资源」',
+    )
+    // 自己的草稿确实存在，只是在别处可见（证明不是"数据没造出来"）
+    await browser.goto(`${TEST_BASE}/my-resources`)
+    await browser.waitFor(
+      `(document.querySelector('[data-testid="my-resources-list"]')?.innerText || '').includes('我的草稿')`,
+      20000,
+      '自己的草稿在「我的资源」里',
+    )
     // 管理员接口侧能看到全部 —— 证明"少的那条"是按可见性过滤的，不是数据没造出来。
     const asAdmin = await admin.get(`/api/resources?directoryId=${ids.virtueResources}&pageSize=100`)
     const adminTitles = asAdmin.data.items.map((i) => i.title)

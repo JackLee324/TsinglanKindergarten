@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { FileText, MapPin } from 'lucide-react'
 import type { ResourceListItem, ResourceStatus } from '../../api/types'
@@ -33,11 +34,21 @@ const STATUS_VARIANT: Record<ResourceStatus, 'secondary' | 'success' | 'warning'
 export function ResourceCard({
   resource,
   locationLabel,
+  actions,
   testId = 'resource-card',
 }: {
   readonly resource: ResourceListItem
   /** 由外层用目录树翻译好的中文位置；不在卡片里自己解析目录。 */
   readonly locationLabel: string
+  /**
+   * 卡片底部的流程动作（我的资源里的「提交审核」等）。
+   *
+   * 放在**卡片内部**而不是外面：卡片的 `data-resource-id` / `data-resource-status`
+   * 是这条记录的稳定标识，动作按钮属于同一条记录，就该在同一个节点里。
+   * （第一版把它放在卡片的兄弟节点上，于是 `[data-resource-id="x"] [data-testid=...]`
+   *   这样的选择器全都找不到按钮 —— 浏览器用例直接红在这里。）
+   */
+  readonly actions?: ReactNode
   readonly testId?: string
 }) {
   return (
@@ -80,6 +91,18 @@ export function ResourceCard({
           <span>{locationLabel}</span>
         </p>
 
+        {/*
+          最新退回意见：直接摆在卡片上（业主 §16）。教师不用点进详情就知道要改什么。
+        */}
+        {resource.latestReviewComment !== null && resource.latestReviewComment !== '' && (
+          <p
+            className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            data-testid="resource-card-review-comment"
+          >
+            退回意见：{resource.latestReviewComment}
+          </p>
+        )}
+
         <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5" data-testid="resource-card-files">
             <FileText className="size-3.5" />
@@ -87,6 +110,8 @@ export function ResourceCard({
           </span>
           <span data-testid="resource-card-updated">{formatDate(resource.updatedAt)}</span>
         </div>
+
+        {actions !== undefined && <div className="mt-3">{actions}</div>}
       </CardContent>
     </Card>
   )

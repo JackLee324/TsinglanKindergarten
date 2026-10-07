@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
-import { resourcesApi } from '../api/resources'
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ApiError } from '../api/http'
 import type { ResourceListItem, ResourceStatus } from '../api/types'
 import { MY_RESOURCE_TABS } from '@shared/resource-query'
 import { useDirectory } from '../directory/DirectoryProvider'
 import { ResourceCard } from '../components/resource/ResourceCard'
+import { resourcesApi } from '../api/resources'
+import { humanMessage } from '../components/resource/errors'
 import { Button } from '../components/ui/Button'
+import { RESOURCE_STATUS_LABEL } from '@shared/resource-status'
 import { Spinner } from '../components/ui/Spinner'
 import { EmptyState } from '../components/ui/EmptyState'
 import { cn } from '../components/ui/cn'
@@ -21,7 +24,10 @@ import { cn } from '../components/ui/cn'
  */
 export function MyResourcesPage() {
   const { resolve } = useDirectory()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<(typeof MY_RESOURCE_TABS)[number]['key']>('ALL')
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
   const [items, setItems] = useState<readonly ResourceListItem[]>([])
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
@@ -30,6 +36,12 @@ export function MyResourcesPage() {
   const [error, setError] = useState<string | null>(null)
 
   const status = MY_RESOURCE_TABS.find((t) => t.key === tab)?.status ?? null
+
+  const [reloadToken, setReloadToken] = useState(0)
+
+  const reload = useCallback(async () => {
+    setReloadToken((n) => n + 1)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -55,7 +67,21 @@ export function MyResourcesPage() {
     return () => {
       cancelled = true
     }
-  }, [status, page])
+  }, [status, page, reloadToken])
+
+  /** 提交审核：草稿才允许（REJECTED / RECALLED 必须先编辑回草稿）。 */
+  async function submitForReview(id: string) {
+    setBusyId(id)
+    setActionError(null)
+    try {
+      await resourcesApi.submit(id)
+      await reload()
+    } catch (e) {
+      setActionError(humanMessage(e, '提交审核失败'))
+    } finally {
+      setBusyId(null)
+    }
+  }
 
   const labelOf = (path: string): string =>
     path
@@ -96,6 +122,15 @@ export function MyResourcesPage() {
         ))}
       </div>
 
+      {actionError !== null && (
+        <p
+          className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          data-testid="my-resources-action-error"
+        >
+          {actionError}
+        </p>
+      )}
+
       {error !== null && (
         <p className="mt-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="my-resources-error">
           {error}
@@ -120,6 +155,48 @@ export function MyResourcesPage() {
                   resource={item}
                   locationLabel={labelOf(item.directoryPath)}
                   testId="my-resource-card"
+                  actions={
+                    /*
+                      每个状态能做什么，由**状态**决定（服务端的 capabilities 在详情页里更完整）。
+                      这里刻意不给"待审核"任何按钮 —— 业主 §16：PENDING_REVIEW 不能再次提交。
+                    */
+                    <div className="flex items-center gap-2" data-testid="my-resource-actions">
+                    {item.status === 'DRAFT' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={busyId === item.id}
+                        onClick={() => void submitForReview(item.id)}
+                        data-testid="my-resource-submit"
+                      >
+                        提交审核
+                      </Button>
+                    )}
+                    {(item.status === 'REJECTED' || item.status === 'RECALLED') && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => navigate(`/resources/${item.id}`)}
+                        data-testid="my-resource-edit"
+                      >
+                        编辑后重新提交
+                      </Button>
+                    )}
+                    {item.status === 'PENDING_REVIEW' && (
+                      <span
+                        className="text-xs text-muted-foreground"
+                        data-testid="my-resource-pending-note"
+                      >
+                        审核中，暂时不能再提交
+                      </span>
+                    )}
+                      <span className="ml-auto text-xs text-muted-foreground" data-testid="my-resource-status">
+                        {RESOURCE_STATUS_LABEL[item.status]}
+                      </span>
+                    </div>
+                  }
                 />
               ))}
             </div>

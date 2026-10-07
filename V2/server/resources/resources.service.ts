@@ -8,12 +8,18 @@ import { DirectoriesService } from '../directories/directories.service'
 import type { AuthUser } from '../common/auth-user'
 import { AppError } from '../common/http-error'
 import type { PermissionCode } from '../../shared/permissions'
-import { computeTotalPages, DEFAULT_PAGE_SIZE } from '../../shared/resource-query'
 import {
+  DEFAULT_PAGE_SIZE,
+  computeTotalPages,
+  type ResourceSortKey,
+} from '../../shared/resource-query'
+import {
+  ACTION_AUDIT_NAME,
   DELETABLE_STATUSES,
+  RESOURCE_STATUS_LABEL,
+  RESOURCE_STATUSES,
   editOutcomeFor,
   findTransition,
-  RESOURCE_STATUSES,
   type ResourceStatus,
 } from '../../shared/resource-status'
 import { toFileView } from '../files/file-view'
@@ -34,11 +40,42 @@ function emptyPage(page: number, pageSize: number) {
   return { items: [], total: 0, page, pageSize, totalPages: computeTotalPages(0, pageSize) }
 }
 
+/** 状态机动作 → 界面中文标签。只有这一份映射。 */
+function resourceActionLabel(action: string): string {
+  const labels: Record<string, string> = {
+    create: '创建',
+    update: '编辑',
+    submit: '提交审核',
+    'review.approve': '审核通过并发布',
+    'review.reject': '审核退回',
+    'review.recall': '撤回',
+    delete: '删除',
+    restore: '恢复',
+    purge: '永久删除',
+  }
+  return labels[action] ?? action
+}
+
+/**
+ * 被拒时说一句能照做的话。
+ *
+ * 「不能审核自己上传的资源」尤其要说清楚：它不是一个权限配置问题，
+ * 而是系统故意不允许的行为 —— 如果只说"没有权限"，老师会去找管理员要权限，
+ * 而管理员给了也没用（仍然会被拒）。这正是防自审最容易引起困惑的地方。
+ */
+function deniedMessage(reason: string, permission: string): string {
+  if (reason === 'not-owner') return '只能操作自己上传的资源'
+  if (reason === 'self-review') return '不能审核自己上传的资源，请由其他审核员处理'
+  if (reason === 'status-hidden') return '这条资源还没有发布，只有上传者本人能看到'
+  return `没有权限：${permission}`
+}
+
 export interface ResourceFilters {
   directoryId?: string | null
   includeSubtree?: boolean
   status?: ResourceStatus | null
   q?: string | null
+  sort?: ResourceSortKey
   page: number
   pageSize: number
   onlyMine?: boolean
@@ -126,6 +163,42 @@ export class ResourcesService {
       onlyUploaderId: filters.onlyMine ? user.id : null,
       recycled: filters.recycled === true,
       visibility,
+      sort: filters.sort,
+      page: filters.page,
+      pageSize: filters.pageSize,
+    })
+  }
+
+  /**
+   * 审核队列（业主 Stage 7 §3）。
+   *
+   * 与普通列表**共用同一个查询**，只是固定了"看哪种状态"：
+   * 于是搜索 / 目录过滤 / 排序 / 分页 / **可见性**全部自动一致 ——
+   * 队列不可能变成一条绕过权限的独立查询路径（业主 §18 的要求）。
+   *
+   * 审核岗看到的待审资源，靠的就是 `resourceVisibility()` 里
+   * "审核 / 发布岗能看别人已提交的内容"那一条策略；这里不另开判定。
+   */
+  async queue(
+    user: AuthUser,
+    status: ResourceStatus,
+    filters: {
+      directoryId?: string | null
+      q?: string | null
+      sort?: ResourceSortKey
+      page: number
+      pageSize: number
+    },
+  ) {
+    return this.list(user, {
+      directoryId: filters.directoryId ?? null,
+      // 目录过滤**包含子树**：审核台的筛选是"我要看 Pre-K 这一块"，
+      // 而资源挂在资料夹叶节点上。不递归的话，选「Pre-K」会一条都看不到
+      // （集成测试一开始就是这么发现的：期望 3 条，实际 0 条）。
+      includeSubtree: true,
+      status,
+      q: filters.q ?? null,
+      sort: filters.sort,
       page: filters.page,
       pageSize: filters.pageSize,
     })
@@ -231,6 +304,7 @@ export class ResourcesService {
     onlyUploaderId: string | null
     recycled: boolean
     visibility: { othersStatuses: readonly ResourceStatus[]; ownerId: string }
+    sort?: ResourceSortKey
     page: number
     pageSize: number
   }) {
@@ -245,6 +319,7 @@ export class ResourcesService {
         uploader_name: string | null
         file_count: number
         directory_path: string
+        latest_reject_comment: string | null
         total: number
       })[]
     >`
@@ -282,6 +357,11 @@ export class ResourcesService {
       SELECT m.*, u.name AS uploader_name,
              (SELECT count(*)::int FROM resource_files f WHERE f.resource_id = m.id) AS file_count,
              (SELECT path FROM dir_path dp WHERE dp.id = m.directory_id) AS directory_path,
+             -- 最新一条退回意见：教师要在列表上直接看到"为什么被退回来了"，
+             -- 而不是点进详情才知道（业主 §16）。
+             (SELECT rr.comment FROM resource_reviews rr
+               WHERE rr.resource_id = m.id AND rr.action = 'review.reject'
+               ORDER BY rr.created_at DESC, rr.id DESC LIMIT 1) AS latest_reject_comment,
              (SELECT count(*)::int FROM matched) AS total
       FROM matched m
       LEFT JOIN users u ON u.id = m.uploader_id
@@ -289,7 +369,7 @@ export class ResourcesService {
       -- updated_at 完全相同的行之间的顺序由 Postgres 自由决定，
       -- 翻页就可能重复取到同一行、同时漏掉另一行（不重不漏被破坏）。
       -- 见 tests/integration/resource-pagination.integration.test.mjs。
-      ORDER BY m.updated_at DESC, m.id DESC
+      ORDER BY ${this.orderBy(opt.sort)}
       LIMIT ${opt.pageSize} OFFSET ${(opt.page - 1) * opt.pageSize}
     `
 
@@ -314,6 +394,7 @@ export class ResourcesService {
         uploaderName: r.uploader_name,
         fileCount: r.file_count,
         hasFile: r.file_count > 0,
+        latestReviewComment: r.latest_reject_comment ?? null,
         publishedAt: r.published_at?.toISOString() ?? null,
         deletedAt: r.deleted_at?.toISOString() ?? null,
         createdAt: r.created_at.toISOString(),
@@ -323,6 +404,32 @@ export class ResourcesService {
       page: opt.page,
       pageSize: opt.pageSize,
       totalPages,
+    }
+  }
+
+  /**
+   * 排序片段。
+   *
+   * ⚠️ **只从白名单映射**，绝不把客户端传来的字段名拼进 SQL。
+   * 每一种排序都带 `id` 作为 tiebreaker：只按时间排序时，
+   * 时间完全相同的行之间顺序由 Postgres 自由决定，翻页就可能重复取到某行、
+   * 同时漏掉另一行（阶段 5 的 resource-pagination 套件钉住了这一点）。
+   *
+   * 用 `sql()` 片段而不是字符串拼 SQL：让 postgres.js 去处理标识符与参数，
+   * 我们这边永远不会拼错引号。
+   */
+  private orderBy(sort: ResourceSortKey | undefined) {
+    switch (sort) {
+      case 'updated_asc':
+        return this.sql`m.updated_at ASC, m.id ASC`
+      case 'created_desc':
+        return this.sql`m.created_at DESC, m.id DESC`
+      case 'title_asc':
+        // 中文标题按 unicode 码点排，对"找某一条"足够用（真正的拼音排序需要额外字典）。
+        return this.sql`m.title ASC, m.id ASC`
+      case 'updated_desc':
+      default:
+        return this.sql`m.updated_at DESC, m.id DESC`
     }
   }
 
@@ -388,11 +495,13 @@ export class ResourcesService {
     `
 
     // 能力位由服务端算：前端不写"我是不是上传者""我是不是管理员"。
-    const editDecision = await this.authz.canActOnResource(
-      user,
-      'resource.update.own',
-      { id: row.id, directoryId: row.directory_id, uploaderId: row.uploader_id },
-    )
+    // 阶段 7 起这里不止 canEdit —— 详情页要按权限显示 提交 / 通过并发布 / 退回 / 撤回。
+    const capabilities = await this.authz.resourceCapabilities(user, {
+      id: row.id,
+      status: row.status,
+      directoryId: row.directory_id,
+      uploaderId: row.uploader_id,
+    })
 
     return {
       id: row.id,
@@ -408,7 +517,7 @@ export class ResourcesService {
       fileCount: files.length,
       hasFile: files.length > 0,
       reviewComment: lastReject[0]?.comment ?? null,
-      capabilities: { canEdit: editDecision.allowed },
+      capabilities,
       publishedAt: row.published_at?.toISOString() ?? null,
       deletedAt: row.deleted_at?.toISOString() ?? null,
       createdAt: row.created_at.toISOString(),
@@ -425,20 +534,36 @@ export class ResourcesService {
     await this.assertCanActOn(user, 'resource.view', row)
     await this.assertCanViewResource(user, row)
     const rows = await this.sql<
-      { id: string; action: string; from_status: string; to_status: string; comment: string | null; created_at: Date; actor_name: string | null }[]
+      {
+        id: string
+        action: string
+        from_status: string
+        to_status: string
+        comment: string | null
+        created_at: Date
+        actor_id: string | null
+        actor_name: string | null
+      }[]
     >`
-      SELECT rr.id, rr.action, rr.from_status, rr.to_status, rr.comment, rr.created_at, u.name AS actor_name
+      SELECT rr.id, rr.action, rr.from_status, rr.to_status, rr.comment, rr.created_at,
+             rr.actor_id, u.name AS actor_name
       FROM resource_reviews rr LEFT JOIN users u ON u.id = rr.actor_id
       WHERE rr.resource_id = ${resourceId}
-      ORDER BY rr.created_at
+      -- 时间升序：这是**时间线**，最近发生的事在最后，读起来像一封信。
+      -- 并列时用 id 兜底，保证顺序稳定（同一次请求两次结果一致）。
+      ORDER BY rr.created_at ASC, rr.id ASC
     `
     return {
       items: rows.map((r) => ({
         id: r.id,
         action: r.action,
+        // 动作的中文标签由服务端给：界面不该自己维护一份 action→中文 的映射
+        // （那种映射迟早在两处漂移）。
+        actionLabel: resourceActionLabel(r.action),
         fromStatus: r.from_status,
         toStatus: r.to_status,
         comment: r.comment,
+        actorId: r.actor_id,
         actorName: r.actor_name,
         createdAt: r.created_at.toISOString(),
       })),
@@ -565,6 +690,18 @@ export class ResourcesService {
         publishedOverwritePrevented: row.status === 'PUBLISHED',
       },
     })
+
+    /*
+     * 编辑改变了状态（REJECTED→DRAFT / RECALLED→DRAFT / PUBLISHED→DRAFT）时，
+     * 记录在**审计日志**里（上面那条 audit.write 的 statusFrom / statusTo），
+     * 而**不**写进 resource_reviews。
+     *
+     * WHY 不写 resource_reviews：那张表的约束明确只允许四种**审核**动作
+     * （submit / review.approve / review.reject / review.recall），
+     * 它就是"审核流水"，不是"字段变更流水"。
+     * 我第一版往里插了一条 'update'，被 CHECK 约束当场拦下（接口 500）——
+     * 约束是对的，是我的分工想错了：字段变更属于审计日志。
+     */
     return this.getById(actor, id)
   }
 
@@ -595,23 +732,35 @@ export class ResourcesService {
     const row = await this.requireResource(id)
 
     if (action === 'reject') {
+      // 退回**必须**有原因：业主的原话是"教师之后必须能够看到退回原因"，
+      // 一条没有原因的退回等于让老师自己去猜哪里不合格。
       if (!comment || comment.trim() === '') {
-        throw AppError.forbidden('退回必须说明原因，教师需要看到它', 'VALIDATION_FAILED')
+        throw AppError.badRequest('退回必须填写审核意见，教师需要知道哪里要改', 'COMMENT_REQUIRED')
       }
-      await this.assertCanActOn(actor, 'resource.review', row)
+      await this.assertCanActOn(actor, 'resource.review', row, { forbidSelf: true })
       return this.transition(actor, id, 'REJECTED', comment.trim())
     }
 
-    await this.assertCanActOn(actor, 'resource.publish', row)
+    // 「通过并发布」是**一步**（业主 §14）：不再拆成"审核通过 → 再点发布"两道人工步骤。
+    await this.assertCanActOn(actor, 'resource.publish', row, { forbidSelf: true })
     return this.transition(actor, id, 'PUBLISHED', comment?.trim() || null)
   }
 
-  /** 撤回：`PUBLISHED → RECALLED`。**不写 reject**，因此不会产生假退回原因。 */
-  async recall(actor: AuthUser, id: string) {
+  /**
+   * 撤回：`PUBLISHED → RECALLED`。
+   *
+   * **绝不写进 reject**（业主从阶段 2 起反复强调"审核操作不要混用"）：
+   * 如果撤回写成一次 reject，教师的「我的资源」里就会出现一条
+   * **假的退回原因**，他会以为自己被否了。
+   *
+   * 撤回属于作者本人（管理员可越过所有权，走统一的 admin 绕过）。
+   * 原因可选 —— 但给了就记进审核时间线，方便日后回答"这份东西为什么下架了"。
+   */
+  async recall(actor: AuthUser, id: string, comment?: string | null) {
     const row = await this.requireResource(id)
     // 撤回属于作者：所有权与目录范围都在统一授权里判定。
     await this.assertCanActOn(actor, 'resource.submit', row, { requireOwner: true })
-    return this.transition(actor, id, 'RECALLED', null)
+    return this.transition(actor, id, 'RECALLED', comment?.trim() ? comment.trim() : null)
   }
 
   async softDelete(actor: AuthUser, id: string) {
@@ -741,16 +890,20 @@ export class ResourcesService {
     const from = row.status as ResourceStatus
     const spec = findTransition(from, to)
     if (spec === undefined) {
+      // 非法转换也要留痕：它是"有人在绕过流程"的信号，不能只回一个 409。
       await this.audit.write({
         actorId: actor.id,
         actorName: actor.name,
-        action: spec === undefined ? 'resource.update' : 'resource.update',
+        action: 'resource.update',
         targetType: 'resource',
         targetId: id,
         result: 'failed',
         detail: { reason: 'ILLEGAL_TRANSITION', from, to },
       })
-      throw AppError.conflict(`不允许从「${from}」直接变成「${to}」`, 'ILLEGAL_TRANSITION')
+      throw AppError.conflict(
+        `不允许从「${RESOURCE_STATUS_LABEL[from]}」直接变成「${RESOURCE_STATUS_LABEL[to]}」`,
+        'ILLEGAL_TRANSITION',
+      )
     }
 
     // 所有权在这里也用**同一个**入口判定 —— 状态机只决定"这条转换是否合法"。
@@ -782,7 +935,8 @@ export class ResourcesService {
     await this.audit.write({
       actorId: actor.id,
       actorName: actor.name,
-      action: spec.action,
+      // 审计动作名只由这一张映射决定（见 shared/resource-status.ts）。
+      action: ACTION_AUDIT_NAME[spec.action],
       targetType: 'resource',
       targetId: id,
       result: 'success',
@@ -821,7 +975,7 @@ export class ResourcesService {
     actor: AuthUser,
     permission: PermissionCode,
     row: ResourceRow,
-    options: { requireOwner?: boolean } = {},
+    options: { requireOwner?: boolean; forbidSelf?: boolean } = {},
   ): Promise<void> {
     const decision = await this.authz.canActOnResource(
       actor,
@@ -844,10 +998,7 @@ export class ResourcesService {
         reason: decision.reason,
       },
     })
-    throw AppError.forbidden(
-      decision.reason === 'not-owner' ? '只能操作自己上传的资源' : `没有权限：${permission}`,
-      'FORBIDDEN',
-    )
+    throw AppError.forbidden(deniedMessage(decision.reason, permission), 'FORBIDDEN')
   }
 
   async subtreeIds(directoryId: string): Promise<string[]> {

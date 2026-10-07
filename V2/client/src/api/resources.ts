@@ -1,11 +1,18 @@
 import { api } from './http'
-import type { ResourceDetail, ResourceListPage, ResourceStatus } from './types'
+import type {
+  ResourceDetail,
+  ResourceListPage,
+  ResourceReviewRecord,
+  ResourceSortKey,
+  ResourceStatus,
+} from './types'
 
 export interface ResourceListQuery {
   readonly directoryId?: string | null
   readonly includeSubtree?: boolean
   readonly status?: ResourceStatus | null
   readonly q?: string | null
+  readonly sort?: ResourceSortKey
   readonly page?: number
   readonly pageSize?: number
 }
@@ -16,6 +23,7 @@ function toQueryString(query: ResourceListQuery): string {
   if (query.includeSubtree === true) params.set('includeSubtree', 'true')
   if (query.status != null) params.set('status', query.status)
   if (query.q != null && query.q !== '') params.set('q', query.q)
+  if (query.sort != null) params.set('sort', query.sort)
   if (query.page != null) params.set('page', String(query.page))
   if (query.pageSize != null) params.set('pageSize', String(query.pageSize))
   return params.toString()
@@ -54,4 +62,35 @@ export const resourcesApi = {
     id: string,
     input: { title?: string; titleEn?: string | null; description?: string | null },
   ) => api.patch<ResourceDetail>(`/api/resources/${id}`, input),
+
+  /** 提交审核（DRAFT → PENDING_REVIEW）。没有文件会被服务端拒（400）。 */
+  submit: (id: string) => api.post<ResourceDetail>(`/api/resources/${id}/submit`),
+
+  /**
+   * 审核裁决。`approve` 一步到位变成已发布（业主 §14），`reject` 必须带原因。
+   * 撤回**不在这里** —— 它是独立动作、独立接口（见 `recall`）。
+   */
+  review: (id: string, input: { action: 'approve' | 'reject'; comment?: string | null }) =>
+    api.post<ResourceDetail>(`/api/resources/${id}/review`, input),
+
+  recall: (id: string, comment?: string | null) =>
+    api.post<ResourceDetail>(`/api/resources/${id}/recall`, { comment: comment ?? null }),
+
+  /** 完整审核时间线（业主 §7：多次审核全部保留）。 */
+  reviewHistory: (id: string) =>
+    api.get<{ items: readonly ResourceReviewRecord[] }>(`/api/resources/${id}/review-history`),
+}
+
+/** 审核队列（业主 §3）：搜索 + 目录过滤 + 排序 + 服务端分页。 */
+export const reviewsApi = {
+  queue: (status: ResourceStatus, query: ResourceListQuery) =>
+    api.get<ResourceListPage>(`/api/reviews/${queuePath(status)}?${toQueryString(query)}`),
+}
+
+function queuePath(status: ResourceStatus): string {
+  // 只有这三个分栏（业主 §3/§21）。其它状态不是"队列"关心的事：
+  // 草稿是教师的私有工作区，已撤回只出现在「我的资源」。
+  if (status === 'PUBLISHED') return 'published'
+  if (status === 'REJECTED') return 'rejected'
+  return 'pending'
 }

@@ -1,7 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common'
 import type { Sql } from 'postgres'
 import type { PermissionCode } from '../../shared/permissions'
-import { RESOURCE_STATUSES, type ResourceStatus } from '../../shared/resource-status'
+import {
+  DELETABLE_STATUSES,
+  EDITABLE_STATUSES,
+  RESOURCE_STATUSES,
+  type ResourceStatus,
+} from '../../shared/resource-status'
 import { ADMIN_ROLE, PERMISSIONS, requiresOwnership } from '../../shared/permissions'
 import { SQL } from '../db/database.module'
 import type { AuthUser, AuthorizationDecision } from '../common/auth-user'
@@ -173,12 +178,16 @@ export class AuthorizationService {
    *
    * @param options.requireOwner 默认由权限码决定（`*_own` 类）；
    *        提交/撤回这类"只能动自己的东西"的动作用它显式声明。
+   * @param options.forbidSelf 审核类动作用它：**不能审核自己上传的资源**。
+   *        这是业主 Stage 7 §8 / §26 明确要求的防自审。
+   *        注意它与 `requireOwner` 是**相反方向**的两条约束：
+   *        requireOwner = 只能动自己的；forbidSelf = 不能动自己的。
    */
   async canActOnResource(
     user: AuthUser,
     permission: PermissionCode,
     resource: { readonly id?: string; readonly directoryId: string; readonly uploaderId: string | null },
-    options: { requireOwner?: boolean } = {},
+    options: { requireOwner?: boolean; forbidSelf?: boolean } = {},
   ): Promise<AuthorizationDecision> {
     // 唯一的 ADMIN 绕过点仍然只有下面 can() 里那一处 —— 这里不重复它。
     const scopeDecision = await this.can(user, permission, resource.directoryId)
@@ -187,6 +196,14 @@ export class AuthorizationService {
     const requireOwner = options.requireOwner ?? requiresOwnership(permission)
     if (requireOwner && resource.uploaderId !== user.id && scopeDecision.reason !== 'admin') {
       return { allowed: false, reason: 'not-owner', permission, directoryId: resource.directoryId }
+    }
+
+    // 防自审：**管理员也不例外**。
+    // 业主的规则是"防止权限扩大后形成自审"，所以这里不看角色、也不看 admin 绕过 ——
+    // 只要上传者就是本人，就不允许对自己这条资源做审核类动作。
+    // （管理员仍然可以审别人的资源，这一点由上面的 can() 保证。）
+    if (options.forbidSelf === true && resource.uploaderId !== null && resource.uploaderId === user.id) {
+      return { allowed: false, reason: 'self-review', permission, directoryId: resource.directoryId }
     }
     return scopeDecision
   }
@@ -238,6 +255,63 @@ export class AuthorizationService {
     // 「状态不可见」与「目录不可见」要分开：前者是"别人的草稿"，
     // 后者是"你没这个目录的权限"，界面提示与排查方向完全不同。
     return { allowed: false, reason: 'status-hidden', permission, directoryId: null }
+  }
+
+  /**
+   * 一条**具体资源**上，这个人能做哪些动作。
+   *
+   * 界面据此决定按钮显隐（阶段 7：详情页要按权限显示 编辑 / 提交 / 通过并发布 /
+   * 退回 / 撤回）。三条纪律：
+   *
+   *   1. **它不是安全边界。** 每个动作的接口都会用同一个判定再拒一次 ——
+   *      能力位只是"不要把必然失败的按钮摆出来"。
+   *   2. **判定不在这里重写。** 全部转发到 `canActOnResource()`，
+   *      而这个仓库里只有那一处判定所有权 / 目录 / 自审。
+   *   3. **拒绝时带上原因。** 尤其 `self-review`：老师看到"你没有权限"会去找管理员要权限，
+   *      而要到了也没用（系统就是不允许自审）。界面需要能解释清楚。
+   */
+  async resourceCapabilities(
+    user: AuthUser,
+    resource: { readonly id: string; readonly status: string; readonly directoryId: string; readonly uploaderId: string | null },
+  ): Promise<{
+    readonly canEdit: boolean
+    readonly canSubmit: boolean
+    readonly canApprove: boolean
+    readonly canReject: boolean
+    readonly canRecall: boolean
+    readonly canDelete: boolean
+    /** 审核动作被拒时的原因（`self-review` 等），供界面解释。 */
+    readonly reviewDeniedReason: string | null
+  }> {
+    const status = resource.status
+    const target = { id: resource.id, directoryId: resource.directoryId, uploaderId: resource.uploaderId }
+
+    // 每个动作都问**同一个**入口；`editable` 由状态机决定（状态在这里只做前置过滤，
+    // 真正的合法性仍由事务里的条件更新保证）。
+    const edit = await this.canActOnResource(user, 'resource.update.own', target)
+    const submit = await this.canActOnResource(user, 'resource.submit', target, { requireOwner: true })
+    const approve = await this.canActOnResource(user, 'resource.publish', target, { forbidSelf: true })
+    const reject = await this.canActOnResource(user, 'resource.review', target, { forbidSelf: true })
+    const recall = await this.canActOnResource(user, 'resource.submit', target, { requireOwner: true })
+    const remove = await this.canActOnResource(user, 'resource.delete.own', target)
+
+    const reviewDenied = approve.allowed ? reject : approve
+
+    return {
+      // 编辑：可编辑状态 + 有权改。REJECTED / RECALLED 都在可编辑状态里
+      // （编辑动作本身会把它们变回 DRAFT，见状态机的 REJECTED→DRAFT / RECALLED→DRAFT）。
+      canEdit: edit.allowed && EDITABLE_STATUSES.includes(status as ResourceStatus),
+      // 提交审核：只有草稿能提交。REJECTED / RECALLED 必须先编辑（回 DRAFT）——
+      // 状态机里已经没有 REJECTED→PENDING_REVIEW 这条转换了。
+      canSubmit: submit.allowed && status === 'DRAFT',
+      // 「通过并发布」是**一步**（业主 §14），所以这两个能力都只在待审核时有意义。
+      canApprove: approve.allowed && status === 'PENDING_REVIEW',
+      canReject: reject.allowed && status === 'PENDING_REVIEW',
+      canRecall: recall.allowed && status === 'PUBLISHED',
+      canDelete: remove.allowed && DELETABLE_STATUSES.includes(status as ResourceStatus),
+      reviewDeniedReason:
+        status === 'PENDING_REVIEW' && !approve.allowed ? reviewDenied.reason : null,
+    }
   }
 
   /**

@@ -27,10 +27,11 @@ export const AUDIT_ACTIONS = {
 
   'resource.create': '资源上传',
   'resource.update': '资源编辑',
-  'resource.submit': '提交审核',
-  'review.approve': '审核通过',
-  'review.reject': '审核退回',
-  'review.recall': '资源撤回',
+  // 业主 Stage 7 §20 点名的四个动作，名字与规格逐字一致。
+  'resource.submit_review': '提交审核',
+  'resource.approve': '审核通过并发布',
+  'resource.reject': '审核退回',
+  'resource.recall': '资源撤回',
   'resource.delete': '资源删除',
   'resource.restore': '资源恢复',
   'resource.purge': '永久删除',

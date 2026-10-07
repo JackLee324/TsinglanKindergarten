@@ -267,14 +267,32 @@ describe('上传资源：完整用户路径（§23）', () => {
     assert.equal(await browser.text('[data-testid="file-name"]'), '美德课程教案.pdf')
   })
 
-  test('回到目录页能在列表里找到它，且位置标签正确', async () => {
+  test('刚上传的是草稿：目录浏览里**看不到**它，但「我的资源」里有（阶段 7 §17）', async () => {
+    // ⚠️ 阶段 7 改过这里的期望：目录浏览默认只显示已发布。
+    // 刚上传的草稿属于"还没上线"，所以只能出现在「我的资源」——
+    // 这也正是业主 §17 的原话："自己的非发布资源只在 我的资源 看到"。
     await openVirtueResources()
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="resource-list-section"]\')',
+      20000,
+      '目录页资源区就绪',
+    )
+    assert.equal(
+      await browser.exists(`[data-resource-id="${resourceId}"]`),
+      false,
+      '草稿不该出现在目录浏览里',
+    )
+
+    await browser.goto(`${TEST_BASE}/my-resources`)
     await browser.waitFor(
       `!!document.querySelector('[data-resource-id="${resourceId}"]')`,
       20000,
-      '目录列表里出现刚上传的资源',
+      '草稿在「我的资源」里',
     )
-    const location = await browser.text(`[data-resource-id="${resourceId}"] [data-testid="resource-card-location"]`)
+    // 位置标签在「我的资源」的卡片上同样要给出来（业主最关心的"东西去哪了"）
+    const location = await browser.text(
+      `[data-resource-id="${resourceId}"] [data-testid="resource-card-location"]`,
+    )
     assert.equal(location, '教育教学 / Pre-K / 美德 / 教学资源')
   })
 

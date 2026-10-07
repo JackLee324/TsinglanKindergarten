@@ -10,6 +10,7 @@ import { DirectoryBrowsePage } from './pages/DirectoryBrowsePage'
 import { DirectoryManagePage } from './pages/DirectoryManagePage'
 import { ResourceDetailPage } from './pages/ResourceDetailPage'
 import { MyResourcesPage } from './pages/MyResourcesPage'
+import { ReviewQueuePage } from './pages/ReviewQueuePage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { Spinner } from './components/ui/Spinner'
 import { EmptyState } from './components/ui/EmptyState'
@@ -40,6 +41,11 @@ export function App() {
             >
               <Route index element={<HomePage />} />
               <Route path="my-resources" element={<MyResourcesPage />} />
+              {/*
+                审核工作台。权限同样来自服务端的 capabilities ——
+                前端不判断角色（页面内部还有一层提示，但真正的边界在接口上）。
+              */}
+              <Route path="review" element={<ReviewQueuePage />} />
               {/*
                 资源详情用 **id** 做地址（`/resources/:id`），不用标题 ——
                 标题可改、可重复。目录仍然用 slug 路径，两者不混。

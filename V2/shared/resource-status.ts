@@ -52,6 +52,41 @@ export const RESOURCE_ACTIONS = [
 ] as const
 export type ResourceAction = (typeof RESOURCE_ACTIONS)[number]
 
+/**
+ * 状态机动作 → 审计动作。
+ *
+ * 为什么需要这张映射：业主 Stage 7 §20 点名要记
+ * `resource.submit_review / resource.approve / resource.reject / resource.recall`，
+ * 而状态机内部用的是 `submit / review.approve / review.reject / review.recall`
+ * （这三个 review.* 名字**必须**互相区分，业主在阶段 2 就强调过"审核操作不要混用"）。
+ *
+ * 两套名字之间只允许有**这一个**映射函数 —— 在 service 里散着写字符串，
+ * 迟早会出现"有人改了状态机动作、审计却还在记旧名字"，而审计断了是查不出来的。
+ */
+export const ACTION_AUDIT_NAME: Readonly<Record<ResourceAction, AuditActionName>> = Object.freeze({
+  create: 'resource.create',
+  update: 'resource.update',
+  submit: 'resource.submit_review',
+  'review.approve': 'resource.approve',
+  'review.reject': 'resource.reject',
+  'review.recall': 'resource.recall',
+  delete: 'resource.delete',
+  restore: 'resource.restore',
+  purge: 'resource.purge',
+})
+
+/** 审计动作名（沿用 `shared/audit-actions.ts` 的键类型，避免两处定义）。 */
+export type AuditActionName =
+  | 'resource.create'
+  | 'resource.update'
+  | 'resource.submit_review'
+  | 'resource.approve'
+  | 'resource.reject'
+  | 'resource.recall'
+  | 'resource.delete'
+  | 'resource.restore'
+  | 'resource.purge'
+
 export interface TransitionSpec {
   readonly from: ResourceStatus
   readonly to: ResourceStatus
@@ -67,8 +102,28 @@ export interface TransitionSpec {
 /**
  * 完整转换表。**表里没有的转换一律 409 `ILLEGAL_TRANSITION`。**
  *
- * 例如 `DRAFT → PUBLISHED`（跳过审核）、`PUBLISHED → PENDING_REVIEW`（绕过撤回）
- * 都因为不在表里而被拒绝。
+ * 只有这六条（业主 Stage 7 §1 逐条列出的就是这六条）：
+ *
+ * ```
+ * DRAFT          → PENDING_REVIEW     教师提交审核
+ * PENDING_REVIEW → PUBLISHED          管理员通过并发布
+ * PENDING_REVIEW → REJECTED           管理员退回（必须写原因）
+ * REJECTED       → DRAFT              教师编辑（编辑动作本身会把它变回草稿）
+ * PUBLISHED      → RECALLED           撤回
+ * RECALLED       → DRAFT              教师编辑
+ * ```
+ *
+ * 被这张表挡住的典型（每条都有对应用例）：
+ *   · `DRAFT → PUBLISHED`（跳过审核）
+ *   · `DRAFT → REJECTED`（还没提交就"退回"）
+ *   · `PUBLISHED → REJECTED`（已发布的东西不能"退回"，只能撤回）
+ *   · `REJECTED → PUBLISHED`（跳过复审）
+ *   · `RECALLED → PUBLISHED`（绕过重新审核）
+ *   · `REJECTED → PENDING_REVIEW`（**不经修改直接重新提交**）
+ *
+ * 最后这一条是 Stage 7 特意去掉的：退回之后"原样再交一次"会让审核员看到一模一样的内容，
+ * 而业主的流程是「REJECTED → 编辑 → 提交」。去掉它之后，"重新提交"这条路上
+ * 必然经过一次编辑动作（该动作把状态变回 DRAFT）。
  */
 export const TRANSITIONS: readonly TransitionSpec[] = Object.freeze([
   {
@@ -84,14 +139,6 @@ export const TRANSITIONS: readonly TransitionSpec[] = Object.freeze([
     to: 'DRAFT',
     action: 'update',
     permission: 'resource.update.own',
-    requireOwner: true,
-    requireComment: false,
-  },
-  {
-    from: 'REJECTED',
-    to: 'PENDING_REVIEW',
-    action: 'submit',
-    permission: 'resource.submit',
     requireOwner: true,
     requireComment: false,
   },
@@ -167,7 +214,16 @@ export function editOutcomeFor(status: ResourceStatus): {
   status: ResourceStatus
   bumpVersion: boolean
 } {
+  // 已发布：+1 版本并回到草稿，重新走审核（不原地覆盖线上内容）。
   if (status === 'PUBLISHED') return { status: 'DRAFT', bumpVersion: true }
+  // 已退回 / 已撤回：编辑即回到草稿。
+  //
+  // ⚠️ 这两条以前是"编辑之后仍是原状态"，因为当时存在 REJECTED→PENDING_REVIEW 这条直接转换。
+  // 阶段 7 去掉了那条转换（业主流程是「REJECTED → 编辑 → 提交」），
+  // 于是编辑必须把状态带回 DRAFT —— 否则教师编辑完了却卡在 REJECTED，
+  // 提交按钮永远点不动，而"重新提交"这条路就断了。
+  if (status === 'REJECTED') return { status: 'DRAFT', bumpVersion: false }
+  if (status === 'RECALLED') return { status: 'DRAFT', bumpVersion: false }
   return { status, bumpVersion: false }
 }
 

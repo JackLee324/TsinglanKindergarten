@@ -69,7 +69,11 @@ describe('审计查询', () => {
     const res = await admin.get('/api/audit/actions')
     assert.equal(res.status, 200)
     const byAction = Object.fromEntries(res.data.items.map((i) => [i.action, i.label]))
-    assert.equal(byAction['review.approve'], '审核通过')
+    // 阶段 7 起动作名与业主 §20 的清单逐字一致。
+    assert.equal(byAction['resource.approve'], '审核通过并发布')
+    assert.equal(byAction['resource.submit_review'], '提交审核')
+    assert.equal(byAction['resource.reject'], '审核退回')
+    assert.equal(byAction['resource.recall'], '资源撤回')
     assert.equal(byAction['user.permissions.update'], '权限修改')
   })
 
