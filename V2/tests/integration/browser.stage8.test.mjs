@@ -560,6 +560,54 @@ describe('④ 最后一个管理员不能被停用（§34）', () => {
   })
 })
 
+describe('⑧ 管理员在界面上重置口令（§3 / §16）', () => {
+  /**
+   * 放在最后：这条用例会把张老师的口令改掉，后面不该再有依赖旧口令的用例。
+   * （服务端那条路径在 admin-security 里已经测过，这里补的是**界面入口** ——
+   *   管理员不会调接口，他只会在编辑弹窗里填一个新口令。）
+   */
+  test('编辑弹窗里填新口令 → 旧口令登不进、新口令能登进', async () => {
+    const NEW_PASSWORD = 'ZhangSanNewPass!2026'
+    await login('s8_admin', 'S8AdminPass!1')
+    await openUsersPage()
+
+    await browser.click(`${await userRow(PROBE_USERNAME)} [data-testid="users-row-edit"]`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="edit-user-dialog"]\')', 15000, '编辑弹窗')
+    await browser.fill('[data-testid="edit-user-password"]', NEW_PASSWORD)
+    await browser.click('[data-testid="edit-user-submit"]')
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="users-notice"]\')',
+      20000,
+      '保存成功提示',
+    )
+    // 成功之后弹窗自己关掉（只有失败才留着让人改）
+    await browser.waitFor(
+      '!document.querySelector(\'[data-testid="edit-user-dialog"]\')',
+      15000,
+      '保存成功后弹窗关闭',
+    )
+
+    // 旧口令作废、新口令可用 —— 都用接口核对（浏览器里只有管理员这一个会话）
+    const checker = client()
+    assert.equal((await checker.login(PROBE_USERNAME, PROBE_PASSWORD)).status, 401, '旧口令必须作废')
+    assert.equal((await checker.login(PROBE_USERNAME, NEW_PASSWORD)).status, 201, '新口令必须可用')
+
+    // 界面上"最后登录"随即变成刚发生的那一刻（这一列此前只有接口层的断言）
+    await browser.reload()
+    await browser.waitFor(
+      `document.querySelector('${await userRow(PROBE_USERNAME)} [data-testid="users-row-last-login"]')
+         .innerText !== '从未登录'`,
+      20000,
+      '最后登录时间出现',
+    )
+    assert.match(
+      await browser.text(`${await userRow(PROBE_USERNAME)} [data-testid="users-row-last-login"]`),
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
+      '最后登录要显示成日期加时间',
+    )
+  })
+})
+
 describe('⑤ 目录：新增一级栏目 → 子目录 → 子目录（§10 / §33）', () => {
   test('在 /admin/directories 里建出一级栏目，刷新后仍在', async () => {
     await login('s8_admin', 'S8AdminPass!1')
