@@ -40,6 +40,7 @@ export default tseslint.config(
         URL: 'readonly',
         URLSearchParams: 'readonly',
         fetch: 'readonly',
+        WebSocket: 'readonly',
         Headers: 'readonly',
         Request: 'readonly',
         Response: 'readonly',

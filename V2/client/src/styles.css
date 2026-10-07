@@ -1,0 +1,85 @@
+/*
+ * V2 样式根。
+ * ============================================================================
+ * 设计令牌**逐字取自 V1**（`client/src/tailwind-theme.css`）。
+ * 业主的要求是"不要重新设计 UI，严格以 V1 当前 UI 作为视觉基准"，
+ * 所以这里不做任何"改良"：颜色、圆角、阴影、字体栈都是同一套值。
+ *
+ * 与 V1 的差别只有一处、且是刻意的：V1 的 `--font-sans` 以
+ * `LarkHackSafariFont / LarkEmojiFont / LarkChineseQuote` 开头 —— 那是原平台注入的
+ * 字体，V2 不依赖平台，所以去掉它们，其余顺序保持一致（中文优先 PingFang SC）。
+ */
+@import 'tailwindcss';
+
+@theme {
+  --color-background: hsl(260 100% 99%);
+  --color-foreground: hsl(249 21% 20%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(249 21% 20%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(249 21% 20%);
+  --color-primary: hsl(252 36% 64%);
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-primary-light: hsl(254 38% 77%);
+  --color-primary-dark: hsl(252 35% 52%);
+  --color-secondary: hsl(258 24% 95%);
+  --color-secondary-foreground: hsl(249 21% 20%);
+  --color-muted: hsl(258 24% 95%);
+  --color-muted-foreground: hsl(250 7% 44%);
+  --color-accent: hsl(258 24% 95%);
+  --color-accent-foreground: hsl(249 21% 20%);
+  --color-destructive: hsl(0 50% 70%);
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-success: hsl(152 28% 60%);
+  --color-success-foreground: hsl(0 0% 100%);
+  --color-warning: hsl(38 72% 66%);
+  --color-warning-foreground: hsl(0 0% 100%);
+  --color-border: hsl(258 24% 92%);
+  --color-input: hsl(258 24% 92%);
+  --color-ring: hsl(252 36% 64%);
+  --color-sidebar: hsl(252 36% 64%);
+  --color-sidebar-foreground: hsl(0 0% 100%);
+  --color-sidebar-primary: hsl(252 35% 52%);
+  --color-sidebar-accent: hsl(254 38% 77%);
+  --color-sidebar-border: hsl(252 35% 52%);
+
+  --font-sans:
+    -apple-system, 'BlinkMacSystemFont', 'Helvetica Neue', 'Tahoma', 'PingFang SC',
+    'Microsoft Yahei', 'Arial', 'Hiragino Sans GB', 'sans-serif';
+
+  /* 圆角：V1 的 `--radius = 0.75rem`，卡片 rounded-xl 即由此而来 */
+  --radius-xl: 0.75rem;
+  --radius-lg: 0.5rem;
+
+  --shadow-sm: 0px 2px 12px 0px hsl(252 36% 40% / 0.03), 0px 1px 2px -1px hsl(252 36% 40% / 0.03);
+  --shadow-lg: 0px 2px 12px 0px hsl(252 36% 40% / 0.05), 0px 4px 6px -1px hsl(252 36% 40% / 0.05);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 与 V1 一致：标题 font-semibold；正文 leading-relaxed 由具体组件声明 */
+  h1,
+  h2,
+  h3 {
+    font-weight: 600;
+  }
+}
+
+/* V1 的侧边栏渐变，逐字沿用 */
+.sidebar-gradient {
+  background: linear-gradient(180deg, hsl(252 36% 64%) 0%, hsl(254 38% 70%) 100%);
+}
