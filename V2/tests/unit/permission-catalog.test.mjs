@@ -1,0 +1,61 @@
+/**
+ * 权限目录的形状必须与业主的最终决定逐字一致。
+ *
+ * 这条测试存在的理由：权限目录是**整个授权模型的词汇表**。
+ * 它多一项、少一项、或者顺序被改，管理界面上就会多一个/少一个勾选框，
+ * 而那种改动不会被任何接口测试发现。
+ */
+import { test, describe } from 'node:test'
+import assert from 'node:assert/strict'
+import { permissions } from '../helpers/modules.mjs'
+const { PERMISSION_CODES, PERMISSIONS, permissionChecklist, USER_ROLES } = permissions
+
+describe('权限目录（业主最终确认的 12 项）', () => {
+  test('恰好 12 项', () => {
+    assert.equal(PERMISSION_CODES.length, 12)
+  })
+
+  test('逐条与业主清单一致（顺序也要对）', () => {
+    assert.deepEqual([...permissionChecklist()], [
+      'resource.view',
+      'resource.create',
+      'resource.update.own',
+      'resource.delete.own',
+      'resource.download',
+      'resource.submit',
+      'resource.review',
+      'resource.publish',
+      'directory.manage',
+      'directory.create_folder',
+      'user.manage',
+      'audit.view',
+    ])
+  })
+
+  test('每一项都有中文标签（管理员看到的是中文，不是权限码）', () => {
+    for (const code of PERMISSION_CODES) {
+      const meta = PERMISSIONS[code]
+      assert.ok(meta, `${code} 没有元数据`)
+      assert.match(meta.label, /[\u4e00-\u9fa5]/, `${code} 的标签必须是中文`)
+      assert.ok(meta.labelEn.length > 0, `${code} 缺英文标签`)
+      assert.ok(meta.description.length > 10, `${code} 缺说明`)
+      assert.ok(['directory', 'global'].includes(meta.scope))
+    }
+  })
+
+  test('业主禁止的概念一个都不在权限模型里', () => {
+    const serialized = JSON.stringify(PERMISSIONS).toLowerCase()
+    for (const banned of ['deny', 'grant', 'override', 'scope_kind', 'ceiling', 'version']) {
+      assert.ok(!serialized.includes(banned), `权限模型里不应出现「${banned}」`)
+    }
+  })
+
+  test('只有 ADMIN / TEACHER 两种身份', () => {
+    assert.deepEqual([...USER_ROLES], ['ADMIN', 'TEACHER'])
+  })
+
+  test('「下载资源」是独立权限（不与查看资源合并）', () => {
+    assert.ok(PERMISSION_CODES.includes('resource.download'))
+    assert.notEqual(PERMISSIONS['resource.download'].label, PERMISSIONS['resource.view'].label)
+  })
+})
