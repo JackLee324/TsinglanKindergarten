@@ -39,9 +39,20 @@ export function PermissionEditor({
   value,
   onChange,
   resetKey,
+  onModeChange,
 }: {
   readonly value: PermissionGrant[]
   readonly onChange: (grants: PermissionGrant[], mode: 'uniform' | 'per-permission') => void
+  /**
+   * 编辑器**当前用哪种方式**，回传给父组件（父组件底部那行"当前方式：…"要用）。
+   *
+   * 为什么必须有这个回调：方式是由编辑器自己决定的 —— 一份"按权限分别设置"
+   * 的授权会自动落到「分别设置」（见下面 resetKey 的说明）。父组件只能猜，
+   * 而它猜的初值是「统一开放目录」，于是画面上会同时出现
+   * "「分别设置」高亮着"和"当前方式：统一开放目录"两句话互相打架。
+   * 这是 Stage 8 的浏览器用例（⑦）抓出来的，不是理论问题。
+   */
+  readonly onModeChange?: (mode: 'uniform' | 'per-permission') => void
   /**
    * 何时**重新初始化**编辑器（换一个老师、或者弹窗重新打开）。
    *
@@ -83,6 +94,19 @@ export function PermissionEditor({
     // value 故意不进依赖：进了就回到"父组件回传空授权 → 清空勾选"的老问题上。
     // eslint 在本项目里没有装 react-hooks 插件，所以这里不写 disable 注释。
   }, [resetKey])
+
+  /*
+    把"现在用的是哪种方式"告诉父组件（含首次挂载与换人之后的重建），
+    父组件底部那行"当前方式：…"才不会和编辑器里高亮的方式互相打架。
+
+    回调用 ref 拿，避免父组件每渲染一次传一个新函数就把 effect 又跑一遍。
+    setMode 收到同样的值时 React 会直接跳过重渲染，所以这里不存在循环。
+  */
+  const modeChangeRef = useRef(onModeChange)
+  modeChangeRef.current = onModeChange
+  useEffect(() => {
+    modeChangeRef.current?.(mode)
+  }, [mode])
 
   const emitUniform = (permissions: PermissionCode[], directories: string[]) => {
     const grants: PermissionGrant[] = []

@@ -333,7 +333,7 @@ function IconButton({
 function capabilitySummary(node: DirectoryNode): string {
   const parts: string[] = []
   if (node.allowChildren) parts.push('可建子目录')
-  if (node.allowFiles) parts.push('可放资源')
+  if (node.allowFiles) parts.push('可上传资源')
   if (node.allowCustomFolders) parts.push('教师可建文件夹')
   return parts.length > 0 ? parts.join(' · ') : '仅导航'
 }
@@ -421,7 +421,7 @@ function EditDialog({
             testId="manage-allow-children"
           />
           <Checkbox
-            label="可以直接放资源"
+            label="允许上传资源"
             checked={allowFiles}
             onChange={setAllowFiles}
             testId="manage-allow-files"

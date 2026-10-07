@@ -195,7 +195,12 @@ export function AdminUsersPage() {
                           {row.status === 'active' ? '启用' : '停用'}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground">{row.createdAt.slice(0, 10)}</td>
+                      <td
+                        className="px-4 py-3 text-muted-foreground"
+                        data-testid="users-row-created"
+                      >
+                        {row.createdAt.slice(0, 10)}
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground" data-testid="users-row-last-login">
                         {row.lastLoginAt === null ? '从未登录' : row.lastLoginAt.slice(0, 16).replace('T', ' ')}
                       </td>
@@ -585,6 +590,8 @@ function PermissionsDialog({
               setGrants(next)
               setMode(nextMode)
             }}
+            // 弹窗底部那行"当前方式"读编辑器的实际方式，不是弹窗的猜测。
+            onModeChange={setMode}
           />
         )}
 

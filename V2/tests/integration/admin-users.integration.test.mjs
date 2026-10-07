@@ -88,6 +88,26 @@ describe('列表：搜索、分页、最后登录、权限摘要（§2 / §28 / 
     assert.equal(res.data.total >= 2, true)
   })
 
+  test('列表每一行都带业主列的那几项：姓名 / 用户名 / 状态 / 创建时间 / 最后登录 / 权限摘要', async () => {
+    const created = await createTeacherViaApi({ name: '字段探针李老师', username: 'fieldprobe01' })
+    const res = await admin.get('/api/users?q=fieldprobe01')
+    assert.equal(res.status, 200, JSON.stringify(res.data))
+    assert.equal(res.data.total, 1)
+    const row = res.data.items[0]
+
+    assert.equal(row.id, created.id)
+    assert.equal(row.name, '字段探针李老师')
+    assert.equal(row.username, 'fieldprobe01')
+    assert.equal(row.status, 'active')
+    // 创建时间必须是**可解析的时间**，不是空串、也不是 undefined —— 界面上直接显示它的前 10 位。
+    assert.match(row.createdAt, /^\d{4}-\d{2}-\d{2}T/, `创建时间应当是 ISO 时间：${row.createdAt}`)
+    assert.equal(Number.isNaN(Date.parse(row.createdAt)), false)
+    assert.equal(row.lastLoginAt, null, '还没登录过就是 null（界面显示"从未登录"）')
+    assert.deepEqual(row.permissionSummary, [], '这位老师没有授权')
+    assert.equal(row.permissionCount, 0)
+    assert.equal(row.isAdmin, false, '普通教师不是管理员')
+  })
+
   test('搜索按姓名，也按用户名（服务端过滤）', async () => {
     const created = await createTeacherViaApi({ name: '搜索探针王老师', username: 'searchprobe01' })
 

@@ -3,6 +3,7 @@ import type {
   AdminUserDetail,
   AuditLogPage,
   PermissionGrant,
+  PermissionItem,
   UserListPage,
   UserRole,
 } from './types'
@@ -42,12 +43,19 @@ export const adminApi = {
   ) => api.patch<{ revokedSessions: number }>(`/api/users/${id}`, input),
 
   userPermissions: (id: string) =>
-    api.get<{ items: PermissionGrant[] }>(`/api/users/${id}/permissions`),
+    api.get<{ items: PermissionItem[] }>(`/api/users/${id}/permissions`),
 
-  /** 整份替换：界面上勾选框提交的就是"最终结果"。 */
-  setPermissions: (id: string, permissions: PermissionGrant[]) =>
+  /**
+   * 整份替换：界面上勾选框提交的就是"最终结果"。
+   *
+   * 只提交 `{ permission, directoryId }`：读接口会**多带一个 `label`**
+   * （界面要显示中文名），而服务端 DTO 开了白名单，多带字段直接 400。
+   * 所以"瘦身"放在这里统一做，而不是指望每个调用方都记得自己 map 一遍 ——
+   * 漏一次的表现就是"我只是打开一位老师、什么都没改，点保存却报请求参数不合法"。
+   */
+  setPermissions: (id: string, permissions: readonly PermissionGrant[]) =>
     api.put<{ grants: number; revokedSessions: number }>(`/api/users/${id}/permissions`, {
-      permissions,
+      permissions: permissions.map((g) => ({ permission: g.permission, directoryId: g.directoryId })),
     }),
 
   audit: (query: {

@@ -28,9 +28,29 @@ import {
 } from '../helpers/harness.mjs'
 import { launchBrowser } from '../helpers/browser.mjs'
 
-const PROBE_USERNAME = `zhangsan${Date.now().toString().slice(-6)}`
+const STAMP = Date.now().toString().slice(-6)
+const PROBE_USERNAME = `zhangsan${STAMP}`
 const PROBE_PASSWORD = 'ZhangSanPass!2026'
-const PROBE_DIR_SLUG = `stage8-probe-${Date.now().toString().slice(-6)}`
+const PROBE_DIR_SLUG = `stage8-probe-${STAMP}`
+
+/**
+ * 第二个探针：**按权限分别设置**过的人。
+ *
+ * 「分别设置」是这套权限界面唯一一处"界面自己可能悄悄改掉授权"的地方 ——
+ * 只实现"统一开放目录"的话，打开一个分别设置过的老师再点保存，
+ * 笛卡尔积会把 2 条授权扩成 4 条。所以这个人必须真的存在，并且用浏览器
+ * 走一遍"打开 → 一个字都不改 → 保存"，再回数据库核对条数没变。
+ */
+const PROBE_FLAT_USERNAME = `flatprobe${STAMP}`
+const PROBE_FLAT_PASSWORD = 'FlatProbePass!2026'
+
+/**
+ * 业主 §33 说的那条真实链路：**活动 → 2027 春季活动 → 春游**。
+ * 三级都要在同一个管理员会话里建出来，刷新之后一级都不能少 ——
+ * "建完就没了"和"层级被拍平"都必须被挡住，所以下面既断言缩进逐级变深，
+ * 也回服务端核对父子关系（界面自己排得好看不算数）。
+ */
+const CHAIN = [`stage8-act-${STAMP}`, `stage8-act-2027-${STAMP}`, `stage8-act-spring-${STAMP}`]
 
 let browser
 let admin
@@ -104,16 +124,94 @@ async function userRow(username) {
   return `[data-testid="users-row"][data-username="${username}"]`
 }
 
+/** 目录管理页里某个目录的行。 */
+function manageRow(slug) {
+  return `[data-testid="manage-row"][data-directory-slug="${slug}"]`
+}
+
+/** 在管理页里新建一个**一级栏目**（走真实界面，不调 API）。 */
+async function createRootDirectory(name, slug) {
+  await browser.click('[data-testid="manage-add-root"]')
+  await browser.waitFor(
+    '!!document.querySelector(\'[data-testid="manage-create-dialog"]\')',
+    15000,
+    '新增一级栏目弹窗',
+  )
+  await browser.fill('[data-testid="manage-create-name"]', name)
+  await browser.fill('[data-testid="manage-create-slug"]', slug)
+  await browser.click('[data-testid="manage-create-submit"]')
+  await browser.waitFor(`!!document.querySelector('${manageRow(slug)}')`, 20000, `新目录「${name}」出现`)
+}
+
+/** 在管理页里给某个目录新建**子目录**。 */
+async function createChildDirectory(parentSlug, name, slug) {
+  await browser.click(`${manageRow(parentSlug)} [data-testid="manage-add-child"]`)
+  await browser.waitFor(
+    '!!document.querySelector(\'[data-testid="manage-create-dialog"]\')',
+    15000,
+    '新建子目录弹窗',
+  )
+  await browser.fill('[data-testid="manage-create-name"]', name)
+  await browser.fill('[data-testid="manage-create-slug"]', slug)
+  await browser.click('[data-testid="manage-create-submit"]')
+  await browser.waitFor(`!!document.querySelector('${manageRow(slug)}')`, 20000, `子目录「${name}」出现`)
+}
+
+/**
+ * 在管理页里展开某个目录行。
+ *
+ * ⚠️ 和权限编辑器一样：**折叠的节点不渲染**。刷新之后 `openIds` 是空的，
+ * 所以"刷新后子目录不见了"往往是没展开，而不是没存下来 ——
+ * 第一版用例就是这么冤枉过服务的。
+ */
+async function expandManageRow(slug) {
+  const toggle = `${manageRow(slug)} [data-testid="manage-row-toggle"]`
+  await browser.waitFor(`!!document.querySelector('${toggle}')`, 15000, `${slug} 有展开箭头`)
+  await browser.click(toggle)
+  await browser.waitFor('true', 800, '展开完成')
+}
+
+/** 在 /api/directories/tree 里按 slug 找节点（服务端真相）。 */
+function findTreeNode(nodes, slug) {
+  for (const node of nodes) {
+    if (node.slug === slug) return node
+    const hit = findTreeNode(node.children ?? [], slug)
+    if (hit !== null) return hit
+  }
+  return null
+}
+
 before(async () => {
   await resetDatabase()
   await createAdmin('s8_admin', 'S8AdminPass!1')
   ids.virtue = await directoryIdByPath('education/pre-k/virtue')
   ids.virtueResources = await directoryIdByPath('education/pre-k/virtue/resources')
   ids.kPe = await directoryIdByPath('education/k/pe')
+  ids.montessori = await directoryIdByPath('education/pre-k/montessori')
 
   await startServer()
   admin = client()
   await admin.login('s8_admin', 'S8AdminPass!1')
+
+  /*
+    先把那个「分别设置」的探针老师建出来：**查看**只管美德、**上传**只管蒙特梭利。
+
+    这两条授权构成的不是笛卡尔积（笛卡尔积会是 4 条），所以打开他的权限界面
+    必须自动落到「分别设置」；否则保存一次就会多出两条谁也没点过的授权。
+  */
+  const flat = await admin.post('/api/users', {
+    name: '分别设置探针老师',
+    username: PROBE_FLAT_USERNAME,
+    password: PROBE_FLAT_PASSWORD,
+    role: 'TEACHER',
+    permissions: [
+      { permission: 'resource.view', directoryId: ids.virtue },
+      { permission: 'resource.create', directoryId: ids.montessori },
+    ],
+  })
+  assert.equal(flat.status, 201, JSON.stringify(flat.data))
+  ids.flatUser = flat.data.id
+
   browser = await launchBrowser()
 })
 
@@ -124,10 +222,22 @@ after(async () => {
       await sql`DELETE FROM resources WHERE id = ANY(${createdResources}::uuid[])`
     })
   }
-  await withSql(async (sql) => {
-    await sql`DELETE FROM users WHERE username = ${PROBE_USERNAME}`
-    await sql`DELETE FROM directories WHERE slug = ${PROBE_DIR_SLUG}`
+  const removed = await withSql(async (sql) => {
+    // 一个一个删（不用数组插值），这样"到底删掉几个"是明确的数字。
+    let users = 0
+    for (const username of [PROBE_USERNAME, PROBE_FLAT_USERNAME]) {
+      users += (await sql`DELETE FROM users WHERE username = ${username} RETURNING id`).length
+    }
+    // 子目录必须先删：`parent_id` 是 ON DELETE RESTRICT，从最深的一级往回删。
+    let dirs = 0
+    for (const slug of [...CHAIN].reverse()) {
+      dirs += (await sql`DELETE FROM directories WHERE slug = ${slug} RETURNING id`).length
+    }
+    dirs += (await sql`DELETE FROM directories WHERE slug = ${PROBE_DIR_SLUG} RETURNING id`).length
+    return { users, dirs }
   })
+  assert.equal(removed.users, 2, '探针账号必须全部清掉（残留核对）')
+  assert.equal(removed.dirs, CHAIN.length + 1, '探针目录必须全部清掉（残留核对）')
   await stopServer()
 })
 
@@ -204,6 +314,23 @@ describe('① 新增教师并用它登录（§3 / §30）', () => {
       'resource.update.own',
       'resource.view',
     ])
+
+    // 列表里业主列的那几个字段都要看得见：状态 / 创建时间 / 最后登录 / 权限摘要
+    const row = await userRow(PROBE_USERNAME)
+    assert.equal(await browser.text(`${row} [data-testid="users-row-status"]`), '启用')
+    assert.match(
+      await browser.text(`${row} [data-testid="users-row-created"]`),
+      /^\d{4}-\d{2}-\d{2}$/,
+      '列表要显示创建时间（日期）',
+    )
+    assert.equal(
+      await browser.text(`${row} [data-testid="users-row-last-login"]`),
+      '从未登录',
+      '刚建出来的账号还没登录过',
+    )
+    const summary = await browser.text(`${row} [data-testid="users-row-permissions"]`)
+    assert.match(summary, /查看资源/, `权限摘要要说人话：${summary}`)
+    assert.equal(/resource\./.test(summary), false, `摘要里不能出现权限码：${summary}`)
   })
 
   test('权限界面里不出现 RBAC 术语（§25）', async () => {
@@ -434,30 +561,17 @@ describe('④ 最后一个管理员不能被停用（§34）', () => {
 })
 
 describe('⑤ 目录：新增一级栏目 → 子目录 → 子目录（§10 / §33）', () => {
-  test('在 /admin/directories 里建出 活动 → 2027 春季活动，刷新后仍在', async () => {
+  test('在 /admin/directories 里建出一级栏目，刷新后仍在', async () => {
     await login('s8_admin', 'S8AdminPass!1')
     await browser.goto(`${TEST_BASE}/admin/directories`)
     await browser.waitFor('!!document.querySelector(\'[data-testid="directory-manage-page"]\')', 20000, '目录管理页')
     await browser.waitFor('!!document.querySelector(\'[data-testid="manage-add-root"]\')', 20000, '新增一级栏目按钮')
 
-    await browser.click('[data-testid="manage-add-root"]')
-    await browser.waitFor('!!document.querySelector(\'[data-testid="manage-create-dialog"]\')', 15000, '新增弹窗')
-    await browser.fill('[data-testid="manage-create-name"]', '阶段八活动')
-    await browser.fill('[data-testid="manage-create-slug"]', PROBE_DIR_SLUG)
-    await browser.click('[data-testid="manage-create-submit"]')
-    await browser.waitFor(
-      `!!document.querySelector('[data-testid="manage-row"][data-directory-slug="${PROBE_DIR_SLUG}"]')`,
-      20000,
-      '新栏目出现在管理树里',
-    )
+    await createRootDirectory('阶段八活动', PROBE_DIR_SLUG)
 
     // 刷新之后仍在（"刷新就没了"这种假成功必须被挡住）
     await browser.reload()
-    await browser.waitFor(
-      `!!document.querySelector('[data-testid="manage-row"][data-directory-slug="${PROBE_DIR_SLUG}"]')`,
-      20000,
-      '刷新后仍在',
-    )
+    await browser.waitFor(`!!document.querySelector('${manageRow(PROBE_DIR_SLUG)}')`, 20000, '刷新后仍在')
 
     // 侧边栏也应当出现它（目录是唯一真相）
     await browser.goto(`${TEST_BASE}/`)
@@ -465,6 +579,103 @@ describe('⑤ 目录：新增一级栏目 → 子目录 → 子目录（§10 / �
       `!!document.querySelector('[data-nav="/directory/${PROBE_DIR_SLUG}"]')`,
       20000,
       '侧边栏出现新栏目',
+    )
+  })
+
+  test('三级链路 活动 → 2027 春季活动 → 春游：层级没错，刷新后一级都不少（§33）', async () => {
+    await login('s8_admin', 'S8AdminPass!1')
+    await browser.goto(`${TEST_BASE}/admin/directories`)
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="directory-manage-page"]\')',
+      20000,
+      '目录管理页',
+    )
+
+    // ① 一级栏目「活动」→ ② 「2027 春季活动」→ ③ 「春游」
+    await createRootDirectory('活动', CHAIN[0])
+    await createChildDirectory(CHAIN[0], '2027 春季活动', CHAIN[1])
+    await createChildDirectory(CHAIN[1], '春游', CHAIN[2])
+
+    /*
+      缩进必须逐级变深。
+      三个平铺的行也满足"三个 slug 都存在"，所以只数行数是测不出层级被拍平的。
+    */
+    const pads = await browser.session.eval(
+      `[${CHAIN.map((s) => JSON.stringify(s)).join(',')}].map((slug) => {
+         const el = document.querySelector('[data-testid="manage-row"][data-directory-slug="' + slug + '"]')
+         return el === null ? -1 : parseInt(getComputedStyle(el).paddingLeft, 10)
+       })`,
+    )
+    assert.equal(
+      pads[0] > 0 && pads[0] < pads[1] && pads[1] < pads[2],
+      true,
+      `缩进没有逐级变深（${pads.join(' / ')}）—— 层级可能被拍平了`,
+    )
+
+    // 服务端真相：父子关系真的写进库里了（不是界面自己排得好看）
+    const tree = await admin.get('/api/directories/tree')
+    assert.equal(tree.status, 200)
+    assert.deepEqual(
+      findTreeNode(tree.data.roots, CHAIN[0]).children.map((c) => c.slug),
+      [CHAIN[1]],
+    )
+    assert.deepEqual(
+      findTreeNode(tree.data.roots, CHAIN[1]).children.map((c) => c.slug),
+      [CHAIN[2]],
+    )
+
+    // 「春游」是最后一层，给它打开「允许上传」——这样它才**真的能放东西**
+    await browser.click(`${manageRow(CHAIN[2])} [data-testid="manage-edit"]`)
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="manage-edit-dialog"]\')',
+      15000,
+      '编辑弹窗',
+    )
+    await browser.click('[data-testid="manage-allow-files"]')
+    await browser.click('[data-testid="manage-save"]')
+    await browser.waitFor(
+      `document.querySelector('${manageRow(CHAIN[2])}').innerText.includes('可上传资源')`,
+      20000,
+      '「春游」变成可上传',
+    )
+
+    // 刷新：折叠的节点不渲染，所以先逐级展开再断言
+    await browser.reload()
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="directory-manage-page"]\')',
+      20000,
+      '目录管理页',
+    )
+    await browser.waitFor(`!!document.querySelector('${manageRow(CHAIN[0])}')`, 20000, '刷新后一级还在')
+    await expandManageRow(CHAIN[0])
+    await browser.waitFor(`!!document.querySelector('${manageRow(CHAIN[1])}')`, 20000, '刷新后二级还在')
+    await expandManageRow(CHAIN[1])
+    await browser.waitFor(`!!document.querySelector('${manageRow(CHAIN[2])}')`, 20000, '刷新后三级还在')
+    assert.equal(await browser.text(`${manageRow(CHAIN[2])} [data-testid="manage-row-name"]`), '春游')
+    assert.match(
+      await browser.text(manageRow(CHAIN[2])),
+      /可上传资源/,
+      '刷新后「允许上传」也应当还在',
+    )
+
+    // 删除保护：一级栏目下面还有子目录 → 删不掉，而且要说清原因（不是静默失败）
+    await browser.click(`${manageRow(CHAIN[0])} [data-testid="manage-delete"]`)
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="manage-error"]\')',
+      20000,
+      '删除保护提示',
+    )
+    assert.match(await browser.text('[data-testid="manage-error"]'), /子目录/, '提示要说清为什么删不掉')
+    await browser.reload()
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="directory-manage-page"]\')',
+      20000,
+      '目录管理页',
+    )
+    await browser.waitFor(
+      `!!document.querySelector('${manageRow(CHAIN[0])}')`,
+      20000,
+      '被拒绝删除的目录必须原封不动还在',
     )
   })
 })
@@ -498,5 +709,77 @@ describe('⑥ 审计查得到管理员做过的事（§35）', () => {
     const actions = await browser.allAttrs('[data-testid="audit-row"]', 'data-action')
     assert.equal(new Set(actions).size, 1)
     assert.equal(actions[0], 'user.create')
+  })
+})
+
+describe('⑦ 分别设置过的权限，打开后原样保存不能被悄悄拍平（§25 的边界）', () => {
+  test('非笛卡尔配置 → 自动进入「分别设置」→ 保存后授权条数不变', async () => {
+    await login('s8_admin', 'S8AdminPass!1')
+    await browser.goto(`${TEST_BASE}/admin/permissions`)
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="admin-permissions-page"]\')',
+      20000,
+      '权限页',
+    )
+
+    // 下拉里的老师是按角色从服务端筛出来的，等这位探针老师出现再选。
+    await browser.waitFor(
+      `[...document.querySelectorAll('[data-testid="permissions-teacher-select"] option')]
+         .some((o) => o.value === ${JSON.stringify(ids.flatUser)})`,
+      20000,
+      '下拉里有那位分别设置的老师',
+    )
+    await browser.select('[data-testid="permissions-teacher-select"]', ids.flatUser)
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="permission-editor"]\')',
+      20000,
+      '权限编辑器加载出来',
+    )
+
+    /*
+      这里是这一条用例的全部意义：**必须自动落到「分别设置」**。
+
+      如果界面按笛卡尔积来理解这份授权，它会以为"查看 + 上传 都在 美德 + 蒙特梭利"，
+      于是保存时多写两条谁也没点过的授权 —— 一次"我只是打开看一眼"就扩大了权限。
+    */
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="permission-mode-notice"]\')',
+      15000,
+      '「分别设置」的说明出现',
+    )
+    assert.equal(
+      await browser.attr('[data-testid="permission-mode-per"]', 'data-active'),
+      'true',
+      '应当默认落在「分别设置」',
+    )
+    assert.equal(
+      await browser.attr('[data-testid="permission-mode-uniform"]', 'data-active'),
+      'false',
+    )
+    assert.match(await browser.text('[data-testid="permissions-mode"]'), /分别设置/)
+
+    // 一个字都不改，直接保存
+    await browser.click('[data-testid="permissions-save"]')
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="permissions-notice"]\')',
+      20000,
+      '保存成功提示',
+    )
+    const notice = await browser.text('[data-testid="permissions-notice"]')
+    assert.match(notice, /已保存 2 条授权/, `保存的是 2 条，不是笛卡尔积的 4 条：${notice}`)
+
+    // 回数据库核对：还是那两条，一条不多、一条不少
+    const grants = await withSql(async (sql) => {
+      const rows = await sql`
+        SELECT permission, directory_id::text AS directory_id
+        FROM user_permissions
+        WHERE user_id = ${ids.flatUser}`
+      return rows.map((r) => `${r.permission}@${r.directory_id}`).sort()
+    })
+    assert.deepEqual(
+      grants,
+      [`resource.create@${ids.montessori}`, `resource.view@${ids.virtue}`].sort(),
+      '原样保存之后授权必须逐条一致（拍平一次就会多出两条）',
+    )
   })
 })

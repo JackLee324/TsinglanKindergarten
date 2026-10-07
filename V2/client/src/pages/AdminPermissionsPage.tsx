@@ -137,6 +137,8 @@ export function AdminPermissionsPage() {
                 setGrants(next)
                 setMode(nextMode)
               }}
+              // 底部那行"当前方式"读编辑器的实际方式，不是页面的猜测。
+              onModeChange={setMode}
             />
             <div className="mt-4 flex items-center justify-between gap-2">
               <p className="text-xs text-muted-foreground" data-testid="permissions-mode">

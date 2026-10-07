@@ -151,6 +151,20 @@ export interface PermissionGrant {
   readonly directoryId: string | null
 }
 
+/**
+ * **读回来**的授权项：比提交用的 `PermissionGrant` 多一个 `label`。
+ *
+ * 界面要显示中文名而不是权限码，所以读接口必须把它带上；但提交时**不能**
+ * 把读回来的对象原样发回去 —— 服务端 DTO 开了白名单，多一个字段就是 400，
+ * 而管理员看到的只有"请求参数不合法"。
+ *
+ * 这个差别值得写进类型：Stage 8 的浏览器用例（⑦ 打开一位老师、
+ * 一个字都不改就点保存）第一次跑就是在这里红的。
+ */
+export interface PermissionItem extends PermissionGrant {
+  readonly label: string
+}
+
 /** 列表上的权限摘要（人事化说法，不出现权限码）。 */
 export interface PermissionSummaryEntry {
   readonly permission: string
