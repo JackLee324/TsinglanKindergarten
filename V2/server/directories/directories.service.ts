@@ -81,6 +81,59 @@ export class DirectoriesService {
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
+  // 「可用」—— `enabled` 的真实语义
+  // ─────────────────────────────────────────────────────────────────────────
+  //
+  // 停用一个节点，意思是**它和它的整棵子树都不再投入使用**。
+  // 只在界面上把这一行藏起来是不够的，实测有三个泄漏点（阶段 3 修掉）：
+  //   · 子节点会被"提升"成顶层 —— 父节点被过滤掉之后，buildTree 会把它当成孤儿挂到根上，
+  //     于是「教育教学」里会突然多出一个「美德」顶级栏目；
+  //   · 教师可以**直接调接口**往停用的目录里建资源（HTTP 201）；
+  //   · `by-path` 仍然解析进停用节点，老链接指向一个已经停用的地方。
+  //
+  // 因此这里给出唯一的判定：**自身与所有祖先都 enabled 才算"可用"**。
+  // 用一个递归 CTE 从根往下走、遇到停用即停 —— 与"子树"判定同一套写法。
+
+  /** 全部可用节点 id（自身与祖先都 enabled）。 */
+  async usableDirectoryIds(sql?: Sql): Promise<Set<string>> {
+    const client = sql ?? this.sql
+    const rows = await client<{ id: string }[]>`
+      WITH RECURSIVE usable AS (
+        SELECT id FROM directories WHERE parent_id IS NULL AND enabled = true
+        UNION ALL
+        SELECT d.id FROM directories d JOIN usable u ON d.parent_id = u.id
+        WHERE d.enabled = true
+      )
+      SELECT id FROM usable
+    `
+    return new Set(rows.map((r) => r.id))
+  }
+
+  /** 单个节点是否可用（自身与所有祖先都 enabled）。 */
+  async isUsable(id: string): Promise<boolean> {
+    const rows = await this.sql<{ ok: boolean }[]>`
+      WITH RECURSIVE up AS (
+        SELECT id, parent_id, enabled FROM directories WHERE id = ${id}
+        UNION ALL
+        SELECT d.id, d.parent_id, d.enabled FROM directories d JOIN up ON d.id = up.parent_id
+      )
+      SELECT bool_and(enabled) AS ok FROM up
+    `
+    return rows.length > 0 && rows[0].ok === true
+  }
+
+  /** 写入前的前置检查：目标目录必须可用（否则 409 而不是静默接受）。 */
+  private async assertUsable(id: string, what: string): Promise<void> {
+    const node = await this.requireNode(id)
+    if (!(await this.isUsable(id))) {
+      throw AppError.conflict(
+        `「${node.name}」已停用（或它的上级已停用），${what}`,
+        'CONFLICT',
+      )
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // 读
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -122,12 +175,32 @@ export class DirectoriesService {
 
     const allowed = (set: string[] | null, id: string) => set === null || set.includes(id)
 
-    const visibleRows = rows.filter((r) => {
-      if (!visible.has(r.id)) return false
-      if (r.enabled) return true
-      // 停用节点：只有能管理它的人才看得到（管理界面需要看到并可以重新启用）。
-      return allowed(manageIds, r.id)
-    })
+    const usable = await this.usableDirectoryIds()
+
+    // 第一轮：范围过滤 + 停用过滤。
+    // 停用节点只有能管理它的人才看得到（管理界面需要看到它并重新启用）。
+    const shown = new Set<string>()
+    for (const r of rows) {
+      if (!visible.has(r.id)) continue
+      if (usable.has(r.id) || allowed(manageIds, r.id)) shown.add(r.id)
+    }
+
+    // 第二轮：**祖先闭合**。父节点不在结果里时，子节点必须一起移除，
+    // 而不是被提升成顶层 —— 那正是实测到的泄漏：
+    // 停用「Pre-K」之后，「美德」会变成「教育教学」下的一个顶级栏目。
+    for (let pass = 0; pass < MAX_DIRECTORY_DEPTH; pass += 1) {
+      let removed = 0
+      for (const r of rows) {
+        if (!shown.has(r.id)) continue
+        if (r.parent_id !== null && !shown.has(r.parent_id)) {
+          shown.delete(r.id)
+          removed += 1
+        }
+      }
+      if (removed === 0) break
+    }
+
+    const visibleRows = rows.filter((r) => shown.has(r.id))
 
     const builds = buildTree(visibleRows, (row) => ({
       ...toNodeView(row, this.pathOf(rows, row.id), counts.get(row.id) ?? 0),
@@ -172,6 +245,14 @@ export class DirectoriesService {
             WHERE parent_id IS NULL AND slug = ${segment}
           `
       if (rows.length === 0) break
+
+      // 停用的节点对**普通用户**到此为止：回退到最近一个可用祖先。
+      // 管理员仍然可以解析进去（管理界面需要打开它并重新启用）。
+      if (!rows[0].enabled) {
+        const manage = await this.authz.can(user, 'directory.manage', rows[0].id)
+        if (!manage.allowed) break
+      }
+
       current = rows[0]
       parentId = current.id
       resolvedCount += 1
@@ -190,6 +271,10 @@ export class DirectoriesService {
 
   async getById(user: AuthUser, id: string): Promise<NodeView & { ancestors: NodeView[] }> {
     const row = await this.requireNode(id)
+    if (!(await this.isUsable(id))) {
+      const manage = await this.authz.can(user, 'directory.manage', id)
+      if (!manage.allowed) throw AppError.notFound('目录不存在')
+    }
     const node = await this.toNodeViewFor(user, row)
     const ancestors = await this.ancestorsOf(user, id)
     return { ...node, ancestors }
@@ -239,6 +324,7 @@ export class DirectoriesService {
     let depth = 1
     if (parentId !== null) {
       const parent = await this.requireNode(parentId)
+      await this.assertUsable(parentId, '不能在其下新建目录')
       if (!parent.allow_children) {
         throw AppError.conflict(`「${parent.name}」不允许在其下继续新建目录`, 'CONFLICT')
       }
@@ -286,6 +372,7 @@ export class DirectoriesService {
    */
   async createFolder(actor: AuthUser, parentId: string, name: string, nameEn?: string | null) {
     const parent = await this.requireNode(parentId)
+    await this.assertUsable(parentId, '不能在其下新建文件夹')
     if (!parent.allow_custom_folders) {
       throw AppError.forbidden(
         `「${parent.name}」不允许教师自建文件夹`,
@@ -393,6 +480,7 @@ export class DirectoriesService {
 
     if (newParentId !== null) {
       const parent = await this.requireNode(newParentId)
+      await this.assertUsable(newParentId, '不能把目录移动到它下面')
       if (!parent.allow_children) {
         throw AppError.conflict(`「${parent.name}」不允许在其下继续新建目录`, 'CONFLICT')
       }
@@ -512,6 +600,20 @@ export class DirectoriesService {
       throw AppError.conflict(
         `「${node.name}」下还有 ${resources[0].n} 条资源（含回收站），请先移动或删除它们`,
         'DIRECTORY_HAS_RESOURCES',
+      )
+    }
+
+    // 第三种保护：**还有授权挂靠在这个节点上**。
+    //
+    // 外键是 ON DELETE CASCADE，所以不检查的话，删一个"空目录"会**静默删掉**
+    // 别人对这个目录的授权 —— 实测就是这样：删完授权行从 2 变成 1，界面上毫无提示。
+    // 「删除保护」的本意是不做用户没要求的数据删除，因此这里拒绝并要求先解除授权。
+    const grants = await this.authz.countGrantsOnDirectory(id)
+    if (grants > 0) {
+      throw AppError.conflict(
+        `「${node.name}」上还挂着 ${grants} 条授权，请先在权限设置里解除，` +
+          `否则删除它会连带删除这些授权（且无法撤销）`,
+        'DIRECTORY_HAS_PERMISSIONS',
       )
     }
 

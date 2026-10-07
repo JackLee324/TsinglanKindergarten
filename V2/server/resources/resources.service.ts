@@ -4,6 +4,7 @@ import { SQL } from '../db/database.module'
 import { AuditService } from '../audit/audit.service'
 import { AuthorizationService } from '../authz/authorization.service'
 import { StorageService } from '../storage/storage.service'
+import { DirectoriesService } from '../directories/directories.service'
 import type { AuthUser } from '../common/auth-user'
 import { AppError } from '../common/http-error'
 import type { PermissionCode } from '../../shared/permissions'
@@ -63,6 +64,7 @@ export class ResourcesService {
     private readonly authz: AuthorizationService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly directories: DirectoriesService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -341,6 +343,13 @@ export class ResourcesService {
         'CONFLICT',
       )
     }
+    // 停用的目录（或上级已停用）不能再往里放东西 —— 判定与目录模块共用同一份实现。
+    if (!(await this.directories.isUsable(input.directoryId))) {
+      throw AppError.conflict(
+        `「${target[0].name}」已停用（或它的上级已停用），不能在这里新建资源`,
+        'CONFLICT',
+      )
+    }
 
     const rows = await this.sql<ResourceRow[]>`
       INSERT INTO resources (directory_id, title, title_en, description, uploader_id)
@@ -397,6 +406,9 @@ export class ResourcesService {
       `
       if (target.length === 0) throw AppError.notFound('目标目录不存在')
       if (!target[0].allow_files) throw AppError.conflict('目标目录不能放资源', 'CONFLICT')
+      if (!(await this.directories.isUsable(input.directoryId))) {
+        throw AppError.conflict('目标目录已停用（或它的上级已停用）', 'CONFLICT')
+      }
       push('directory_id', input.directoryId)
     }
     if (outcome.bumpVersion) push('version', row.version + 1)

@@ -231,6 +231,24 @@ export class AuthorizationService {
   }
 
   /**
+   * 这个目录上还挂着多少条授权。
+   *
+   * 用于**删除保护**：`user_permissions.directory_id` 是 ON DELETE CASCADE，
+   * 不检查就删目录会静默抹掉别人对该目录的授权（实测：删完授权行 2 → 1，界面无提示）。
+   *
+   * WHY 放在这里而不是放在目录服务里：`user_permissions` 的读取只允许有**一个**地方
+   * （由 tests/unit/single-permission-truth.test.mjs 静态保证）。它虽然不是"判定某人能否做某事"，
+   * 但仍然是授权域的数据 —— 让目录服务去读授权表，就等于开了第二个入口，
+   * 而下一次有人想"顺手查一下他有没有权限"时会照着这个先例写。
+   */
+  async countGrantsOnDirectory(directoryId: string): Promise<number> {
+    const rows = await this.sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM user_permissions WHERE directory_id = ${directoryId}
+    `
+    return rows[0]?.n ?? 0
+  }
+
+  /**
    * 目标不存在时的判定（例如资源已被永久删除，或必填的目标字段没给）。
    *
    * 放行条件：只有在**某个范围内确实持有该权限**的用户才被放过去，

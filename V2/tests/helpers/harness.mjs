@@ -218,10 +218,43 @@ export function client(baseUrl = TEST_BASE) {
   }
 }
 
-/** 启动被测服务（跑编译产物）。 */
+/**
+ * 启动被测服务（跑编译产物）。
+ *
+ * ── 两道防线，都来自一次真实事故 ──────────────────────────────────────────
+ * 阶段 3 我用探针脚本验证"停用目录"的修复时，连续三次都得到"没修好"的结论 ——
+ * 而真正的原因是我的第一个探针**崩溃在 stopServer 之前**，于是一个**旧构建**的
+ * 服务一直占着测试端口。之后每个探针的 startServer 都是"spawn 一个立刻因
+ * EADDRINUSE 退出的子进程，然后对着那个旧进程做健康检查并成功返回"，
+ * 于是所有断言都跑在旧代码上。
+ *
+ * 这种失败模式比"测试挂了"危险得多：它会**假绿**（新写的回归没被发现）。
+ * 所以这里加两道防线：
+ *   1. 启动前先探测端口：已经有东西在回应 → 立刻抛错，而不是继续跑；
+ *   2. 健康检查必须返回**本次启动注入的 instanceId**，否则也是抛错。
+ * 同时监听子进程退出，把它的 stderr 原样带进错误信息。
+ */
 export async function startServer() {
   if (serverProcess) return
+
+  // 防线 1：端口上已经有服务在回应 → 拒绝启动（几乎总是上一次没清干净）
+  try {
+    const probe = await fetch(`${TEST_BASE}/api/health`)
+    if (probe.ok) {
+      const body = await probe.json().catch(() => ({}))
+      throw new Error(
+        `测试端口 ${TEST_PORT} 上已经有一个服务在回应（instanceId=${body.instanceId ?? 'n/a'}）。\n` +
+          '这几乎总是上一次运行没有清理干净 —— 如果就这样继续，所有断言都会跑在**旧代码**上。\n' +
+          `请先执行：pkill -f "dist/server/main.js"`,
+      )
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('已经有一个服务在回应')) throw error
+    // 连不上 = 端口空闲，正是我们要的
+  }
+
   storageDir = mkdtempSync(join(tmpdir(), 'v2-storage-'))
+  const instanceId = `v2-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
 
   serverProcess = spawn(process.execPath, [join(ROOT, 'dist/server/main.js')], {
     cwd: ROOT,
@@ -229,6 +262,7 @@ export async function startServer() {
       ...process.env,
       NODE_ENV: 'test',
       V2_ALLOW_DEV_SECRETS: '1',
+      V2_INSTANCE_ID: instanceId,
       SERVER_PORT: String(TEST_PORT),
       DATABASE_URL: TEST_DB_URL,
       STORAGE_DRIVER: 'local',
@@ -242,12 +276,33 @@ export async function startServer() {
   serverProcess.stdout.on('data', (d) => logs.push(String(d)))
   serverProcess.stderr.on('data', (d) => logs.push(String(d)))
 
+  let exited = null
+  serverProcess.on('exit', (code, signal) => {
+    exited = { code, signal }
+  })
+
   const deadline = Date.now() + 20000
   while (Date.now() < deadline) {
+    if (exited !== null) {
+      throw new Error(
+        `服务进程在启动后立刻退出（code=${exited.code} signal=${exited.signal}）：\n${logs.join('')}`,
+      )
+    }
     try {
       const res = await fetch(`${TEST_BASE}/api/health`)
-      if (res.ok) return
-    } catch {
+      if (res.ok) {
+        // 防线 2：必须是我刚启动的那一个
+        const body = await res.json().catch(() => ({}))
+        if (body.instanceId !== instanceId) {
+          throw new Error(
+            `端口 ${TEST_PORT} 上回应的是另一个服务（instanceId=${body.instanceId ?? 'n/a'}，` +
+              `期望 ${instanceId}）。测试会跑在旧代码上，因此中止。`,
+          )
+        }
+        return
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('回应的是另一个服务')) throw error
       /* 还没起来 */
     }
     await sleep(150)
@@ -255,17 +310,55 @@ export async function startServer() {
   throw new Error(`服务在 20 秒内没起来：\n${logs.join('')}`)
 }
 
+/**
+ * 停掉被测服务，并**等到端口真的空出来**。
+ *
+ * 旧实现用的是 `kill('SIGTERM')` + sleep(300ms) + `if (!killed) kill('SIGKILL')`，
+ * 而 `child.killed` 只表示"信号已发出"，不表示进程已退出 —— 于是 Nest 还没来得及
+ * 优雅关闭时，SIGKILL 永远不会补上，进程留下来占着端口。这就是上面那次事故的直接原因。
+ */
 export async function stopServer() {
   if (serverProcess) {
-    serverProcess.kill('SIGTERM')
-    await sleep(300)
-    if (!serverProcess.killed) serverProcess.kill('SIGKILL')
+    const child = serverProcess
     serverProcess = null
+    const pid = child.pid
+    child.kill('SIGTERM')
+
+    const exited = await waitForExit(child, 3000)
+    if (!exited) {
+      child.kill('SIGKILL')
+      await waitForExit(child, 3000)
+    }
+    // 再确认端口已释放；没释放就说清楚，而不是留给下一次运行去踩。
+    for (let i = 0; i < 40; i += 1) {
+      try {
+        await fetch(`${TEST_BASE}/api/health`)
+      } catch {
+        break
+      }
+      await sleep(100)
+    }
+    void pid
   }
   if (storageDir) {
     rmSync(storageDir, { recursive: true, force: true })
     storageDir = null
   }
+}
+
+/** 等子进程真正退出（不是"信号已发出"）。 */
+function waitForExit(child, timeoutMs) {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve(true)
+      return
+    }
+    const timer = setTimeout(() => resolve(false), timeoutMs)
+    child.once('exit', () => {
+      clearTimeout(timer)
+      resolve(true)
+    })
+  })
 }
 
 export function sleep(ms) {
@@ -303,6 +396,11 @@ export async function assertNoResidue(before, label) {
   if (problems.length) {
     throw new Error(`[${label}] 残留核对失败：\n  - ${problems.join('\n  - ')}`)
   }
+}
+
+/** 对外暴露：测试里要重跑 seed 来验证幂等性。 */
+export function runProjectScript(relativePath) {
+  return runScript(relativePath)
 }
 
 /** 用系统 node 跑一个脚本（migrate / seed），失败即抛。 */

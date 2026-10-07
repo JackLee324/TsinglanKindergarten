@@ -10,7 +10,10 @@ export class HealthController {
   @Public()
   @Get('health')
   async health() {
-    return { status: 'ok', version: 'v2-stage2' }
+    // `instanceId` 由测试夹具通过环境变量注入。
+    // 它让测试能确认"回应我的是**我刚启动的那个进程**"，而不是端口上残留的旧进程 ——
+    // 后者会让整套测试跑在旧代码上，既可能假绿也可能假红。
+    return { status: 'ok', version: 'v2-stage2', instanceId: process.env.V2_INSTANCE_ID ?? null }
   }
 
   /** 就绪检查：数据库真的能查。 */
