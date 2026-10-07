@@ -8,6 +8,8 @@ import { LoginPage } from './pages/LoginPage'
 import { HomePage } from './pages/HomePage'
 import { DirectoryBrowsePage } from './pages/DirectoryBrowsePage'
 import { DirectoryManagePage } from './pages/DirectoryManagePage'
+import { ResourceDetailPage } from './pages/ResourceDetailPage'
+import { MyResourcesPage } from './pages/MyResourcesPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { Spinner } from './components/ui/Spinner'
 import { EmptyState } from './components/ui/EmptyState'
@@ -37,6 +39,12 @@ export function App() {
               }
             >
               <Route index element={<HomePage />} />
+              <Route path="my-resources" element={<MyResourcesPage />} />
+              {/*
+                资源详情用 **id** 做地址（`/resources/:id`），不用标题 ——
+                标题可改、可重复。目录仍然用 slug 路径，两者不混。
+              */}
+              <Route path="resources/:id" element={<ResourceDetailPage />} />
               <Route path="directory" element={<DirectoryBrowsePage />} />
               {/* 目录管理要放在通配之前，否则会被 `/directory/*` 吃掉 */}
               <Route path="directory/manage" element={<RequireDirectoryManage><DirectoryManagePage /></RequireDirectoryManage>} />

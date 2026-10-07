@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { ChevronDown, ChevronRight, FolderTree, Home, Settings } from 'lucide-react'
+import { ChevronDown, ChevronRight, FolderTree, Home, Layers, Settings } from 'lucide-react'
 import { useDirectory } from '../directory/DirectoryProvider'
 import { directoryUrl, isWithinPath } from '../directory/path'
 import { useAuth } from '../auth/useAuth'
@@ -40,6 +40,14 @@ export function Sidebar() {
 
       <nav className="flex-1 overflow-y-auto px-3 py-4" data-testid="sidebar-nav">
         <NavItem to="/" label="首页" icon={<Home className="size-5" />} testId="nav-home" />
+        {/* 「我的资源」是**固定条目**，不是目录节点 —— 它由后端按 uploader 过滤，
+            与目录树无关。除此之外侧边栏里的一切都来自目录数据。 */}
+        <NavItem
+          to="/my-resources"
+          label="我的资源"
+          icon={<Layers className="size-5" />}
+          testId="nav-my-resources"
+        />
 
         {/*
           目录区：一级栏目全部来自数据库。

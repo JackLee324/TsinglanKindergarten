@@ -1,8 +1,11 @@
 # V2 — 清澜山幼儿园教师资源平台（全新实现）
 
-> **当前状态：设计基线已按业主最终决策修正完毕（阶段 0/1 完成）。尚未编写任何业务代码。**
-> 本文档集的唯一目的，是把"要做什么、数据长什么样、边界在哪"先说清楚，
-> 业主放行后才进入实现阶段。
+> **当前状态：阶段 0–5 已完成并通过验收门禁。**
+> 阶段 5 = 「资源」这一条链的**读取面**：资源 API + 目录浏览页的资源列表
+> + 资源详情 + 我的资源 + 搜索 + 服务端分页。
+> **上传 / 预览 / 下载 / 真实对象存储 / 审核 / 发布 / 回收站界面属于阶段 6–7**，
+> 本阶段一律没有（不放"点了会失败"的按钮）。
+> 阶段 0/1 产出的设计基线仍然逐条有效，本文档集是它的实现记录。
 
 ## V2 是什么
 
@@ -60,7 +63,7 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 2 | 后端骨架（auth / users / guard） | 可登录的最小闭环 |
 | 3 | Directory（树、浏览、管理） | 目录即导航；**新增一级栏目可用** |
 | 4 | 前端 UI（沿用 V1 视觉） | ✅ Shell / Directory Browser / Directory Management |
-| 5 | Resource（CRUD + 详情 + 我的资源） | 待开始 |
+| 5 | Resource（CRUD + 详情 + 我的资源 + 搜索 + 分页） | ✅ 读取面完成 |
 | 6 | Upload / Preview / Download（真实对象存储） | |
 | 7 | Review（状态机 + 审核台） | |
 | 8 | Admin（教师账号、权限） | |
@@ -69,7 +72,7 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 11 | 浏览器 E2E（10 条真实业务流程） | |
 | 12 | Docker / 生产部署 | `docs/DEPLOYMENT.md` |
 
-**当前进度：阶段 0–4 已完成。**
+**当前进度：阶段 0–5 已完成。**
 
 | 阶段 | 状态 | 交付 |
 |---|---|---|
@@ -77,10 +80,15 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 1 | ✅ | 设计基线（需求 / 架构 / 数据 / 目录 / 权限 / 生命周期） |
 | 2 | ✅ | 后端骨架：auth / users / authorization / directories / resources / files / reviews / audit（8 张表，48 个接口） |
 | 3 | ✅ | Directory 完整化：`enabled` 的真实语义（整棵子树）、三种删除保护、slug 不可变 |
-| 4 | ✅ | 前端：Shell + Directory Browser + Directory Management（**不含上传/审核/预览**，那是阶段 5–6） |
+| 4 | ✅ | 前端：Shell + Directory Browser + Directory Management（**不含上传/审核/预览**） |
+| 5 | ✅ | Resource 读取面：`GET /api/resources`（搜索 / 筛选 / 服务端分页）、`/api/resources/mine`、`/api/resources/:id`；界面：目录浏览页的资源列表、资源详情 `/resources/:id`、我的资源 `/my-resources`；每张卡片都显示**完整目录位置** |
 
-**下一步（阶段 5）：资源与文件**（上传 / 预览 / 下载 / 我的资源 / 审核）。
-`V2/client/` 目前**没有**上传、预览、审核相关的任何页面 —— 这是刻意的。
+**阶段 5 明确不做**（属于阶段 6–7，代码里也一行都没有）：
+真实对象存储（R2/S3）、文件上传、在线预览、下载、审核 / 发布 / 回滚、回收站界面。
+`V2/client/` 里没有任何上传、预览、审核页面 —— 这是刻意的，不是没做完。
+本阶段也**没有**接 R2/S3：只有开发用的本地存储驱动（阶段 6 换成真实对象存储）。
+
+**下一步（阶段 6）：文件**（上传 / 预览 / 下载 + 真实对象存储）。
 
 ## 文档索引
 
@@ -97,27 +105,46 @@ V1 只作为**视觉参考**与**迁移数据源**。
 后续阶段再补 `docs/`：`STORAGE.md`、`MIGRATION.md`、`DEPLOYMENT.md`、`TESTING.md`、
 `KNOWN_LIMITATIONS.md`、`FINAL_V2_REPORT.md`。已补：`docs/V1_KNOWN_LIMITATIONS.md`。
 
-## 前端结构（阶段 4）
+## 构建与门禁
+
+```bash
+npm run build       # nest build → check-dist → vite build
+npm run typecheck   # 服务端 + 前端
+npm run lint
+npm test            # 上面全部 + 单元 + 集成（含真实浏览器）
+```
+
+`build` 链里有一道 `scripts/check-dist.mjs`：**每个 `server/**/*.ts`、`shared/**/*.ts`
+都必须有对应的 `dist/**/*.js`，且产物不早于源文件**。
+它不是装饰 —— "产物比源文件旧"会让服务照常启动、测试照常全绿，但跑的是旧代码（假绿）。
+（`nest build` 自己会在编译失败时以非 0 退出，这一条不需要脚本兜。）
+
+## 前端结构（阶段 4–5）
 
 ```
 client/src/
 ├── api/            http.ts（唯一 HTTP 出口：cookie / CSRF / 错误形状）
-│                   auth.ts  directories.ts  types.ts
+│                   auth.ts  directories.ts  resources.ts  types.ts
 ├── auth/           AuthProvider（会话 + 服务端给的能力开关）
 ├── directory/      path.ts（**唯一** URL authority：slug ↔ URL 的纯函数）
 │                   DirectoryProvider（全站唯一持有目录树的地方）
 │                   DirectoryBrowser（**唯一**的目录渲染器）
 ├── components/     Layout / Sidebar / Header / Breadcrumb + ui/（V1 视觉基准）
-└── pages/          Login / Home / DirectoryBrowse / DirectoryManage / NotFound
+│   └── resource/   ResourceList（搜索 + 服务端分页）  ResourceCard（含「所在位置」）
+└── pages/          Login / Home / DirectoryBrowse / DirectoryManage
+                    ResourceDetail / MyResources / NotFound
 ```
 
-三条约束（都有测试钉住）：
+四条约束（都有测试钉住）：
 
 1. **目录只有一个真相**：只有 `DirectoryProvider` 持有目录树，页面不得自己请求并缓存副本。
 2. **URL 只由 slug 生成**：只有 `directory/path.ts` 能把节点变成地址；
    改中文名不动 slug，因此改中文名不会让任何链接失效。
+   资源详情是 `/resources/:id` —— 用 **id** 不用标题（标题可改、可重复），两者不混用。
 3. **前端不判断角色**：能不能看到"目录管理"由服务端的 `capabilities` 决定，
    页面里没有 `role === 'ADMIN'`。
+4. **分页与分栏只在服务端算**：页码文案（"第 1 页 / 共 2 页"）用的是接口返回的
+   `total` / `totalPages`；前端不"先拉全部再自己截断"。
 
 ## 硬性约束（贯穿全部阶段）
 

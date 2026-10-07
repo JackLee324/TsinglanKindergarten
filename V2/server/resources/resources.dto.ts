@@ -89,6 +89,12 @@ export class ListResourcesDto {
   @MaxLength(100)
   q?: string
 
+  /** 只看自己的（「我的资源」在服务端也按此过滤，不只依赖前端传参）。 */
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  onlyMine?: boolean
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -55,6 +55,43 @@ export interface DirectoryNode {
   readonly children: readonly DirectoryNode[]
 }
 
+export type ResourceStatus = 'DRAFT' | 'PENDING_REVIEW' | 'PUBLISHED' | 'REJECTED' | 'RECALLED'
+
+export interface ResourceListItem {
+  readonly id: string
+  readonly directoryId: string
+  /** 资源所在位置（完整目录路径），例如 `education/pre-k/virtue/resources`。 */
+  readonly directoryPath: string
+  readonly title: string
+  readonly titleEn: string | null
+  readonly description: string | null
+  readonly status: ResourceStatus
+  readonly version: number
+  readonly uploaderId: string | null
+  readonly uploaderName: string | null
+  readonly fileCount: number
+  readonly hasFile: boolean
+  readonly publishedAt: string | null
+  readonly deletedAt: string | null
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+/** 服务端分页。`totalPages` 由服务端算，前端不自己推导。 */
+export interface ResourceListPage {
+  readonly items: readonly ResourceListItem[]
+  readonly total: number
+  readonly page: number
+  readonly pageSize: number
+  readonly totalPages: number
+}
+
+export interface ResourceDetail extends ResourceListItem {
+  readonly reviewComment: string | null
+  /** 服务端算出的能力位 —— 前端不判断"我是不是上传者"。 */
+  readonly capabilities: { readonly canEdit: boolean }
+}
+
 export interface DirectoryNodeDetail extends Omit<DirectoryNode, 'children'> {
   readonly children: readonly DirectoryNode[]
   readonly ancestors: readonly DirectoryNode[]

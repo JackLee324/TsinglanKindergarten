@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common'
 import type { Sql } from 'postgres'
 import type { PermissionCode } from '../../shared/permissions'
+import { RESOURCE_STATUSES, type ResourceStatus } from '../../shared/resource-status'
 import { ADMIN_ROLE, PERMISSIONS, requiresOwnership } from '../../shared/permissions'
 import { SQL } from '../db/database.module'
 import type { AuthUser, AuthorizationDecision } from '../common/auth-user'
@@ -228,6 +229,56 @@ export class AuthorizationService {
       canViewAudit: admin || codes.has('audit.view'),
       canUpload: admin || codes.has('resource.create'),
     }
+  }
+
+  /**
+   * 资源的**可见性策略**：我会看到「别人上传的哪些状态」。
+   *
+   * 规则（STAGE 5 §4，并按审核岗的实际需要细化）：
+   *
+   * | 观察者的身份 | 能看到别人上传的哪些状态 |
+   * |---|---|
+   * | 普通教师（有 `resource.view`） | 只有 `PUBLISHED` |
+   * | 审核 / 发布岗（有 `resource.review` 或 `resource.publish`） | `PUBLISHED`、`PENDING_REVIEW`、`REJECTED`、`RECALLED` |
+   * | 管理员 | 全部（含别人的 `DRAFT`） |
+   *
+   * 任何身份都**永远**能看到自己上传的全部状态（含自己的草稿）。
+   *
+   * ⚠️ 两条来之不易的边界，改动前请先读：
+   *
+   * 1. `DRAFT` 对**非本人一律不可见**，包括审核岗。
+   *    草稿是"还没交出去的东西"，审核岗能看到它就等于老师没有私人工作区。
+   *    审核台要的是 `PENDING_REVIEW`，不是草稿。
+   * 2. 审核岗**必须**看得到别人提交的待审资源。
+   *    第一版把可见性写成 `isAdmin(user)` 一个布尔量，于是
+   *    `GET /api/reviews/pending` 对非管理员的审核员返回空 ——
+   *    审核台"什么都看不到"，而接口本身还是 200。
+   *    这是全量跑测试时才暴露的（review 套件第 61 组）。
+   *    修法在**策略**里，不在控制器里加开关 ——
+   *    在控制器里开一个"这次不看可见性"的旁路，就又是一条绕开统一授权的判定路径。
+   *
+   * WHY 由这里给出而不是在 ResourcesService 里写 `role === 'ADMIN'`：
+   * 那等于在统一授权之外又开一条判定路径，而静态守卫会（也应当）把它判红 ——
+   * 阶段 3 我已经因为同类问题被拦下过一次。
+   * ResourceService 拿到的是一个**策略值**，它只负责把这个值翻译成 SQL 条件。
+   */
+  async resourceVisibility(user: AuthUser): Promise<{
+    readonly othersStatuses: readonly ResourceStatus[]
+    readonly ownerId: string
+  }> {
+    if (this.isAdmin(user)) {
+      return { othersStatuses: RESOURCE_STATUSES, ownerId: user.id }
+    }
+    // 审核 / 发布岗：除了别人的草稿，其余都看得到（否则审核台是空的）。
+    const reviewer = await this.hasPermissionAnywhere(user, 'resource.review')
+    const publisher = reviewer ? false : await this.hasPermissionAnywhere(user, 'resource.publish')
+    if (reviewer || publisher) {
+      return {
+        othersStatuses: RESOURCE_STATUSES.filter((status) => status !== 'DRAFT'),
+        ownerId: user.id,
+      }
+    }
+    return { othersStatuses: ['PUBLISHED'], ownerId: user.id }
   }
 
   /**

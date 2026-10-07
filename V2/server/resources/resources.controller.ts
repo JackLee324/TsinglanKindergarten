@@ -36,10 +36,31 @@ export class ResourcesController {
     return this.resources.list(user, filters)
   }
 
+  /**
+   * 「我的资源」。
+   *
+   * 支持按状态筛选（对应界面上的 全部/草稿/待审核/已发布/已退回/已撤回 分栏）
+   * 与服务端分页 —— 不分栏、不分页地一次拉全部，会随着资源增长变成
+   * "打开页面卡一下、而且某天开始只显示前 N 条"。
+   */
   @Get('mine')
   @RequirePermission('resource.view')
-  async mine(@CurrentUser() user: AuthUser) {
-    return this.resources.mine(user, 'active')
+  async mine(@CurrentUser() user: AuthUser, @Query() query: ListResourcesDto) {
+    return this.resources.mine(user, 'active', {
+      status: (query.status as ResourceStatus | undefined) ?? null,
+      page: query.page ?? 1,
+      pageSize: query.pageSize ?? 20,
+    })
+  }
+
+  /** 「我的资源」回收站分栏。本阶段只有接口，界面在后续阶段。 */
+  @Get('mine/recycle-bin')
+  @RequirePermission('resource.view')
+  async mineRecycleBin(@CurrentUser() user: AuthUser, @Query() query: ListResourcesDto) {
+    return this.resources.mine(user, 'recycle', {
+      page: query.page ?? 1,
+      pageSize: query.pageSize ?? 20,
+    })
   }
 
   @Get('recycle-bin')

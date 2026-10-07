@@ -8,13 +8,31 @@ import { DirectoriesService } from '../directories/directories.service'
 import type { AuthUser } from '../common/auth-user'
 import { AppError } from '../common/http-error'
 import type { PermissionCode } from '../../shared/permissions'
+import { computeTotalPages, DEFAULT_PAGE_SIZE } from '../../shared/resource-query'
 import {
   DELETABLE_STATUSES,
   editOutcomeFor,
   findTransition,
   isPreviewable,
+  RESOURCE_STATUSES,
   type ResourceStatus,
 } from '../../shared/resource-status'
+
+/**
+ * 转义 LIKE 的通配符。
+ *
+ * WHY：搜索词直接拼进 LIKE 时，`%` 与 `_` 会变成通配符 ——
+ * 实测搜索 `%` 会返回**全部**资源；`50%` 这种正常输入也会命中一堆无关内容。
+ * 这不是注入（值仍然是参数化的），但结果同样是错的。
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`)
+}
+
+/** 空页：分页字段仍然要齐全，否则前端渲染不出"共 0 条 / 第 1 页"。 */
+function emptyPage(page: number, pageSize: number) {
+  return { items: [], total: 0, page, pageSize, totalPages: computeTotalPages(0, pageSize) }
+}
 
 export interface ResourceFilters {
   directoryId?: string | null
@@ -71,10 +89,24 @@ export class ResourcesService {
   // 查询
   // ─────────────────────────────────────────────────────────────────────────
 
+  /**
+   * 资源列表。
+   *
+   * 三条约束，缺一条就会出现"看到了不该看的"：
+   *   1. **目录范围**：`accessibleDirectoryIds(resource.view)` 进 WHERE；
+   *   2. **可见性**：未发布的资源只有上传者自己能看到（管理员看全部）——
+   *      这条以前缺失，实测 B 老师能看到 A 老师的草稿；
+   *   3. **显式指定目录时必须是 403 而不是空列表** —— 空列表会让调用方以为
+   *      "这个目录没有资源"，而事实是"你没有权限"。两者要分清。
+   */
   async list(user: AuthUser, filters: ResourceFilters) {
+    if (filters.directoryId != null) {
+      await this.assertCanViewDirectory(user, filters.directoryId)
+    }
+
     const scope = await this.authz.accessibleDirectoryIds(user, 'resource.view')
     if (scope !== null && scope.length === 0) {
-      return { items: [], total: 0, page: filters.page, pageSize: filters.pageSize }
+      return emptyPage(filters.page, filters.pageSize)
     }
 
     const directoryIds =
@@ -84,6 +116,8 @@ export class ResourcesService {
           : [filters.directoryId]
         : null
 
+    const visibility = await this.authz.resourceVisibility(user)
+
     return this.queryResources({
       scope,
       directoryIds,
@@ -91,22 +125,33 @@ export class ResourcesService {
       q: filters.q ?? null,
       onlyUploaderId: filters.onlyMine ? user.id : null,
       recycled: filters.recycled === true,
+      visibility,
       page: filters.page,
       pageSize: filters.pageSize,
     })
   }
 
-  /** 「我的资源」：含回收站分栏，教师只看自己的。 */
-  async mine(user: AuthUser, scope: 'active' | 'recycle'): Promise<ReturnType<ResourcesService['list']>> {
+  /**
+   * 「我的资源」。
+   *
+   * 只按上传者过滤，且**只有自己** —— 因此未发布资源在这里天然可见，
+   * 不需要再叠加可见性条件（自己看自己的草稿是正当的）。
+   */
+  async mine(
+    user: AuthUser,
+    scope: 'active' | 'recycle',
+    options: { status?: ResourceStatus | null; page?: number; pageSize?: number } = {},
+  ) {
     return this.queryResources({
       scope: null,
       directoryIds: null,
-      status: null,
+      status: options.status ?? null,
       q: null,
       onlyUploaderId: user.id,
       recycled: scope === 'recycle',
-      page: 1,
-      pageSize: 200,
+      visibility: { othersStatuses: RESOURCE_STATUSES, ownerId: user.id },
+      page: options.page ?? 1,
+      pageSize: options.pageSize ?? DEFAULT_PAGE_SIZE,
     })
   }
 
@@ -122,9 +167,31 @@ export class ResourcesService {
       q: null,
       onlyUploaderId: await this.authz.recycleBinUploaderFilter(user),
       recycled: true,
+      visibility: { othersStatuses: RESOURCE_STATUSES, ownerId: user.id },
       page: 1,
       pageSize: 200,
     })
+  }
+
+  /**
+   * 显式请求某个目录时，没有权限必须 **403**。
+   *
+   * 走 `canActOnResource` 之外的目录判定：这里的目标是目录本身，不是某条资源，
+   * 所以用 `can(permission, directoryId)`。
+   */
+  private async assertCanViewDirectory(user: AuthUser, directoryId: string): Promise<void> {
+    const decision = await this.authz.can(user, 'resource.view', directoryId)
+    if (decision.allowed) return
+    await this.audit.write({
+      actorId: user.id,
+      actorName: user.name,
+      action: 'authz.denied',
+      targetType: 'directory',
+      targetId: directoryId,
+      result: 'denied',
+      detail: { permission: 'resource.view', reason: decision.reason, directoryId },
+    })
+    throw AppError.forbidden('没有权限查看这个目录下的资源', 'FORBIDDEN')
   }
 
   private async queryResources(opt: {
@@ -134,11 +201,16 @@ export class ResourcesService {
     q: string | null
     onlyUploaderId: string | null
     recycled: boolean
+    visibility: { othersStatuses: readonly ResourceStatus[]; ownerId: string }
     page: number
     pageSize: number
   }) {
-    // 搜索覆盖四类字段：标题 / 描述 / 文件名 / 目录名（业主 §「全平台搜索」）。
-    const pattern = opt.q ? `%${opt.q}%` : null
+    // 搜索覆盖五类字段：中文标题 / 英文标题 / 描述 / 文件名 / 目录名。
+    const pattern = opt.q ? `%${escapeLike(opt.q)}%` : null
+    // 可见性：策略值来自 AuthorizationService（见 resourceVisibility 的说明）。
+    // 这里只负责把它翻译成 SQL：自己上传的全可见，别人上传的按状态集合。
+    const othersStatuses = opt.visibility.othersStatuses
+    const ownerId = opt.visibility.ownerId
     const rows = await this.sql<
       (ResourceRow & {
         uploader_name: string | null
@@ -163,14 +235,19 @@ export class ResourcesService {
           AND (${opt.status}::text IS NULL OR r.status = ${opt.status}::text)
           AND (${opt.onlyUploaderId}::uuid IS NULL OR r.uploader_id = ${opt.onlyUploaderId}::uuid)
           AND (
+            r.uploader_id = ${ownerId}::uuid
+            OR r.status = ANY(${othersStatuses}::text[])
+          )
+          AND (
             ${pattern}::text IS NULL
-            OR r.title ILIKE ${pattern}
-            OR COALESCE(r.description, '') ILIKE ${pattern}
+            OR r.title ILIKE ${pattern} ESCAPE '\\'
+            OR COALESCE(r.title_en, '') ILIKE ${pattern} ESCAPE '\\'
+            OR COALESCE(r.description, '') ILIKE ${pattern} ESCAPE '\\'
             OR EXISTS (
               SELECT 1 FROM resource_files f
-              WHERE f.resource_id = r.id AND f.file_name ILIKE ${pattern}
+              WHERE f.resource_id = r.id AND f.file_name ILIKE ${pattern} ESCAPE '\\'
             )
-            OR EXISTS (SELECT 1 FROM dir_path d2 WHERE d2.id = r.directory_id AND d2.path ILIKE ${pattern})
+            OR EXISTS (SELECT 1 FROM dir_path d2 WHERE d2.id = r.directory_id AND d2.path ILIKE ${pattern} ESCAPE '\\')
           )
       )
       SELECT m.*, u.name AS uploader_name,
@@ -179,15 +256,26 @@ export class ResourcesService {
              (SELECT count(*)::int FROM matched) AS total
       FROM matched m
       LEFT JOIN users u ON u.id = m.uploader_id
-      ORDER BY m.updated_at DESC
+      -- id 这个 tiebreaker 不是装饰：只按 updated_at 排序时，
+      -- updated_at 完全相同的行之间的顺序由 Postgres 自由决定，
+      -- 翻页就可能重复取到同一行、同时漏掉另一行（不重不漏被破坏）。
+      -- 见 tests/integration/resource-pagination.integration.test.mjs。
+      ORDER BY m.updated_at DESC, m.id DESC
       LIMIT ${opt.pageSize} OFFSET ${(opt.page - 1) * opt.pageSize}
     `
 
     const total = rows.length > 0 ? rows[0].total : await this.countMatching(opt)
+    const totalPages = computeTotalPages(total, opt.pageSize)
     return {
+      /**
+       * 详情链接用**资源 id**，不用标题。
+       * 标题是可改的、可重复的；拿它做 URL identity 会让改名后的分享链接失效。
+       */
       items: rows.map((r) => ({
         id: r.id,
         directoryId: r.directory_id,
+        /** 资源所在位置（完整目录路径）—— 让"我上传的东西去哪了"一眼可见。 */
+        directoryPath: r.directory_path,
         title: r.title,
         titleEn: r.title_en,
         description: r.description,
@@ -205,6 +293,7 @@ export class ResourcesService {
       total,
       page: opt.page,
       pageSize: opt.pageSize,
+      totalPages,
     }
   }
 
@@ -215,8 +304,9 @@ export class ResourcesService {
     q: string | null
     onlyUploaderId: string | null
     recycled: boolean
+    visibility: { othersStatuses: readonly ResourceStatus[]; ownerId: string }
   }): Promise<number> {
-    const pattern = opt.q ? `%${opt.q}%` : null
+    const pattern = opt.q ? `%${escapeLike(opt.q)}%` : null
     const rows = await this.sql<{ n: number }[]>`
       WITH RECURSIVE dir_path AS (
         SELECT id, slug AS path FROM directories WHERE parent_id IS NULL
@@ -233,11 +323,16 @@ export class ResourcesService {
         AND (${opt.status}::text IS NULL OR r.status = ${opt.status}::text)
         AND (${opt.onlyUploaderId}::uuid IS NULL OR r.uploader_id = ${opt.onlyUploaderId}::uuid)
         AND (
+          r.uploader_id = ${opt.visibility.ownerId}::uuid
+          OR r.status = ANY(${opt.visibility.othersStatuses}::text[])
+        )
+        AND (
           ${pattern}::text IS NULL
-          OR r.title ILIKE ${pattern}
-          OR COALESCE(r.description, '') ILIKE ${pattern}
-          OR EXISTS (SELECT 1 FROM resource_files f WHERE f.resource_id = r.id AND f.file_name ILIKE ${pattern})
-          OR EXISTS (SELECT 1 FROM dir_path d2 WHERE d2.id = r.directory_id AND d2.path ILIKE ${pattern})
+          OR r.title ILIKE ${pattern} ESCAPE '\\'
+          OR COALESCE(r.title_en, '') ILIKE ${pattern} ESCAPE '\\'
+          OR COALESCE(r.description, '') ILIKE ${pattern} ESCAPE '\\'
+          OR EXISTS (SELECT 1 FROM resource_files f WHERE f.resource_id = r.id AND f.file_name ILIKE ${pattern} ESCAPE '\\')
+          OR EXISTS (SELECT 1 FROM dir_path d2 WHERE d2.id = r.directory_id AND d2.path ILIKE ${pattern} ESCAPE '\\')
         )
     `
     return rows[0].n
@@ -262,6 +357,13 @@ export class ResourcesService {
       ORDER BY created_at DESC LIMIT 1
     `
 
+    // 能力位由服务端算：前端不写"我是不是上传者""我是不是管理员"。
+    const editDecision = await this.authz.canActOnResource(
+      user,
+      'resource.update.own',
+      { id: row.id, directoryId: row.directory_id, uploaderId: row.uploader_id },
+    )
+
     return {
       id: row.id,
       directoryId: row.directory_id,
@@ -276,6 +378,7 @@ export class ResourcesService {
       fileCount: files.length,
       hasFile: files.length > 0,
       reviewComment: lastReject[0]?.comment ?? null,
+      capabilities: { canEdit: editDecision.allowed },
       publishedAt: row.published_at?.toISOString() ?? null,
       deletedAt: row.deleted_at?.toISOString() ?? null,
       createdAt: row.created_at.toISOString(),

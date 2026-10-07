@@ -131,6 +131,20 @@ export class Browser {
     ).then((json) => JSON.parse(json ?? '[]'))
   }
 
+  /**
+   * 读一批元素的**文字**。
+   *
+   * ⚠️ 不能用 `allAttrs(sel, 'innerText')` —— `innerText` 是 DOM 属性，
+   * 不是 HTML 属性，`getAttribute('innerText')` 一律返回 null。
+   * 第一版就是这么写的，表现是"断言里拿到一串 null"，
+   * 失败信息完全看不出真实原因。
+   */
+  async allTexts(selector) {
+    return this.session.eval(
+      `JSON.stringify([...document.querySelectorAll(${JSON.stringify(selector)})].map((e) => (e.innerText || e.textContent || '').trim()))`,
+    ).then((json) => JSON.parse(json ?? '[]'))
+  }
+
   /** 点击。用真实的 MouseEvent 序列，走 React 的事件系统。 */
   async click(selector) {
     const ok = await this.session.eval(`(() => {

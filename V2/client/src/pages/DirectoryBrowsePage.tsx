@@ -4,6 +4,7 @@ import { DirectoryBrowser } from '../directory/DirectoryBrowser'
 import { Breadcrumb } from '../components/Breadcrumb'
 import { Spinner } from '../components/ui/Spinner'
 import { EmptyState } from '../components/ui/EmptyState'
+import { ResourceList } from '../components/resource/ResourceList'
 
 /**
  * 目录浏览页。
@@ -82,6 +83,14 @@ export function DirectoryBrowsePage() {
       )}
 
       <DirectoryBrowser node={target.node} roots={roots} notice={notice} />
+
+      {/*
+        资料夹层同时列出资源（业主 §2：进 教学资源 应该看到该 Directory 下的资源）。
+        资源列表只认 `directoryId`，不再用 program + subject + folderType 推导。
+      */}
+      {target.node !== null && target.node.allowFiles && (
+        <ResourceList directoryId={target.node.id} />
+      )}
     </div>
   )
 }

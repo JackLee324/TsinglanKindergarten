@@ -8,7 +8,7 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "build": "nest build && vite build --config vite.config.mts",
+    "build": "nest build && node scripts/check-dist.mjs && vite build --config vite.config.mts",
     "start": "node dist/server/main.js",
     "migrate": "node scripts/migrate.mjs",
     "migrate:status": "node scripts/migrate.mjs status",

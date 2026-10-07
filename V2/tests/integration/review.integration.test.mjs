@@ -96,6 +96,16 @@ async function submitOne(title) {
 }
 
 describe('待审列表', () => {
+  /**
+   * ⚠️ 这条用例是全量跑测试时救回来的一次真实回归。
+   *
+   * 阶段 5 给资源列表加可见性过滤后，非管理员的审核员拿到的是**空列表**
+   * （接口仍然 200）—— 因为当时的可见性被写成 `isAdmin(user)` 一个布尔量。
+   * 审核岗大多不是管理员，于是"审核台什么都看不到"，而没有任何断言会红。
+   *
+   * 修法在策略里（`AuthorizationService.resourceVisibility`），不在控制器里加开关 ——
+   * 控制器里开一个"这次不看可见性"的旁路又是一条绕开统一授权的判定路径。
+   */
   test('审核台能看到待审资源', async () => {
     const id = await submitOne('待审一号')
     const res = await reviewer.get('/api/reviews/pending')
