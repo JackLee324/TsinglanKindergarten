@@ -32,3 +32,6 @@ coverage/
 test-results/
 playwright-report/
 *.log
+
+# 迁移前后快照（机器相关，且是可重新生成的证据 —— 结论进 docs/V1_RESOURCE_CENSUS.md）
+.migration/

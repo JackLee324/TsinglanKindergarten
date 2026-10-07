@@ -1,6 +1,9 @@
 # V2 — 清澜山幼儿园教师资源平台（全新实现）
 
-> **当前状态：阶段 0–8 已完成并通过验收门禁。核心产品到此基本成形。**
+> **当前状态：阶段 0–9 已完成并通过验收门禁。核心产品到此基本成形。**
+> 阶段 9 = **数据迁移**：`scripts/import-v1.mjs` 把 V1 的用户 / 目录 / 资源 / 文件 /
+> 审核历史 / 审计历史搬进 V2 —— 只读 V1、绝不改它、可重复运行（幂等）、
+> 每一步都能追溯到"原来是 V1 的哪一行"。盘点见 `docs/V1_RESOURCE_CENSUS.md`。
 > 阶段 8 = **管理员**：教师账号（搜索/分页/最后登录/权限摘要、新增/编辑/停用/重置密码）、
 > 权限（**只有中文**的"权限 + 开放目录"，没有 scope/grant/deny/override）、
 > 目录管理、审计（按时间/用户/动作/资源筛选）。
@@ -67,12 +70,16 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 6 | Upload / Preview / Download（真实对象存储） | ✅ 双驱动 + 直传 + 预览 + 下载 |
 | 7 | Review（状态机 + 审核台） | ✅ 提交 / 队列 / 通过并发布 / 退回 / 重新提交 / 撤回 |
 | 8 | Admin（教师账号、权限、目录、审计） | ✅ 极简后台 |
-| 9 | Permissions（后端强制 + 即时生效） | |
-| 10 | Migration（`import-v1.mjs`） | `docs/V1_MIGRATION_REPORT.md` |
-| 11 | 浏览器 E2E（10 条真实业务流程） | |
-| 12 | Docker / 生产部署 | `docs/DEPLOYMENT.md` |
+| 9 | **数据迁移**（只读 V1 → V2） | ✅ `import-v1.mjs` + 盘点 + 迁移报告 |
+| 10 | 全业务浏览器验收 | |
+| 11 | 手机端验收 | |
+| 12 | Docker / 公网部署 | |
+| 13 | 最终生产验收与交付 | |
 
-**当前进度：阶段 0–8 已完成。产品功能到此收口。**
+> 阶段 9 起按业主锁定的 5 个收官阶段走（9 迁移 / 10 全业务浏览器验收 / 11 手机 /
+> 12 部署 / 13 最终交付），**上一阶段没有 PASS 不进入下一阶段**。
+
+**当前进度：阶段 0–9 已完成。功能不再新增。**
 
 | 阶段 | 状态 | 交付 |
 |---|---|---|
@@ -83,6 +90,8 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 4 | ✅ | 前端：Shell + Directory Browser + Directory Management（**不含上传/审核/预览**） |
 | 5 | ✅ | Resource 读取面：`GET /api/resources`（搜索 / 筛选 / 服务端分页）、`/api/resources/mine`、`/api/resources/:id`；界面：目录浏览页的资源列表、资源详情 `/resources/:id`、我的资源 `/my-resources`；每张卡片都显示**完整目录位置** |
 | 6 | ✅ | 文件：`LocalStorageProvider` + `S3StorageProvider`（R2 / S3 / MinIO 同一段代码）、浏览器直传（`upload-url` → `PUT` → `register`）、上传进度与取消、预览（PDF/图片/TXT）、短命签名下载、`+ 添加文件`、删除文件、孤儿对象清理、`GET /api/health/storage` |
+| 8 | ✅ | 管理员：教师账号（搜索 / 分页 / 最后登录 / 权限摘要 / 新增 / 编辑 / 停用 / 重置口令）、权限（只有中文的"权限 + 开放目录"）、目录管理、审计（按时间 / 用户 / 动作 / 资源筛选）；自审保护、最后一个管理员保护、改权限即撤销会话 |
+| 9 | ✅ | 迁移：`scripts/import-v1.mjs`（源库只读、幂等、可追溯）、`scripts/v1-snapshot.mjs`（快照 / 指纹）、`scripts/v1-census.mjs`（盘点）；`docs/V1_MIGRATION.md` 规则书、`docs/V1_RESOURCE_CENSUS.md` 盘点、`docs/V1_MIGRATION_REPORT.md` 报告、`UNASSIGNED_RESOURCES.md`；口令兼容性有单测证明，348/348 资源按 V1 自己的分类表落到资料夹（**没有一条落在浏览页看不见的位置**） |
 | 7 | ✅ | 审核：严格状态机（六条转换）、`POST /api/resources/:id/submit`、`GET /api/reviews/{pending,published,rejected}`（搜索 / 目录 / 排序 / 分页）、`POST /api/resources/:id/review`（通过并发布 / 退回必须写原因）、`POST /api/resources/:id/recall`、`GET /api/resources/:id/review-history`；界面：审核工作台 `/review`、详情页按权限显示动作、我的资源的提交与退回原因 |
 
 **阶段的边界（诚实说明）**：阶段 7 只做审核工作流。管理员后台属于阶段 8。

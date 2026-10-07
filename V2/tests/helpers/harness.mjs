@@ -435,6 +435,26 @@ export function runProjectScriptCaptured(relativePath, extraEnv = {}, args = [])
 }
 
 /**
+ * 脚本的**拒绝路径**：返回退出码，而不是抛异常。
+ *
+ * 迁移里有一部分行为是"必须停下"（未知状态、无目录归属、声称有文件却没有源存储）。
+ * 这些路径如果用"跑通就算过"的辅助函数去测，就等于没测 —— 它们本来就该失败。
+ */
+export function runProjectScriptFailure(relativePath, extraEnv = {}, args = []) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [join(ROOT, relativePath), ...args], {
+      cwd: ROOT,
+      env: { ...process.env, DATABASE_URL: TEST_DB_URL, ...extraEnv },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    child.stdout.on('data', (d) => (out += String(d)))
+    child.stderr.on('data', (d) => (out += String(d)))
+    child.on('close', (code) => resolve({ code, out }))
+  })
+}
+
+/**
  * 本次运行的本地存储目录（由 `startServer` 创建并注入被测进程）。
  *
  * 用真实路径去断言"对象真的落盘了 / 真的被删掉了"——

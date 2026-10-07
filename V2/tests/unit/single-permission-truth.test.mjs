@@ -30,8 +30,28 @@ function allMigrationSql() {
 const SQL = allMigrationSql()
 const SQL_CODE = SQL.replace(/--[^\n]*/g, '') // 去掉注释再匹配
 
+/**
+ * 服务端源码全文（去注释）。
+ *
+ * 用来证明"某个东西运行期根本不存在"—— 迁移记账表就是这种：
+ * 它只属于 `scripts/import-v1.mjs`，一旦有业务代码开始读它，
+ * 说明迁移渗进了运行期，那正是 V1 的老毛病（兼容层永久留在业务里）。
+ */
+function readServerSources() {
+  const files = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.tsx?$/.test(entry.name)) files.push(readFileSync(full, 'utf8'))
+    }
+  }
+  walk(join(ROOT, 'server'))
+  return files.join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+}
+
 describe('数据库里只有一个权限真相', () => {
-  const tables = [...SQL_CODE.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z_]+)/g)].map(
+  const tables = [...SQL_CODE.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z0-9_]+)/g)].map(
     (m) => m[1],
   )
 
@@ -41,9 +61,16 @@ describe('数据库里只有一个权限真相', () => {
    * 阶段 2 是 8 张；阶段 6 加了 2 张，都是文件存储需要的：
    *   · `upload_tickets`  —— 一次上传的票据（把客户端声明的 size/sha256 钉在服务端）
    *   · `storage_orphans` —— 上传成功但没能登记的对象的清理标记
-   * 两张表都不涉及授权（下面的"授权只有 user_permissions 一张表"仍然成立）。
+   * 阶段 9 又加了 2 张，都是**迁移记账**（不是业务表，前缀 `v1_` 已经写明来历）：
+   *   · `v1_import_runs`   —— 每次导入一行（源标签、各表计数）
+   *   · `v1_migration_map` —— 每条搬过来的对象一行（幂等键 + V1 有而 V2 没有的历史字段）
+   *
+   * 它们不持有任何授权（下面"授权只有 user_permissions 一张表"约束的就是这件事），
+   * 也不参与运行时的读写 —— 只有 `scripts/import-v1.mjs` 与迁移报告会碰它们。
+   * 加这两张表是为了满足业主 Stage 9 的"幂等 + 可追溯 + 历史字段不丢"，
+   * 不是为了给 V2 添一个业务概念。
    */
-  test('恰好 10 张表，名单逐张核对（V1 是 13 张，且旧表一张都不许回来）', () => {
+  test('恰好 12 张表（10 张业务 + 2 张迁移记账），名单逐张核对（V1 是 13 张，旧表一张都不许回来）', () => {
     assert.deepEqual(tables.sort(), [
       'audit_logs',
       'directories',
@@ -55,17 +82,47 @@ describe('数据库里只有一个权限真相', () => {
       'upload_tickets',
       'user_permissions',
       'users',
+      'v1_import_runs',
+      'v1_migration_map',
     ])
   })
 
-  test('阶段 6 新增的两张表都不持有授权信息', () => {
-    for (const table of ['upload_tickets', 'storage_orphans']) {
-      assert.equal(tables.includes(table), true, `${table} 应当存在`)
+  test('迁移记账表不许渗进运行期（名字带 v1_，服务端一行都不读）', () => {
+    const serverCode = readServerSources()
+    for (const table of ['v1_import_runs', 'v1_migration_map']) {
+      assert.match(table, /^v1_/, `${table} 应当以 v1_ 开头：一眼看出它不是产品概念`)
+      assert.equal(
+        serverCode.includes(table),
+        false,
+        `服务端代码不该读 ${table} —— 它是迁移记账，只属于 scripts/`,
+      )
     }
-    // 它们不能有 permission 之类的列 —— 授权只有一个真相（user_permissions）。
-    const create = SQL_CODE.slice(SQL_CODE.indexOf('CREATE TABLE upload_tickets'))
-    const block = create.slice(0, create.indexOf(');'))
-    assert.equal(/permission/i.test(block), false)
+  })
+
+  test('阶段 6 / 阶段 9 新增的表都不持有授权信息', () => {
+    for (const table of ['upload_tickets', 'storage_orphans', 'v1_import_runs', 'v1_migration_map']) {
+      assert.equal(tables.includes(table), true, `${table} 应当存在`)
+      /*
+        查的是**列名**，不是整段文本里的子串。
+
+        `v1_migration_map` 的 CHECK 里有一个字符串字面量 `'permission'`
+        （迁移实体的取值之一：把 V1 的授权行搬过来），那是**分类标签**，
+        不是授权数据。用子串扫描会把它误判成"这张表藏着授权"，
+        而真正要防的是"多了一列 permission/scope/grant/deny/override"。
+      */
+      const at = SQL_CODE.indexOf(`CREATE TABLE ${table}`)
+      assert.notEqual(at, -1, `找不到 ${table} 的定义`)
+      const block = SQL_CODE.slice(at, SQL_CODE.indexOf(');', at))
+      const columns = [...block.matchAll(/^\s{2}([a-z0-9_]+)\s+\w/gm)].map((m) => m[1])
+      assert.equal(columns.length > 0, true, `没能解析出 ${table} 的列`)
+      for (const column of columns) {
+        assert.equal(
+          /permission|scope|grant|deny|override/.test(column),
+          false,
+          `${table}.${column} 看起来是授权字段 —— 授权只有一个真相（user_permissions）`,
+        )
+      }
+    }
   })
 
   test('授权只有 user_permissions 一张表', () => {

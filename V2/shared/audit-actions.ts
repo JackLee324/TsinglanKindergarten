@@ -56,8 +56,38 @@ export type AuditAction = keyof typeof AUDIT_ACTIONS
 export const AUDIT_RESULTS = ['success', 'denied', 'failed'] as const
 export type AuditResult = (typeof AUDIT_RESULTS)[number]
 
-export function auditLabel(action: AuditAction): string {
-  return AUDIT_ACTIONS[action]
+/**
+ * V1 有、V2 没有的动作（阶段 9 迁移过来的历史行会带着这些动作名）。
+ *
+ * 为什么**单独一张表**而不是塞进 `AUDIT_ACTIONS`：
+ * `AUDIT_ACTIONS` 是"V2 会写出哪些动作"的清单，是一份**能力声明**；
+ * 而这里这些动作 V2 永远不会写 —— 它们只是当年发生过、被原样搬过来的历史。
+ * 混在一起会让"V2 到底会记什么"变得必须读注释才能回答。
+ *
+ * 但界面照样要显示与筛选它们：一份看不懂的历史等于没有历史。
+ */
+export const V1_LEGACY_ACTIONS = {
+  login_failed: '登录失败（V1 历史）',
+  mfa_challenge_issued: 'MFA 挑战（V1 历史）',
+  mfa_enrolled: 'MFA 登记（V1 历史）',
+  mfa_enabled: 'MFA 启用（V1 历史）',
+  mfa_failed: 'MFA 校验失败（V1 历史）',
+  mfa_success: 'MFA 校验通过（V1 历史）',
+  resource_file_register: '文件登记（V1 历史）',
+  file_validation_rejected: '文件校验未通过（V1 历史）',
+  resource_directory_assign: '资源目录归属指派（V1 历史）',
+  data_export: '数据导出（V1 历史）',
+} as const
+
+/** 界面显示用的标签：V2 的动作 → V1 历史动作 → 兜底原样显示。 */
+export function auditLabel(action: string): string {
+  if (Object.prototype.hasOwnProperty.call(AUDIT_ACTIONS, action)) {
+    return AUDIT_ACTIONS[action as AuditAction]
+  }
+  if (Object.prototype.hasOwnProperty.call(V1_LEGACY_ACTIONS, action)) {
+    return V1_LEGACY_ACTIONS[action as keyof typeof V1_LEGACY_ACTIONS]
+  }
+  return action
 }
 
 /** 这些 key 绝不允许出现在审计 detail 里（用例会断言）。 */

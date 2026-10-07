@@ -9,7 +9,7 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { Input, Label } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { humanMessage } from '../components/resource/errors'
-import { AUDIT_ACTIONS, type AuditAction } from '@shared/audit-actions'
+import { AUDIT_ACTIONS, V1_LEGACY_ACTIONS, auditLabel } from '@shared/audit-actions'
 
 const PAGE_SIZE = 50
 
@@ -62,10 +62,11 @@ export function AdminAuditPage() {
     )
   }
 
-  const labelOf = (a: string): string =>
-    Object.prototype.hasOwnProperty.call(AUDIT_ACTIONS, a)
-      ? AUDIT_ACTIONS[a as AuditAction]
-      : a
+  /*
+    动作标签统一走 `auditLabel`：它会先查 V2 的动作，再查**V1 历史动作**
+    （阶段 9 迁移过来的那 10 种），最后才原样显示。历史行因此也看得懂、筛得到。
+  */
+  const labelOf = (a: string): string => auditLabel(a)
 
   return (
     <div data-testid="admin-audit-page">
@@ -99,6 +100,12 @@ export function AdminAuditPage() {
           >
             <option value="">全部动作</option>
             {Object.entries(AUDIT_ACTIONS).map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
+            {/* 迁移过来的历史动作：V2 不会再写它们，但筛得到才叫"历史还在" */}
+            {Object.entries(V1_LEGACY_ACTIONS).map(([key, label]) => (
               <option key={key} value={key}>
                 {label}
               </option>
@@ -200,7 +207,9 @@ export function AdminAuditPage() {
                   {items.map((row) => (
                     <tr key={row.id} data-testid="audit-row" data-action={row.action} data-result={row.result}>
                       <td className="whitespace-nowrap px-4 py-2 text-muted-foreground">
-                        {row.createdAt.slice(0, 19).replace('T', ' ')}
+                        <span data-testid="audit-row-time">
+                          {row.createdAt.slice(0, 19).replace('T', ' ')}
+                        </span>
                       </td>
                       <td className="px-4 py-2 text-foreground" data-testid="audit-row-actor">
                         {row.actorName}

@@ -25,3 +25,12 @@ export const s3ProviderRules = require(join(ROOT, 'dist/server/storage/s3.provid
 export const storageContract = require(join(ROOT, 'dist/server/storage/storage.provider.js'))
 export const password = require(join(ROOT, 'dist/server/auth/password.js'))
 export const auditService = require(join(ROOT, 'dist/server/audit/audit.service.js'))
+
+/**
+ * 迁移脚本（阶段 9）。
+ *
+ * 脚本是 ESM，所以用 import 而不是 require。它的 CLI 部分被 `isMain` 守着，
+ * 所以 import 它没有副作用 —— 映射表因此可以像普通模块一样被单测直接检查。
+ */
+export const v1Migration = await import(join(ROOT, 'scripts/import-v1.mjs'))
+export const v1Snapshot = await import(join(ROOT, 'scripts/v1-snapshot.mjs'))
