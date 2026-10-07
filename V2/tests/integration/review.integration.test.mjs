@@ -3,9 +3,7 @@
  */
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import {
-  TEST_BASE,
   client,
   createAdmin,
   createTeacher,
@@ -15,6 +13,7 @@ import {
   stopServer,
   withSql,
 } from '../helpers/harness.mjs'
+import { textBytes, uploadFile } from '../helpers/upload.mjs'
 
 let admin
 let author
@@ -66,30 +65,19 @@ after(async () => {
   await stopServer()
 })
 
+/**
+ * 造一条"已提交审核"的资源。
+ *
+ * 上传走 `helpers/upload.mjs`（真实的 申请地址 → PUT → 登记），
+ * 不再手写元数据 —— 阶段 6 起登记只认票据。
+ */
 async function submitOne(title) {
   const created = await author.post('/api/resources', {
     directoryId: ids.resources,
     title,
   })
   const id = created.data.id
-  const bytes = Buffer.from(`内容 ${title}`, 'utf8')
-  const req = await author.post(`/api/resources/${id}/files/upload-url`, {
-    fileName: 'a.txt',
-    mimeType: 'text/plain',
-    size: bytes.byteLength,
-  })
-  await fetch(`${TEST_BASE}${req.data.uploadUrl}`, {
-    method: 'PUT',
-    headers: { 'content-type': 'text/plain' },
-    body: bytes,
-  })
-  await author.post(`/api/resources/${id}/files/register`, {
-    storageKey: req.data.storageKey,
-    fileName: 'a.txt',
-    mimeType: 'text/plain',
-    size: bytes.byteLength,
-    sha256: createHash('sha256').update(bytes).digest('hex'),
-  })
+  await uploadFile(author, id, { bytes: textBytes(title), fileName: 'a.txt', mimeType: 'text/plain' })
   const submitted = await author.post(`/api/resources/${id}/submit`)
   assert.equal(submitted.status, 201, JSON.stringify(submitted.data))
   return id

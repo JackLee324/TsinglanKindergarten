@@ -363,3 +363,16 @@ CREATE INDEX sessions_expiry_idx ON sessions (expires_at);
 
 seed 只负责**初始内容**，不是权限或代码的一部分；任何一行都可以被管理员改名、移动、
 停用、删除。`seeds` 与 `migrations` 分开，重跑 seed 不会与迁移的 checksum 冲突。
+
+---
+
+## 阶段 6 新增的两张表（迁移 `0002_storage.sql`）
+
+| 表 | 为什么需要它 |
+|---|---|
+| `upload_tickets` | 一次上传的**票据**。申请上传地址时把 `(size, sha256, mime, name, key)` 钉在服务端，并**同时写进签名**；登记时只认票据 id。<br>没有它就有个缺口：客户端可以先申请 sha256=A 的地址、上传 A，登记时再声称 sha256=B —— 服务端无法证明两者是同一个值。 |
+| `storage_orphans` | 上传成功但**没能登记**的对象的清理标记（key + 原因 + 细节）。<br>真实会发生：PUT 成功、登记失败（哈希不符 / 票据过期 / 页面被关掉）。本阶段按业主要求不引入任务系统，所以至少留 marker，交给 `npm run storage:cleanup` 处理。 |
+
+两张表都与授权无关（授权只有一个真相：`user_permissions`）。
+`upload_tickets.consumed_file_id` 是 `ON DELETE SET NULL`：删掉文件之后票据仍留作历史，
+约束只要求"不能指向文件却没标记成已消费"。

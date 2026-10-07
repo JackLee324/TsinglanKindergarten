@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, FileText, Pencil } from 'lucide-react'
+import { ArrowLeft, Pencil } from 'lucide-react'
 import { resourcesApi } from '../api/resources'
 import { ApiError } from '../api/http'
 import type { ResourceDetail } from '../api/types'
@@ -12,8 +12,10 @@ import { Badge } from '../components/ui/Badge'
 import { Button } from '../components/ui/Button'
 import { Input, Label, Textarea } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
+import { EDITABLE_STATUSES } from '@shared/resource-status'
 import { EmptyState } from '../components/ui/EmptyState'
 import { formatDate } from '../components/resource/ResourceCard'
+import { FileList } from '../components/resource/FileList'
 
 const STATUS_LABEL = {
   DRAFT: '草稿',
@@ -30,9 +32,9 @@ const STATUS_LABEL = {
  * 拿它做 URL identity 会让分享出去的链接在改名后失效。
  * 目录仍然是 slug 路径，两者不混。
  *
- * 文件区域**明确写"Stage 6 接入"**，并且：
- *   · 没有文件时显示「暂无文件」；
- *   · 不渲染下载/预览按钮 —— 放一个点了会失败的按钮比不放更糟。
+ * 文件区域是**真的**（阶段 6）：可预览的类型有「预览」+「下载」，
+ * 不支持预览的类型**只有「下载」**并附上那句说明；
+ * 能不能增删文件由服务端的能力位与资源状态共同决定。
  */
 export function ResourceDetailPage() {
   const { id = '' } = useParams()
@@ -164,24 +166,17 @@ export function ResourceDetailPage() {
         </Card>
       )}
 
-      {/* 文件区域：本阶段只说明状态，不给假按钮 */}
-      <Card className="mt-5" data-testid="resource-detail-files">
+      {/* 文件区域：真实的文件列表 + 预览 + 下载 + 添加/删除 */}
+      <Card className="mt-5">
         <CardContent>
-          <h2 className="mb-3 flex items-center gap-2 text-lg font-semibold text-foreground">
-            <FileText className="size-5 text-muted-foreground" /> 文件
-          </h2>
-          {resource.fileCount === 0 ? (
-            <p className="text-sm text-muted-foreground" data-testid="resource-detail-no-files">
-              暂无文件
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground" data-testid="resource-detail-file-count">
-              共 {resource.fileCount} 个文件
-            </p>
-          )}
-          <p className="mt-3 rounded-lg bg-secondary px-3 py-2 text-xs text-muted-foreground" data-testid="resource-detail-stage-note">
-            文件将在 Stage 6 接入（上传 / 预览 / 下载）。本页暂不提供下载与预览按钮。
-          </p>
+          <FileList
+            resourceId={resource.id}
+            items={resource.files}
+            // 能不能增删文件 = 服务端给的能力位 ∧ 资源当前可编辑。
+            // 已发布/待审核的资源由服务端再拦一次（409），界面这层只是不摆必然失败的按钮。
+            canEdit={resource.capabilities.canEdit && EDITABLE_STATUSES.includes(resource.status)}
+            onChange={load}
+          />
         </CardContent>
       </Card>
     </div>

@@ -16,6 +16,10 @@ secrets/
 
 # ---- 本地数据与备份（绝不进 Git）----
 .devdata/
+
+# 测试用的真实 S3 后端（SeaweedFS 二进制，~140MB）由 npm run devtools:storage 取回。
+# 它是**本机产物**，不进仓库 —— 但在没有它的时候存储集成测试会明确要求先跑那个命令。
+.devtools/
 backups/
 *.ndjson
 *.dump

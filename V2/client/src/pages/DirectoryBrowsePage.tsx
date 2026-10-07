@@ -1,4 +1,9 @@
-import { useParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { Upload } from 'lucide-react'
+import { useAuth } from '../auth/useAuth'
+import { Button } from '../components/ui/Button'
+import { UploadResourceDialog } from '../components/resource/UploadResourceDialog'
 import { useDirectory } from '../directory/DirectoryProvider'
 import { DirectoryBrowser } from '../directory/DirectoryBrowser'
 import { Breadcrumb } from '../components/Breadcrumb'
@@ -17,8 +22,11 @@ import { ResourceList } from '../components/resource/ResourceList'
  */
 export function DirectoryBrowsePage() {
   const params = useParams()
+  const navigate = useNavigate()
   const segments = (params['*'] ?? '').split('/').filter((s) => s.length > 0)
   const { roots, ready, loading, resolve } = useDirectory()
+  const { capabilities } = useAuth()
+  const [uploading, setUploading] = useState(false)
 
   if (!ready && loading) return <Spinner label="正在加载目录…" />
 
@@ -53,14 +61,30 @@ export function DirectoryBrowsePage() {
 
       {target.node !== null && (
         <div className="mb-5">
-          <h1
-            className="text-2xl font-semibold text-foreground"
-            data-testid="directory-title"
-            data-directory-id={target.node.id}
-            data-directory-slug={target.node.slug}
-          >
-            {target.node.name}
-          </h1>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h1
+              className="text-2xl font-semibold text-foreground"
+              data-testid="directory-title"
+              data-directory-id={target.node.id}
+              data-directory-slug={target.node.slug}
+            >
+              {target.node.name}
+            </h1>
+            {/*
+              「上传资源」只出现在**能放文件**的目录里（资料夹层），
+              而且只有服务端说"你可以上传"（canUpload = resource.create）时才出现。
+              这仍然不是安全边界 —— 接口自己会拒 —— 但界面不该把一个必然失败的操作摆出来。
+            */}
+            {target.node.allowFiles && capabilities?.canUpload === true && (
+              <Button
+                type="button"
+                onClick={() => setUploading(true)}
+                data-testid="directory-upload"
+              >
+                <Upload className="size-4" /> 上传资源
+              </Button>
+            )}
+          </div>
           {target.node.description !== null && target.node.description !== '' ? (
             <p className="mt-1 text-sm text-muted-foreground" data-testid="directory-description">
               {target.node.description}
@@ -90,6 +114,24 @@ export function DirectoryBrowsePage() {
       */}
       {target.node !== null && target.node.allowFiles && (
         <ResourceList directoryId={target.node.id} />
+      )}
+
+      {/*
+        上传弹窗：`directoryId` 与路径都来自**当前这个目录页** ——
+        老师不需要（也没有机会）在这里重选班型/科目/资料夹。
+      */}
+      {uploading && target.node !== null && (
+        <UploadResourceDialog
+          open={uploading}
+          directoryId={target.node.id}
+          directoryPath={target.node.path}
+          onClose={() => setUploading(false)}
+          onCreated={(resourceId) => {
+            setUploading(false)
+            // 上传完直接进详情页：业主要的"上传成功之后能立刻看到它在哪、有什么"。
+            navigate(`/resources/${resourceId}`)
+          }}
+        />
       )}
     </div>
   )

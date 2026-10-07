@@ -3,6 +3,31 @@ import { FilesService } from './files.service'
 import { RegisterFileDto, UploadUrlDto } from '../resources/resources.dto'
 import { CurrentUser, DirectoryScope, RequirePermission } from '../common/decorators'
 import type { AuthUser } from '../common/auth-user'
+import {
+  ALLOWED_FILE_TYPES,
+  ALLOWED_TYPES_LABEL,
+  MAX_FILE_SIZE_BYTES,
+  MAX_FILE_SIZE_LABEL,
+  PREVIEW_UNSUPPORTED_MESSAGE,
+} from '../../shared/file-policy'
+
+/** 给接口用的策略摘要（就是 shared/file-policy.ts 里那一份，没有第二份定义）。 */
+function filePolicySummary() {
+  return {
+    maxFileSizeBytes: MAX_FILE_SIZE_BYTES,
+    maxFileSizeLabel: MAX_FILE_SIZE_LABEL,
+    allowedExtensions: ALLOWED_FILE_TYPES.map((t) => t.ext),
+    allowedTypesLabel: ALLOWED_TYPES_LABEL,
+    types: ALLOWED_FILE_TYPES.map((t) => ({
+      ext: t.ext,
+      mime: t.mime,
+      kind: t.kind,
+      previewable: t.previewable,
+      label: t.label,
+    })),
+    previewUnsupportedMessage: PREVIEW_UNSUPPORTED_MESSAGE,
+  }
+}
 
 /**
  * 文件接口。路径挂在资源下（`/api/resources/:id/files/...`），
@@ -18,8 +43,21 @@ export class FilesController {
   @Get()
   @RequirePermission('resource.view')
   @DirectoryScope({ kind: 'resource', param: 'id' })
-  async list(@Param('id') id: string) {
-    return { items: await this.files.list(id) }
+  async list(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
+    return { items: await this.files.list(actor, id) }
+  }
+
+  /**
+   * 文件策略（允许的类型、大小上限、界面文案）。
+   *
+   * 前端本来就能从 `shared/file-policy.ts` 直接拿到同一份常量 —— 这个接口是给
+   * **部署后想确认服务端到底按什么策略在跑**的人用的，也方便 E2E 断言
+   * "前后端读的是同一个上限"。
+   */
+  @Get('policy')
+  @RequirePermission('resource.view')
+  async policy() {
+    return filePolicySummary()
   }
 
   /** ① 申请上传地址（浏览器 PUT 之前调用）。 */
@@ -43,7 +81,7 @@ export class FilesController {
     @Param('id') id: string,
     @Body() dto: RegisterFileDto,
   ) {
-    return this.files.register(actor, id, dto)
+    return this.files.register(actor, id, dto.uploadId)
   }
 
   @Get(':fileId/download')

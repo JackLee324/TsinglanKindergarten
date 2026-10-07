@@ -88,6 +88,8 @@ export interface ResourceListPage {
 
 export interface ResourceDetail extends ResourceListItem {
   readonly reviewComment: string | null
+  /** 资源里的文件（阶段 6）。**不含** storage key —— 那不该到前端来。 */
+  readonly files: readonly ResourceFileSummary[]
   /** 服务端算出的能力位 —— 前端不判断"我是不是上传者"。 */
   readonly capabilities: { readonly canEdit: boolean }
 }
@@ -95,4 +97,74 @@ export interface ResourceDetail extends ResourceListItem {
 export interface DirectoryNodeDetail extends Omit<DirectoryNode, 'children'> {
   readonly children: readonly DirectoryNode[]
   readonly ancestors: readonly DirectoryNode[]
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 文件（阶段 6）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 界面上的文件条目。**不含** storage key / bucket —— 那些不该到前端来。 */
+export interface ResourceFileSummary {
+  readonly id: string
+  readonly fileName: string
+  readonly mimeType: string
+  readonly size: number
+  /** 服务端格式化好的大小（界面不自己算，免得出现两种写法）。 */
+  readonly sizeLabel: string
+  readonly sha256: string
+  readonly previewable: boolean
+  /** 用哪个 viewer：pdf / image / text；不能预览时是 null。 */
+  readonly viewer: 'pdf' | 'image' | 'text' | null
+  /** 不能预览时界面**逐字**显示这句话；能预览时是 null。 */
+  readonly previewMessage: string | null
+  readonly createdAt: string
+}
+
+/** ① 申请上传地址的返回。`size` 与 `sha256` 已经在签名里，客户端改不了。 */
+export interface UploadTicket {
+  readonly uploadId: string
+  readonly storageKey: string
+  readonly uploadUrl: string
+  readonly method: 'PUT'
+  /** 必须原样发送（S3 校验签名头；少一个就 403）。 */
+  readonly headers: Record<string, string>
+  readonly expiresInSeconds: number
+  readonly maxBytes: number
+  readonly fileName: string
+  readonly mimeType: string
+}
+
+export type PreviewResponse =
+  | {
+      readonly previewable: true
+      readonly url: string
+      readonly mimeType: string
+      readonly fileName: string
+      readonly viewer: 'pdf' | 'image' | 'text'
+      readonly expiresInSeconds: number
+    }
+  | {
+      readonly previewable: false
+      readonly mimeType: string
+      readonly fileName: string
+      readonly viewer: null
+      readonly message: string
+    }
+
+export interface DownloadResponse {
+  readonly url: string
+  readonly fileName: string
+  readonly mimeType: string
+  readonly size: number
+  readonly sha256: string
+  readonly expiresInSeconds: number
+}
+
+/** 服务端生效的文件策略（与 `shared/file-policy.ts` 同一份常量）。 */
+export interface FilePolicySummary {
+  readonly maxFileSizeBytes: number
+  readonly maxFileSizeLabel: string
+  readonly allowedExtensions: readonly string[]
+  readonly allowedTypesLabel: string
+  readonly previewUnsupportedMessage: string
 }

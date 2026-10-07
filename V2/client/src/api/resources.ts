@@ -22,12 +22,24 @@ function toQueryString(query: ResourceListQuery): string {
 }
 
 /**
- * 资源接口（阶段 5 只用到读 + 改标题/英文名/描述）。
+ * 资源接口（读取面 + 改标题/英文名/描述）。
  *
- * 上传、下载、预览、审核**都不在这个文件里** —— 它们属于后续阶段，
- * 在这个阶段出现就等于给了用户一个点了会失败的按钮。
+ * 文件相关的接口（上传 / 预览 / 下载 / 删除）在 `files.ts` ——
+ * 它们有独立的失败语义（网络中断、取消、存储不可用），
+ * 混在一起会让这里的错误处理变成一锅粥。
+ *
+ * 审核裁决（approve / reject）仍然不在这里：那是另一条业务链。
  */
 export const resourcesApi = {
+  /**
+   * 建草稿资源。
+   *
+   * `directoryId` 是**必填且唯一**的分类字段（业主 §35：不许再有 program / subject /
+   * folderType）。界面上它来自"老师当前所在的目录"，不是让他从下拉里挑。
+   */
+  create: (input: { directoryId: string; title: string; titleEn?: string | null; description?: string | null }) =>
+    api.post<ResourceDetail>('/api/resources', input),
+
   list: (query: ResourceListQuery) =>
     api.get<ResourceListPage>(`/api/resources?${toQueryString(query)}`),
 

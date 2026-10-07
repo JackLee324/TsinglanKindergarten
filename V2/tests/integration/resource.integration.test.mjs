@@ -16,6 +16,7 @@ import {
   stopServer,
   withSql,
 } from '../helpers/harness.mjs'
+import { uploadFile } from '../helpers/upload.mjs'
 
 let admin
 let teacher
@@ -66,31 +67,14 @@ async function makeResource(title, withFile = false) {
   return created.data.id
 }
 
-/** 完整走一遍 申请地址 → PUT → 登记，返回登记结果。 */
+/**
+ * 完整走一遍 申请地址 → PUT → 登记（阶段 6 之后是"票据"流程）。
+ *
+ * 夹具与其它套件共用 `helpers/upload.mjs` —— 这样契约再变时只改一个地方，
+ * 也不会有人为了"方便"写一条绕过完整性与类型校验的后门。
+ */
 async function attachFile(resourceId, fileName, mimeType, content) {
-  const url = await teacher.post(`/api/resources/${resourceId}/files/upload-url`, {
-    fileName,
-    mimeType,
-    size: content.byteLength,
-  })
-  assert.equal(url.status, 201, JSON.stringify(url.data))
-
-  const put = await fetch(`http://127.0.0.1:3311${url.data.uploadUrl}`, {
-    method: 'PUT',
-    headers: { 'content-type': mimeType },
-    body: content,
-  })
-  assert.equal(put.status, 200, `PUT 失败：${put.status}`)
-
-  const sha256 = (await import('node:crypto')).createHash('sha256').update(content).digest('hex')
-  const reg = await teacher.post(`/api/resources/${resourceId}/files/register`, {
-    storageKey: url.data.storageKey,
-    fileName,
-    mimeType,
-    size: content.byteLength,
-    sha256,
-  })
-  return reg
+  return { data: await uploadFile(teacher, resourceId, { bytes: content, fileName, mimeType }) }
 }
 
 describe('创建资源', () => {
@@ -123,8 +107,10 @@ describe('状态机（不允许假成功）', () => {
   test('没有文件不能提交审核', async () => {
     const id = await makeResource('空资源')
     const res = await teacher.post(`/api/resources/${id}/submit`)
-    assert.equal(res.status, 409)
-    assert.match(res.data.message, /文件/)
+    // 业主 §18：**400**，并且给出能照做的一句话（不是 409"冲突"，也不是一句技术错误）。
+    assert.equal(res.status, 400, JSON.stringify(res.data))
+    assert.equal(res.data.message, '请先上传至少一个文件。')
+    assert.equal(res.data.code, 'NO_FILE_TO_SUBMIT')
   })
 
   test('有文件 → 提交 → 状态真的变成 PENDING_REVIEW，且刷新后仍是', async () => {

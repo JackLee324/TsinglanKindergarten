@@ -57,7 +57,7 @@ async function bootstrap(): Promise<void> {
   await app.listen(config.port)
   logger.log(`V2 backend listening on http://127.0.0.1:${config.port}`)
   logger.log(`environment: NODE_ENV=${process.env.NODE_ENV ?? 'development'}`)
-  logger.log(`storage driver: ${config.storageDriver}`)
+  logger.log(`storage provider: ${config.storage.provider}`)
 }
 
 void bootstrap()

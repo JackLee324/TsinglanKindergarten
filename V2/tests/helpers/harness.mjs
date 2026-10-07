@@ -234,7 +234,14 @@ export function client(baseUrl = TEST_BASE) {
  *   2. 健康检查必须返回**本次启动注入的 instanceId**，否则也是抛错。
  * 同时监听子进程退出，把它的 stderr 原样带进错误信息。
  */
-export async function startServer() {
+/**
+ * @param options.env 额外/覆盖的环境变量。
+ *
+ * 用途：阶段 6 的存储集成测试要让**被测服务**连到真的 S3 兼容后端，
+ * 于是必须能往子进程里注入 STORAGE_PROVIDER=s3 与那四个连接参数。
+ * 除此之外一律走下面的默认值 —— 默认值本身也是被测行为的一部分。
+ */
+export async function startServer(options = {}) {
   if (serverProcess) return
 
   // 防线 1：端口上已经有服务在回应 → 拒绝启动（几乎总是上一次没清干净）
@@ -265,9 +272,10 @@ export async function startServer() {
       V2_INSTANCE_ID: instanceId,
       SERVER_PORT: String(TEST_PORT),
       DATABASE_URL: TEST_DB_URL,
-      STORAGE_DRIVER: 'local',
+      STORAGE_PROVIDER: 'local',
       STORAGE_LOCAL_DIR: storageDir,
       V2_DOWNLOAD_TTL_SECONDS: '60',
+      ...(options.env ?? {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -401,6 +409,40 @@ export async function assertNoResidue(before, label) {
 /** 对外暴露：测试里要重跑 seed 来验证幂等性。 */
 export function runProjectScript(relativePath) {
   return runScript(relativePath)
+}
+
+/**
+ * 跑一个项目脚本并**返回它的输出**（失败即抛，带上输出便于定位）。
+ *
+ * 用于验证"运维真的会跑的那些脚本"（migrate / seed / cleanup-orphans）——
+ * 只测接口不测脚本的话，清理脚本坏了也没人知道。
+ */
+export function runProjectScriptCaptured(relativePath, extraEnv = {}, args = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(ROOT, relativePath), ...args], {
+      cwd: ROOT,
+      env: { ...process.env, DATABASE_URL: TEST_DB_URL, ...extraEnv },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let out = ''
+    child.stdout.on('data', (d) => (out += String(d)))
+    child.stderr.on('data', (d) => (out += String(d)))
+    child.on('close', (code) => {
+      if (code === 0) resolve(out)
+      else reject(new Error(`${relativePath} 退出码 ${code}：\n${out}`))
+    })
+  })
+}
+
+/**
+ * 本次运行的本地存储目录（由 `startServer` 创建并注入被测进程）。
+ *
+ * 用真实路径去断言"对象真的落盘了 / 真的被删掉了"——
+ * 只看接口返回的话，"删除"完全可以只删数据库那一行。
+ */
+export function testStorageDir() {
+  if (storageDir === null) throw new Error('startServer 还没跑，存储目录还不存在')
+  return storageDir
 }
 
 /** 用系统 node 跑一个脚本（migrate / seed），失败即抛。 */

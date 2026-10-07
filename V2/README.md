@@ -1,10 +1,10 @@
 # V2 — 清澜山幼儿园教师资源平台（全新实现）
 
-> **当前状态：阶段 0–5 已完成并通过验收门禁。**
-> 阶段 5 = 「资源」这一条链的**读取面**：资源 API + 目录浏览页的资源列表
-> + 资源详情 + 我的资源 + 搜索 + 服务端分页。
-> **上传 / 预览 / 下载 / 真实对象存储 / 审核 / 发布 / 回收站界面属于阶段 6–7**，
-> 本阶段一律没有（不放"点了会失败"的按钮）。
+> **当前状态：阶段 0–6 已完成并通过验收门禁。**
+> 阶段 6 = **文件**：真实对象存储（本地 / S3 兼容双驱动）、浏览器 presigned PUT 直传、
+> 上传进度与取消、注册时的完整性校验、预览（PDF/图片/TXT）、授权后的短命下载地址、
+> 文件删除、孤儿对象清理。上传 / 预览 / 下载**界面已经能用了**。
+> **审核台 / 发布 / 回收站界面属于阶段 7**，本阶段仍然没有。
 > 阶段 0/1 产出的设计基线仍然逐条有效，本文档集是它的实现记录。
 
 ## V2 是什么
@@ -64,7 +64,7 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 3 | Directory（树、浏览、管理） | 目录即导航；**新增一级栏目可用** |
 | 4 | 前端 UI（沿用 V1 视觉） | ✅ Shell / Directory Browser / Directory Management |
 | 5 | Resource（CRUD + 详情 + 我的资源 + 搜索 + 分页） | ✅ 读取面完成 |
-| 6 | Upload / Preview / Download（真实对象存储） | |
+| 6 | Upload / Preview / Download（真实对象存储） | ✅ 双驱动 + 直传 + 预览 + 下载 |
 | 7 | Review（状态机 + 审核台） | |
 | 8 | Admin（教师账号、权限） | |
 | 9 | Permissions（后端强制 + 即时生效） | |
@@ -72,7 +72,7 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 11 | 浏览器 E2E（10 条真实业务流程） | |
 | 12 | Docker / 生产部署 | `docs/DEPLOYMENT.md` |
 
-**当前进度：阶段 0–5 已完成。**
+**当前进度：阶段 0–6 已完成。**
 
 | 阶段 | 状态 | 交付 |
 |---|---|---|
@@ -82,13 +82,16 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | 3 | ✅ | Directory 完整化：`enabled` 的真实语义（整棵子树）、三种删除保护、slug 不可变 |
 | 4 | ✅ | 前端：Shell + Directory Browser + Directory Management（**不含上传/审核/预览**） |
 | 5 | ✅ | Resource 读取面：`GET /api/resources`（搜索 / 筛选 / 服务端分页）、`/api/resources/mine`、`/api/resources/:id`；界面：目录浏览页的资源列表、资源详情 `/resources/:id`、我的资源 `/my-resources`；每张卡片都显示**完整目录位置** |
+| 6 | ✅ | 文件：`LocalStorageProvider` + `S3StorageProvider`（R2 / S3 / MinIO 同一段代码）、浏览器直传（`upload-url` → `PUT` → `register`）、上传进度与取消、预览（PDF/图片/TXT）、短命签名下载、`+ 添加文件`、删除文件、孤儿对象清理、`GET /api/health/storage` |
 
-**阶段 5 明确不做**（属于阶段 6–7，代码里也一行都没有）：
-真实对象存储（R2/S3）、文件上传、在线预览、下载、审核 / 发布 / 回滚、回收站界面。
-`V2/client/` 里没有任何上传、预览、审核页面 —— 这是刻意的，不是没做完。
-本阶段也**没有**接 R2/S3：只有开发用的本地存储驱动（阶段 6 换成真实对象存储）。
+**阶段的边界（诚实说明）**：阶段 6 只做文件本身。审核台 / 发布 / 撤回 / 回收站**界面**
+属于阶段 7；这些接口在阶段 2 就有，但本阶段**没有**给它们做界面。
 
-**下一步（阶段 6）：文件**（上传 / 预览 / 下载 + 真实对象存储）。
+**阶段 6 明确不做**（属于阶段 7）：审核台、发布、撤回、回收站**界面**、批量上传、断点续传、
+文件在线编辑、病毒扫描。接口层在阶段 2 就有的那些（submit / review / recall / recycle-bin）
+仍然没有界面 —— 不是漏了，是排期。
+
+**下一步（阶段 7）：审核与发布**（审核台 / 退回原因 / 发布 / 撤回 / 回收站界面）。
 
 ## 文档索引
 
@@ -102,16 +105,30 @@ V1 只作为**视觉参考**与**迁移数据源**。
 | `PERMISSION_MODEL.md` | 谁能做什么、对哪里做、后端怎么强制、怎么即时生效 |
 | `RESOURCE_LIFECYCLE.md` | 资源从草稿到发布到回收站的完整状态机与副作用 |
 
-后续阶段再补 `docs/`：`STORAGE.md`、`MIGRATION.md`、`DEPLOYMENT.md`、`TESTING.md`、
-`KNOWN_LIMITATIONS.md`、`FINAL_V2_REPORT.md`。已补：`docs/V1_KNOWN_LIMITATIONS.md`。
+| `docs/STORAGE.md` | **文件存在哪、怎么进去的、谁能在什么时候拿到它**（双驱动、三个实测坑、部署清单） |
+
+后续阶段再补 `docs/`：`MIGRATION.md`、`DEPLOYMENT.md`、`TESTING.md`、
+`KNOWN_LIMITATIONS.md`、`FINAL_V2_REPORT.md`。已补：`docs/V1_KNOWN_LIMITATIONS.md`、`docs/STORAGE.md`。
 
 ## 构建与门禁
 
 ```bash
-npm run build       # nest build → check-dist → vite build
-npm run typecheck   # 服务端 + 前端
+npm run build              # prepare-build → nest build → check-dist → vite build
+npm run typecheck          # 服务端 + 前端
 npm run lint
-npm test            # 上面全部 + 单元 + 集成（含真实浏览器）
+npm test                   # 上面全部 + 单元 + 集成（含真实浏览器 + 真实 S3）
+```
+
+集成测试打的是**真实 S3 后端**（不是 mock），所以 `npm test` 会先自动执行
+`npm run devtools:storage` 把 SeaweedFS 取到 `.devtools/`（已 gitignore，幂等，
+已有就跳过）。想手工准备：`npm run devtools:storage`。
+
+生产侧的存储自检与配置：
+
+```bash
+npm run storage:check      # 配置齐不齐 / 桶连不连得上 / CORS 是不是通配符
+npm run storage:cors       # 把 CORS 写进桶（需要 V2_PUBLIC_ORIGIN）
+npm run storage:cleanup    # 清理孤儿对象（--sweep 扫桶，--dry-run 只报告）
 ```
 
 `build` 链里有一道 `scripts/check-dist.mjs`：**每个 `server/**/*.ts`、`shared/**/*.ts`

@@ -40,6 +40,8 @@ let d
 let e
 let ids = {}
 const probes = []
+/** 为了测文件接口而直接插进去的文件行（after 里单独清掉）。 */
+const probeFiles = []
 /** 各账号的 id，用来区分"自己的"和"别人的"资源。 */
 const who = {}
 const NOT_A_UUID = '11111111-1111-4111-8111-111111111111'
@@ -142,6 +144,11 @@ before(async () => {
   }))
 })
 after(async () => {
+  if (probeFiles.length > 0) {
+    await withSql(async (sql) => {
+      await sql`DELETE FROM resource_files WHERE id = ANY(${probeFiles}::uuid[])`
+    })
+  }
   const removed = await purgeResources(probes)
   assert.equal(removed, probes.length, '探针必须全部清掉（残留核对）')
   await stopServer()
@@ -365,5 +372,86 @@ describe('审核岗（非管理员）的可见性', () => {
     const got = seen(data)
     assert.equal(got.has(probes[5]), false, '没有 review/publish 授权 → 看不到别人的待审资源')
     assert.equal(got.has(probes[6]), false, '也看不到别人被退回的资源')
+  })
+})
+
+
+/**
+ * 单条读取的可见性 —— **阶段 6 发现的真实越权**。
+ *
+ * 阶段 5 的可见性规则是先做在**列表 SQL** 里的，单条读取（详情 / 文件 / 下载 /
+ * 审核历史）当时只判了"目标目录的 resource.view"，没有比对状态。
+ * 结果：同事那条还没发布的草稿，虽然列表里看不到，但只要知道 id，
+ * 就能看详情、列文件、拿到下载地址。
+ *
+ * 修法是把判定收口到 `AuthorizationService.canViewResource()`，
+ * 与列表共用同一份 `resourceVisibility` 策略 —— 一处规则，两种消费方式。
+ * 下面每一条对应那一次漏掉的一个入口。
+ */
+describe('单条读取也必须过可见性（草稿不能靠 id 够到）', () => {
+  test('别人看不到我草稿的**详情** → 403', async () => {
+    const res = await d.get(`/api/resources/${probes[3]}`)
+    assert.equal(res.status, 403, JSON.stringify(res.data))
+  })
+
+  test('别人拿不到我草稿的**文件列表** → 403（不是空列表）', async () => {
+    const res = await d.get(`/api/resources/${probes[3]}/files`)
+    assert.equal(res.status, 403, JSON.stringify(res.data))
+  })
+
+  test('别人拿不到我草稿的**下载 / 预览地址** → 403', async () => {
+    // 插一条文件行（对象不存在也没关系：可见性在碰存储之前就判定完了）
+    const fileId = await withSql(async (sql) => {
+      const rows = await sql`
+        INSERT INTO resource_files (resource_id, file_name, storage_key, mime_type, size, sha256, created_by)
+        VALUES (${probes[3]}, '草稿里的文件.pdf',
+                ${'resources/' + probes[3] + '/00000000-0000-4000-8000-000000000000-draft.pdf'},
+                'application/pdf', 10, ${'a'.repeat(64)}, ${who.a})
+        RETURNING id::text
+      `
+      return rows[0].id
+    })
+    probeFiles.push(fileId)
+
+    const dl = await d.get(`/api/resources/${probes[3]}/files/${fileId}/download`)
+    assert.equal(dl.status, 403, `下载地址不能给出去：${JSON.stringify(dl.data)}`)
+    const pv = await d.get(`/api/resources/${probes[3]}/files/${fileId}/preview`)
+    assert.equal(pv.status, 403, JSON.stringify(pv.data))
+  })
+
+  test('别人看不了我草稿的**审核历史** → 403', async () => {
+    const res = await d.get(`/api/resources/${probes[3]}/review-history`)
+    assert.equal(res.status, 403, JSON.stringify(res.data))
+  })
+
+  test('审核岗也看不到别人的**草稿**详情（草稿对非本人一律不可见）', async () => {
+    const res = await e.get(`/api/resources/${probes[3]}`)
+    assert.equal(res.status, 403, JSON.stringify(res.data))
+  })
+
+  test('但审核岗看得到别人**已提交**的资源详情（不能修过头）', async () => {
+    const res = await e.get(`/api/resources/${probes[5]}`)
+    assert.equal(res.status, 200, JSON.stringify(res.data))
+    assert.equal(res.data.status, 'PENDING_REVIEW')
+  })
+
+  test('普通教师看别人已提交的待审资源详情 → 403（他没有审核岗那些状态）', async () => {
+    const res = await a.get(`/api/resources/${probes[5]}`)
+    assert.equal(res.status, 403)
+  })
+
+  test('管理员看得到任何人的草稿详情', async () => {
+    const res = await admin.get(`/api/resources/${probes[3]}`)
+    assert.equal(res.status, 200)
+  })
+
+  test('本人看自己的草稿详情 → 200（自己的东西永远看得到）', async () => {
+    const res = await a.get(`/api/resources/${probes[3]}`)
+    assert.equal(res.status, 200)
+  })
+
+  test('已发布资源：别人看详情 → 200（可见性没有把共享也一起掐掉）', async () => {
+    const res = await a.get(`/api/resources/${probes[0]}`)
+    assert.equal(res.status, 200)
   })
 })

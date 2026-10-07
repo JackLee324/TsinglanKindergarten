@@ -1,150 +1,146 @@
-import { createHmac, createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdirSync, existsSync, statSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
-import { dirname, join, resolve, sep } from 'node:path'
+/**
+ * server/storage/storage.service.ts —— 存储门面（业务代码只认这个）
+ * ============================================================================
+ * 按配置选一个驱动（local / s3），把驱动特有的错误翻译成带**机器可读 code**
+ * 的业务错误（§20），并把 key 的生成规则收在一处。
+ *
+ * 业务代码（files 模块）不 import 任何驱动，也不 import 任何 AWS SDK 类型 ——
+ * 换存储平台时只动 config，不动调用方。
+ */
 import { Injectable } from '@nestjs/common'
 import { loadConfig } from '../config'
+import { AppError } from '../common/http-error'
+import { safeFileNameSegment } from '../../shared/file-policy'
+import { LocalStorageProvider, newStorageKey } from './local.provider'
+import {
+  type ObjectStat,
+  type ObjectVerification,
+  type PresignGetOptions,
+  type PresignedGet,
+  type PresignedPut,
+  type PresignPutOptions,
+  type StorageHealth,
+  type StorageProvider,
+  type StorageProviderName,
+  StorageNotConfiguredError,
+  StorageUnavailableError,
+} from './storage.provider'
+import { S3StorageProvider } from './s3.provider'
 
-export interface PresignedPut {
-  readonly storageKey: string
-  readonly url: string
-  readonly method: 'PUT'
-  readonly headers: Record<string, string>
-}
-
-export interface ObjectHead {
-  readonly key: string
-  readonly size: number
-  readonly contentType: string
-  readonly sha256: string
-}
-
-/**
- * StorageService —— 对象存储适配器
- * ============================================================================
- * 阶段 2 只实现 **local**（文件系统）驱动。它**不是**假实现：
- *
- *   申请上传地址 → 浏览器 PUT 到那个地址 → 服务端真的去读回对象、算 sha256、
- *   与客户端声明比对 → 通过才登记 resource_files
- *
- * 这条链路与 S3/R2 的 presigned URL 形状完全一致（URL + method + headers），
- * 所以阶段 6 接 R2 时只是换一个 adapter，**不换调用方，也不换测试的断言**。
- *
- * 为什么一定要 `head()`：V1 出现过"数据库说文件存在、对象存储里却没有"的假成功。
- * 登记文件之前必须真的能读到对象，否则拒绝登记。
- */
 @Injectable()
 export class StorageService {
   private readonly config = loadConfig()
 
-  private root(): string {
-    return resolve(this.config.storageLocalDir)
+  constructor(
+    private readonly local: LocalStorageProvider,
+    private readonly s3: S3StorageProvider,
+  ) {}
+
+  get providerName(): StorageProviderName {
+    return this.config.storage.provider
   }
 
-  /** 防止 `../` 之类的 key 逃出存储根目录。这不是理论问题：key 来自请求。 */
-  private pathFor(key: string): string {
-    const root = this.root()
-    const full = resolve(root, key)
-    if (full !== root && !full.startsWith(root + sep)) {
-      throw new Error(`非法的存储 key：${key}`)
+  get provider(): StorageProvider {
+    return this.providerName === 's3' ? this.s3 : this.local
+  }
+
+  get localProvider(): LocalStorageProvider {
+    return this.local
+  }
+
+  /**
+   * 生成对象 key。
+   *
+   * 形状固定为 `resources/{resourceId}/{uuid}-{safeName}`（业主 §7）：
+   *   · 用户文件名**不参与目录结构**，`../` 即使漏过校验也无从穿越；
+   *   · 每个资源一个前缀，清理孤儿对象时可以按前缀扫；
+   *   · uuid 前缀保证同名文件不会互相覆盖 —— 业主 §16 明确要求
+   *     "教案.pdf 与 教案-v2.pdf 都要留下，不能因为重名覆盖旧文件"。
+   */
+  newKey(resourceId: string, fileName: string): string {
+    return newStorageKey(resourceId, safeFileNameSegment(fileName))
+  }
+
+  async presignPut(storageKey: string, options: PresignPutOptions): Promise<PresignedPut> {
+    return this.guard(() => this.provider.presignPut(storageKey, options))
+  }
+
+  async presignGet(storageKey: string, options: PresignGetOptions): Promise<PresignedGet> {
+    return this.guard(() => this.provider.presignGet(storageKey, options))
+  }
+
+  async head(storageKey: string): Promise<ObjectStat | null> {
+    return this.guard(() => this.provider.head(storageKey))
+  }
+
+  async verify(
+    storageKey: string,
+    expected: { size: number; sha256: string },
+  ): Promise<ObjectVerification> {
+    return this.guard(() => this.provider.verify(storageKey, expected))
+  }
+
+  async read(storageKey: string): Promise<Buffer> {
+    return this.guard(() => this.provider.read(storageKey))
+  }
+
+  async readRange(storageKey: string, bytes: number): Promise<Buffer> {
+    return this.guard(() => this.provider.readRange(storageKey, bytes))
+  }
+
+  /** 上传地址（写操作）的有效期。 */
+  get presignPutTtlSeconds(): number {
+    return this.config.storagePutTtlSeconds
+  }
+
+  /** 预览 / 下载地址的有效期。 */
+  get presignTtlSeconds(): number {
+    return this.config.storageGetTtlSeconds
+  }
+
+  async delete(storageKey: string): Promise<void> {
+    return this.guard(() => this.provider.delete(storageKey))
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    return this.guard(() => this.provider.list(prefix))
+  }
+
+  async health(): Promise<StorageHealth> {
+    return this.guard(() => this.provider.health())
+  }
+
+  /**
+   * 把驱动错误翻译成业务错误。
+   *
+   * 「存储没配好」和「存储暂时连不上」必须分开，因为它们的处理方式完全不同：
+   * 前者要找管理员改配置，后者重试就行（§20）。
+   */
+  private async guard<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn()
+    } catch (error) {
+      if (error instanceof StorageNotConfiguredError) {
+        throw AppError.serviceUnavailable(
+          '文件存储服务尚未配置，请联系管理员。',
+          'STORAGE_NOT_CONFIGURED',
+        )
+      }
+      if (error instanceof StorageUnavailableError) {
+        throw AppError.serviceUnavailable(
+          '文件存储服务暂时不可用，请稍后重试。',
+          'STORAGE_UNAVAILABLE',
+        )
+      }
+      throw error
     }
-    return full
-  }
-
-  newKey(directoryId: string, resourceId: string, fileName: string): string {
-    const safe = fileName
-      .replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_')
-      .slice(-80)
-    return `${directoryId}/${resourceId}/${randomUUID()}-${safe}`
-  }
-
-  presignPut(key: string): PresignedPut {
-    const token = this.sign(key, 'put', 900)
-    return {
-      storageKey: key,
-      url: `/api/storage/local?key=${encodeURIComponent(key)}&token=${token}`,
-      method: 'PUT',
-      headers: {},
-    }
-  }
-
-  presignGet(key: string, disposition: 'inline' | 'attachment', fileName: string): string {
-    const token = this.sign(key, 'get', this.config.downloadTtlSeconds)
-    const params = new URLSearchParams({ key, token, disposition, name: fileName })
-    return `/api/storage/local?${params.toString()}`
-  }
-
-  /** 真正把对象读出来校验（大小 + sha256 + 内容类型）。 */
-  head(key: string): ObjectHead | null {
-    const path = this.pathFor(key)
-    const metaPath = `${path}.meta.json`
-    if (!existsSync(path) || !statSync(path).isFile()) return null
-    const buf = readFileSync(path)
-    const meta = existsSync(metaPath)
-      ? (JSON.parse(readFileSync(metaPath, 'utf8')) as { contentType?: string })
-      : {}
-    return {
-      key,
-      size: buf.byteLength,
-      contentType: meta.contentType ?? 'application/octet-stream',
-      sha256: createHash('sha256').update(buf).digest('hex'),
-    }
-  }
-
-  read(key: string): Buffer {
-    return readFileSync(this.pathFor(key))
-  }
-
-  write(key: string, body: Buffer, contentType: string): void {
-    const path = this.pathFor(key)
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, body)
-    writeFileSync(`${path}.meta.json`, JSON.stringify({ contentType }))
-  }
-
-  delete(key: string): void {
-    const path = this.pathFor(key)
-    rmSync(path, { force: true })
-    rmSync(`${path}.meta.json`, { force: true })
-  }
-
-  verifyPutToken(key: string, token: string): boolean {
-    return this.verify(key, 'put', token)
-  }
-
-  verifyGetToken(key: string, token: string): boolean {
-    return this.verify(key, 'get', token)
-  }
-
-  private sign(key: string, op: string, ttlSeconds: number): string {
-    const exp = Math.floor(Date.now() / 1000) + ttlSeconds
-    const payload = `${op}:${key}:${exp}`
-    const mac = createHmac('sha256', this.config.downloadSecret).update(payload).digest('base64url')
-    return `${exp}.${mac}`
-  }
-
-  private verify(key: string, op: string, token: string): boolean {
-    const [expRaw, mac] = token.split('.')
-    const exp = Number(expRaw)
-    if (!Number.isFinite(exp) || !mac) return false
-    if (exp * 1000 < Date.now()) return false
-    const expected = createHmac('sha256', this.config.downloadSecret)
-      .update(`${op}:${key}:${exp}`)
-      .digest('base64url')
-    const a = Buffer.from(mac)
-    const b = Buffer.from(expected)
-    return a.length === b.length && timingSafeEqual(a, b)
   }
 }
 
-/** 存储 key 的合法形状（登记时校验，防止把任意路径写进数据库）。 */
-export const STORAGE_KEY_PATTERN = /^[0-9a-f-]{36}\/[0-9a-f-]{36}\/[\w.\-\u4e00-\u9fa5]+$/
-
-export function isValidStorageKey(key: unknown): key is string {
-  return typeof key === 'string' && STORAGE_KEY_PATTERN.test(key)
-}
-
-export function sha256Hex(buf: Buffer): string {
-  return createHash('sha256').update(buf).digest('hex')
-}
-
-export const __internal = { join }
+// 重新导出，避免调用方为了拿这些名字去 import 具体的驱动文件。
+export { STORAGE_KEY_PATTERN, isValidStorageKey, storageKeyBelongsTo, sha256Hex } from './local.provider'
+export type { StorageProviderName }
+export { StorageNotConfiguredError, StorageUnavailableError }
+export { S3StorageProvider, LocalStorageProvider }
+export type { ObjectStat, ObjectVerification, StorageHealth }
+export type { PresignGetOptions, PresignPutOptions, PresignedGet, PresignedPut }

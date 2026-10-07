@@ -14,6 +14,7 @@ import {
   startServer,
   stopServer,
 } from '../helpers/harness.mjs'
+import { docxBytes, uploadFile } from '../helpers/upload.mjs'
 
 let admin
 let ids = {}
@@ -45,6 +46,8 @@ before(async () => {
       { permission: 'resource.create', directoryId: ids.virtue },
       { permission: 'resource.update.own', directoryId: ids.virtue },
       { permission: 'resource.download', directoryId: ids.virtue },
+      // 阶段 6：所有权那条用例要"先发布再验证所有权"，所以需要提交审核的权限。
+      { permission: 'resource.submit', directoryId: ids.virtue },
       // 「新建文件夹」是**独立的一项**（业主的 12 项清单里单列），
       // 所以要显式授予 —— 能上传不等于能建文件夹。
       { permission: 'directory.create_folder', directoryId: ids.virtue },
@@ -176,8 +179,23 @@ describe('所有权：*_own 只对自己上传的资源有效', () => {
     const del = await other.del(`/api/resources/${created.data.id}`)
     assert.equal(del.status, 403)
 
-    // 但**看**得到（同一目录、有 view 权限）
+    // ⚠️ 阶段 6 改写：草稿**别人看不到**（未发布只对上传者可见）——
+    // 这一条以前是 200，因为单条读取没有套用可见性策略（后来被修掉了，
+    // 见 `AuthorizationService.canViewResource` 与 resource-permission 套件的对应用例）。
+    assert.equal((await other.get(`/api/resources/${created.data.id}`)).status, 403)
+
+    // 发布之后：同一目录 + 有 view 权限的人**看得到**，
+    // 但**仍然改不了、删不了** —— 这才真正证明"403 来自所有权，不是来自看不见"。
+    await uploadFile(teacher, created.data.id, { bytes: docxBytes('所有权探针'), fileName: 'a.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' })
+    await teacher.post(`/api/resources/${created.data.id}/submit`)
+    await admin.post(`/api/resources/${created.data.id}/review`, { action: 'approve' })
+
     assert.equal((await other.get(`/api/resources/${created.data.id}`)).status, 200)
+    assert.equal(
+      (await other.patch(`/api/resources/${created.data.id}`, { title: '改别人的' })).status,
+      403,
+    )
+    assert.equal((await other.del(`/api/resources/${created.data.id}`)).status, 403)
   })
 
   test('管理员可以越过所有权', async () => {

@@ -13,10 +13,10 @@ import {
   DELETABLE_STATUSES,
   editOutcomeFor,
   findTransition,
-  isPreviewable,
   RESOURCE_STATUSES,
   type ResourceStatus,
 } from '../../shared/resource-status'
+import { toFileView } from '../files/file-view'
 
 /**
  * 转义 LIKE 的通配符。
@@ -179,6 +179,35 @@ export class ResourcesService {
    * 走 `canActOnResource` 之外的目录判定：这里的目标是目录本身，不是某条资源，
    * 所以用 `can(permission, directoryId)`。
    */
+  /**
+   * 单条资源的可见性检查（列表那一条 SQL 之外的另一半）。
+   *
+   * 判定本身在 AuthorizationService 里，这里只负责把"不可见"翻译成 403 + 审计。
+   */
+  private async assertCanViewResource(
+    user: AuthUser,
+    row: { id: string; status: string; uploader_id: string | null; directory_id: string },
+  ): Promise<void> {
+    const decision = await this.authz.canViewResource(user, {
+      status: row.status,
+      uploaderId: row.uploader_id,
+    })
+    if (decision.allowed) return
+    await this.audit.write({
+      actorId: user.id,
+      actorName: user.name,
+      action: 'authz.denied',
+      targetType: 'resource',
+      targetId: row.id,
+      result: 'denied',
+      detail: { permission: 'resource.view', reason: decision.reason, status: row.status },
+    })
+    throw AppError.forbidden(
+      '这条资源还没有发布，只有上传者本人能看到',
+      'FORBIDDEN',
+    )
+  }
+
   private async assertCanViewDirectory(user: AuthUser, directoryId: string): Promise<void> {
     const decision = await this.authz.can(user, 'resource.view', directoryId)
     if (decision.allowed) return
@@ -341,6 +370,7 @@ export class ResourcesService {
   async getById(user: AuthUser, id: string) {
     const row = await this.requireResource(id)
     await this.assertCanActOn(user, 'resource.view', row)
+    await this.assertCanViewResource(user, row)
 
     const files = await this.sql<
       { id: string; file_name: string; mime_type: string; size: string; sha256: string; created_at: Date }[]
@@ -383,21 +413,17 @@ export class ResourcesService {
       deletedAt: row.deleted_at?.toISOString() ?? null,
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
-      files: files.map((f) => ({
-        id: f.id,
-        fileName: f.file_name,
-        mimeType: f.mime_type,
-        size: Number(f.size),
-        sha256: f.sha256,
-        previewable: isPreviewable(f.mime_type),
-        createdAt: f.created_at.toISOString(),
-      })),
+      // ⚠️ 用与文件接口**同一份**映射。这里曾经自己 map 一遍，
+      // 结果详情页少了 viewer / sizeLabel / previewMessage，
+      // "此文件类型暂不支持在线预览"这句话在详情页是空的。
+      files: files.map(toFileView),
     }
   }
 
   async reviewHistory(user: AuthUser, resourceId: string) {
     const row = await this.requireResource(resourceId)
     await this.assertCanActOn(user, 'resource.view', row)
+    await this.assertCanViewResource(user, row)
     const rows = await this.sql<
       { id: string; action: string; from_status: string; to_status: string; comment: string | null; created_at: Date; actor_name: string | null }[]
     >`
@@ -547,11 +573,16 @@ export class ResourcesService {
     const row = await this.requireResource(id)
     await this.assertCanActOn(actor, 'resource.submit', row, { requireOwner: true })
 
+    // 业主 §18：**没有文件不能提交审核**（400，且给的是能照做的一句话）。
+    //
+    // 这里数的是 `resource_files` 的行数，而不是"资源上有个 hasFile 布尔"——
+    // 行数来自真实登记过的对象（登记前校验过对象存在与哈希），
+    // 所以"有文件"这件事本身是有据可查的。
     const files = await this.sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM resource_files WHERE resource_id = ${id}
     `
     if (files[0].n === 0) {
-      throw AppError.conflict('还没有上传文件，不能提交审核', 'CONFLICT')
+      throw AppError.badRequest('请先上传至少一个文件。', 'NO_FILE_TO_SUBMIT')
     }
     return this.transition(actor, id, 'PENDING_REVIEW', null)
   }

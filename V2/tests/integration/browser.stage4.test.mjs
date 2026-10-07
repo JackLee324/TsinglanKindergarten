@@ -330,6 +330,14 @@ describe('第五阶段：管理员新增目录，前端零改动', () => {
   test('12+13+17. 新增一级栏目「活动」→ 刷新 → 侧边栏出现；再建子目录 → 刷新 → 仍在', async () => {
     await browser.goto(`${TEST_BASE}/directory/manage`)
     await browser.waitFor('!!document.querySelector(\'[data-testid="directory-manage-page"]\')', 15000, '进入目录管理')
+    // ⚠️ 容器先渲染、树后到。必须等**按钮本身**出现再点 ——
+    // 只等容器的话，慢一点的环境就会"找不到 manage-add-root"
+    // （这个偶发失败在阶段 6 的全量跑里出现过一次）。
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="manage-add-root"]\')',
+      20000,
+      '「新增一级栏目」按钮出现',
+    )
 
     // ① 新增一级栏目「活动」
     await browser.click('[data-testid="manage-add-root"]')

@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  Matches,
   IsIn,
   IsInt,
   IsOptional,
@@ -110,44 +111,41 @@ export class ListResourcesDto {
 }
 
 export class RegisterFileDto {
-  @IsString()
-  @MinLength(1)
-  storageKey!: string
-
-  @IsString()
-  @MinLength(1)
-  @MaxLength(255)
-  fileName!: string
-
-  @IsString()
-  @MinLength(1)
-  @MaxLength(150)
-  mimeType!: string
-
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  size!: number
-
-  @IsString()
-  @MinLength(64)
-  @MaxLength(64)
-  sha256!: string
+  /**
+   * 只传票据 id。
+   *
+   * WHY 不让客户端在这里"再声明一次" fileName / size / sha256：
+   * 那样就有一个缺口 —— 服务端无法证明报上来的 sha256 就是上传时
+   * 被存储层强制校验的那个值。申请上传地址时这些值已经写进票据与签名，
+   * 登记时一律以票据为准（见 0002_storage.sql 的说明）。
+   */
+  @IsUUID('4', { message: '缺少上传票据' })
+  uploadId!: string
 }
 
 export class UploadUrlDto {
   @IsString()
   @MinLength(1)
-  @MaxLength(255)
+  @MaxLength(255, { message: '文件名过长（超过 255 个字符）' })
   fileName!: string
 
+  @IsOptional()
   @IsString()
-  @MinLength(1)
   @MaxLength(150)
-  mimeType!: string
+  mimeType?: string
 
   @Type(() => Number)
-  @IsInt()
-  @Min(0)
+  @IsInt({ message: '文件大小必须是整数' })
+  @Min(1, { message: '文件为空，无法上传' })
   size!: number
+
+  /**
+   * 客户端对**将要上传的字节**算出的 sha256（hex）。
+   *
+   * 它会被写进上传签名（S3 是已签名头，本地是 HMAC 令牌），
+   * 于是"上传的字节与声明的哈希不一致"由**存储层**拒绝，对象根本不会落地。
+   */
+  @IsString()
+  @Matches(/^[0-9a-fA-F]{64}$/, { message: 'sha256 必须是 64 位十六进制' })
+  sha256!: string
 }

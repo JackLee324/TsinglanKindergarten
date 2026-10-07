@@ -16,7 +16,7 @@
  * 所以这里所有读取都走 `waitFor*`，并且失败信息里带上"当时页面长什么样"。
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -225,6 +225,91 @@ export class Browser {
       cards: document.querySelectorAll('[data-testid="directory-card"]').length,
       hasSidebar: !!document.querySelector('[data-testid="sidebar"]'),
     }))()`)
+  }
+
+
+  /**
+   * 往 `<input type="file">` 里塞一个真实文件（阶段 6 的上传验收要用）。
+   *
+   * 为什么必须走 CDP 而不是"点一下选择文件"：点它只会弹出操作系统的文件选择框，
+   * 自动化永远点不到那个框。`DOM.setFileInputFiles` 是唯一能塞进**真实文件**
+   * 并且触发 `change` 事件的方式 —— 于是页面走了它正常的上传代码路径。
+   */
+  async setFileInput(selector, filePath) {
+    const doc = await this.session.send('DOM.getDocument', { depth: -1 })
+    const found = await this.session.send('DOM.querySelector', {
+      nodeId: doc.root.nodeId,
+      selector,
+    })
+    if (!found.nodeId) throw new Error(`找不到文件输入框：${selector}`)
+    await this.session.send('DOM.setFileInputFiles', {
+      nodeId: found.nodeId,
+      files: [filePath],
+    })
+  }
+
+  /**
+   * 让浏览器把下载**真的存到磁盘**上。
+   *
+   * 业主 §23 要求"比较下载文件的 SHA256 与上传的 SHA256" —— 只有真的落盘
+   * 才算验证了下载；在页面里 fetch 一下再算哈希，测的是另一个东西。
+   */
+  async enableDownloads(downloadPath) {
+    await this.session.send('Browser.setDownloadBehavior', {
+      behavior: 'allow',
+      downloadPath,
+      eventsEnabled: true,
+    })
+  }
+
+  /** 等某个文件出现在下载目录里（并等它不再增长，避免读到半个文件）。 */
+  async waitForDownload(downloadPath, predicate, timeoutMs = 30000) {
+    const deadline = Date.now() + timeoutMs
+    let last = -1
+    let stable = 0
+    while (Date.now() < deadline) {
+      const files = existsSync(downloadPath) ? readdirSync(downloadPath) : []
+      const target = files.find((f) => predicate(f) && !f.endsWith('.crdownload'))
+      if (target !== undefined) {
+        const size = statSync(join(downloadPath, target)).size
+        if (size === last && size > 0) {
+          stable += 1
+          if (stable >= 2) return join(downloadPath, target)
+        } else {
+          stable = 0
+        }
+        last = size
+      }
+      await sleep(150)
+    }
+    const seen = existsSync(downloadPath) ? readdirSync(downloadPath) : []
+    throw new Error(`等待下载超时（${timeoutMs}ms）。下载目录里有：${seen.join(', ') || '（空）'}`)
+  }
+
+  /**
+   * 限速（用来测"上传中可以取消"）。
+   *
+   * 本地存储写得太快，几 MB 的文件一眨眼就传完了，取消按钮根本来不及点。
+   * 用 CDP 把上行限到几十 KB/s，上传过程就变成一个可以稳定观察与打断的状态。
+   */
+  async setUploadThroughput(bytesPerSecond) {
+    await this.session.send('Network.enable')
+    await this.session.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: bytesPerSecond,
+    })
+  }
+
+  /** 取消限速。 */
+  async clearNetworkThrottle() {
+    await this.session.send('Network.emulateNetworkConditions', {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    })
   }
 
   async close() {

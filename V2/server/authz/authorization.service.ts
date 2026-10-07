@@ -202,6 +202,45 @@ export class AuthorizationService {
   }
 
   /**
+   * 一条**具体资源**对某人是否可见。
+   *
+   * WHY 必须有这个函数（阶段 6 的真实教训）：
+   *
+   * 阶段 5 把可见性规则（已发布 ∪ 自己上传的；审核岗多看已提交的；管理员看全部）
+   * 实现成了 `resourceVisibility()` 返回的**状态集合**，由列表查询翻译成 SQL。
+   * 但**单条读取**（资源详情、文件列表、文件下载/预览、审核历史）走的是另一条路：
+   * 它们只做"目标目录的 `resource.view` 判定"，**没有比对状态**。
+   *
+   * 后果是真的：一位老师只要知道（或者猜到）同事那条**草稿**的 id，
+   * 就能列出它的文件、拿到签名地址、把文件下载走 —— 而列表里根本看不到这条资源。
+   * 这是集成测试跑出来的（file 套件"别人的草稿资源：连文件列表都够不到"）。
+   *
+   * 所以判定收口在这里，并且**复用同一份策略**：
+   *   · `resourceVisibility(user).othersStatuses` 决定"别人上传的哪些状态我能看"；
+   *   · `uploader_id === 我` 决定"自己的东西永远看得到"。
+   * 列表用同一份策略翻译成 SQL，单条用它直接比较 —— 一处规则，两种消费方式。
+   */
+  async canViewResource(
+    user: AuthUser,
+    resource: { readonly status: string; readonly uploaderId: string | null },
+  ): Promise<AuthorizationDecision> {
+    const permission: PermissionCode = 'resource.view'
+    if (this.isAdmin(user)) {
+      return { allowed: true, reason: 'admin', permission, directoryId: null }
+    }
+    if (resource.uploaderId !== null && resource.uploaderId === user.id) {
+      return { allowed: true, reason: 'global-grant', permission, directoryId: null }
+    }
+    const { othersStatuses } = await this.resourceVisibility(user)
+    if (othersStatuses.includes(resource.status as ResourceStatus)) {
+      return { allowed: true, reason: 'directory-grant', permission, directoryId: null }
+    }
+    // 「状态不可见」与「目录不可见」要分开：前者是"别人的草稿"，
+    // 后者是"你没这个目录的权限"，界面提示与排查方向完全不同。
+    return { allowed: false, reason: 'status-hidden', permission, directoryId: null }
+  }
+
+  /**
    * 界面的能力开关（阶段 4 的前端据此决定按钮显隐）。
    *
    * 同样收口在这里：路由/组件**不得**自己写 `role === 'ADMIN' || ...`。

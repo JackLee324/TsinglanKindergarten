@@ -19,6 +19,8 @@ export interface AuthorizationDecision {
     | 'no-grant'
     | 'out-of-scope'
     | 'not-owner'
+  /** 该资源的状态对这个人不可见（例如别人的草稿）。 */
+  | 'status-hidden'
     | 'target-missing'
   readonly permission: PermissionCode
   readonly directoryId: string | null

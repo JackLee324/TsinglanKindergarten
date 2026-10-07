@@ -4,17 +4,21 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { resourceStatus } from '../helpers/modules.mjs'
+import { filePolicy, resourceStatus } from '../helpers/modules.mjs'
 const {
   RESOURCE_STATUSES,
   TRANSITIONS,
   isLegalTransition,
   allowedNextStatuses,
   editOutcomeFor,
-  isPreviewable,
-  PREVIEW_UNSUPPORTED_MESSAGE,
-  PREVIEWABLE_MIME_TYPES,
 } = resourceStatus
+
+/**
+ * 预览策略现在在 `shared/file-policy.ts`（「能不能预览」是**文件**的属性，
+ * 不是资源状态的属性，而且必须与"允许上传哪些类型"读同一张表）。
+ * 这一条仍然留在本文件里，因为它同样是"只有一份真相"的守卫。
+ */
+const { isPreviewable, isPreviewableMime, PREVIEW_UNSUPPORTED_MESSAGE, PREVIEWABLE_MIME_TYPES } = filePolicy
 
 describe('资源状态机', () => {
   test('恰好五个状态', () => {
@@ -84,17 +88,26 @@ describe('资源状态机', () => {
   })
 
   test('预览白名单：PDF / JPG / PNG / TXT，且提示语是业主指定的原文', () => {
-    assert.deepEqual([...PREVIEWABLE_MIME_TYPES], [
+    // 现在是**推导**出来的（来自 ALLOWED_FILE_TYPES 里 previewable 的那些），
+    // 所以顺序随类型表的顺序（pdf → png/jpg/jpeg → txt）。
+    // 关键性质没变：只有这四类能预览，Office 与 ZIP 不在里面。
+    assert.deepEqual([...PREVIEWABLE_MIME_TYPES].sort(), [
       'application/pdf',
       'image/jpeg',
       'image/png',
       'text/plain',
     ])
-    assert.equal(isPreviewable('application/pdf'), true)
-    assert.equal(isPreviewable('image/png'), true)
-    assert.equal(isPreviewable('text/plain'), true)
-    assert.equal(isPreviewable('application/vnd.openxmlformats-officedocument.wordprocessingml.document'), false)
-    assert.equal(isPreviewable('application/zip'), false)
+    assert.equal(isPreviewableMime('application/pdf'), true)
+    assert.equal(isPreviewableMime('image/png'), true)
+    assert.equal(isPreviewableMime('text/plain'), true)
+    assert.equal(
+      isPreviewableMime('application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+      false,
+    )
+    assert.equal(isPreviewableMime('application/zip'), false)
+    // 以**扩展名**为准：一个 zip 声明成 image/png 也不能走图片预览。
+    assert.equal(isPreviewable('课件.zip', 'image/png'), false)
+    assert.equal(isPreviewable('照片.png', 'image/png'), true)
     assert.equal(PREVIEW_UNSUPPORTED_MESSAGE, '此文件类型暂不支持在线预览，请下载查看。')
   })
 })

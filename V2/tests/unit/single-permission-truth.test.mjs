@@ -35,7 +35,15 @@ describe('数据库里只有一个权限真相', () => {
     (m) => m[1],
   )
 
-  test('恰好 8 张表（V1 是 13 张）', () => {
+  /**
+   * 表的名单是**逐张列出来**的，不是数个数 —— 这样"悄悄多了一张表"会立刻红。
+   *
+   * 阶段 2 是 8 张；阶段 6 加了 2 张，都是文件存储需要的：
+   *   · `upload_tickets`  —— 一次上传的票据（把客户端声明的 size/sha256 钉在服务端）
+   *   · `storage_orphans` —— 上传成功但没能登记的对象的清理标记
+   * 两张表都不涉及授权（下面的"授权只有 user_permissions 一张表"仍然成立）。
+   */
+  test('恰好 10 张表，名单逐张核对（V1 是 13 张，且旧表一张都不许回来）', () => {
     assert.deepEqual(tables.sort(), [
       'audit_logs',
       'directories',
@@ -43,9 +51,21 @@ describe('数据库里只有一个权限真相', () => {
       'resource_reviews',
       'resources',
       'sessions',
+      'storage_orphans',
+      'upload_tickets',
       'user_permissions',
       'users',
     ])
+  })
+
+  test('阶段 6 新增的两张表都不持有授权信息', () => {
+    for (const table of ['upload_tickets', 'storage_orphans']) {
+      assert.equal(tables.includes(table), true, `${table} 应当存在`)
+    }
+    // 它们不能有 permission 之类的列 —— 授权只有一个真相（user_permissions）。
+    const create = SQL_CODE.slice(SQL_CODE.indexOf('CREATE TABLE upload_tickets'))
+    const block = create.slice(0, create.indexOf(');'))
+    assert.equal(/permission/i.test(block), false)
   })
 
   test('授权只有 user_permissions 一张表', () => {

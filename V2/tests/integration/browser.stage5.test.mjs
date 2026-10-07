@@ -343,12 +343,28 @@ describe('资源详情', () => {
     assert.equal(await browser.text('[data-testid="resource-detail-directory"]'), '教育教学 / Pre-K / 美德 / 教学资源')
   })
 
-  test('详情页诚实地说"暂无文件"和"文件将在 Stage 6 接入"，没有假的下载/预览', async () => {
-    await browser.waitForText('[data-testid="resource-detail-no-files"]', '暂无文件', 15000)
-    const note = await browser.text('[data-testid="resource-detail-stage-note"]')
-    assert.equal(/Stage 6/.test(note ?? ''), true, `应说明文件属于后续阶段，实际「${note}」`)
+  /**
+   * ⚠️ 这条用例在阶段 6 被**改写过**，但不是"放松了"：
+   *
+   * 阶段 5 时详情页只有一个说明文字（「文件将在 Stage 6 接入」），当时的断言是
+   * "页面上不许出现下载/预览按钮"。阶段 6 把文件功能做出来了，
+   * 于是这句话和那个断言都过期了 —— 现在要断言的是：
+   *   · 没有文件时仍然是「暂无文件」；
+   *   · **没有**任何假的下载/预览按钮（这一条实质没有变，只是从"整页不许有"
+   *     变成"没有文件时不许有"）；
+   *   · 上传入口（「+ 添加文件」）只在服务端说可以编辑时出现。
+   */
+  test('没有文件时显示「暂无文件」，且不出现下载 / 预览按钮', async () => {
+    // `file-empty` 是空态容器（标题 + 说明），所以用 includes 而不是全等比较。
+    await browser.waitFor(
+      `(document.querySelector('[data-testid="file-empty"]')?.innerText || '').includes('暂无文件')`,
+      15000,
+      '显示「暂无文件」',
+    )
     const labels = await fakeActionButtons()
-    assert.deepEqual(labels, [], `详情页不该有这些按钮：${labels.join('、')}`)
+    assert.deepEqual(labels, [], `没有文件时不该有这些按钮：${labels.join('、')}`)
+    assert.equal(await browser.exists('[data-testid="file-download"]'), false)
+    assert.equal(await browser.exists('[data-testid="file-preview"]'), false)
   })
 
   test('刷新详情页仍然在（真实 reload，不是前端假状态）', async () => {

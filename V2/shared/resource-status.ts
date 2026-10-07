@@ -172,17 +172,13 @@ export function editOutcomeFor(status: ResourceStatus): {
 }
 
 /** 预览白名单（业主 §14）：只有这四类在网页里预览，其余一律只下载。 */
-export const PREVIEWABLE_MIME_TYPES: readonly string[] = [
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'text/plain',
-]
-
-/** 不支持预览时，界面必须**逐字**显示这句话（业主指定原文）。 */
-export const PREVIEW_UNSUPPORTED_MESSAGE = '此文件类型暂不支持在线预览，请下载查看。'
-
-export function isPreviewable(mimeType: string): boolean {
-  const base = mimeType.split(';')[0].trim().toLowerCase()
-  return PREVIEWABLE_MIME_TYPES.includes(base)
-}
+/*
+ * 预览策略**不在这里**。
+ *
+ * 「哪些类型能在页面内预览」是**文件**的属性，不是资源状态的属性；
+ * 而且它必须与"允许上传哪些类型"读同一份表，否则会出现
+ * "允许上传但永远预览不了"或者反过来。
+ * 唯一实现见 `shared/file-policy.ts`：
+ *   PREVIEWABLE_MIME_TYPES / isPreviewableMime / isPreviewable / viewerFor /
+ *   PREVIEW_UNSUPPORTED_MESSAGE
+ */
