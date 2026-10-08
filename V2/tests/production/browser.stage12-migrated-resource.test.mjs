@@ -70,25 +70,63 @@ async function loginAs(username, password) {
   await browser.fill('[data-testid="login-password"]', password)
   await browser.click('[data-testid="login-submit"]')
   await browser.waitFor('!!document.querySelector(\'[data-testid="header"]\')', 30000, `登录 ${username}`)
+
+  // 业主 §1：逐步打印，不能只看最终结果
+  const probe = await browser.session.eval(`(async () => {
+    const cookieNames = document.cookie.split(';').map((c) => c.split('=')[0].trim()).filter(Boolean)
+    const me = await fetch('/api/auth/me', { credentials: 'same-origin' })
+    const meBody = await me.text()
+    const list = await fetch('/api/resources?page=1&pageSize=1', { credentials: 'same-origin' })
+    const listBody = await list.text()
+    let total = null
+    try { total = JSON.parse(listBody).total ?? null } catch {}
+    return JSON.stringify({ url: location.pathname, cookieNames, meStatus: me.status,
+                            meUser: (() => { try { return JSON.parse(meBody).user?.username ?? null } catch { return null } })(),
+                            listStatus: list.status, total, listHead: listBody.slice(0, 120) })
+  })()`)
+  const info = JSON.parse(probe)
+  console.log(`    · 地址 ${info.url}｜document.cookie: [${info.cookieNames.join(', ')}]`)
+  console.log(`    · /api/auth/me → ${info.meStatus}（user=${info.meUser ?? 'null'}）`)
+  console.log(`    · /api/resources → ${info.listStatus}（total=${info.total}）${info.listStatus !== 200 ? ' ' + info.listHead : ''}`)
 }
+
+describe('Stage 12B：登录与会话必须真的被证明过', () => {
+  test('负向证明：错口令必须 401，对的口令才 200/201（测试不是"总是当登录成功"）', async () => {
+    await browser.goto(`${BASE}/login`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="login-page"]\')', 25000, '登录页')
+
+    const attempt = async (username, password) =>
+      JSON.parse(
+        await browser.session.eval(`(async () => {
+          const csrf = (document.cookie.match(/v2_csrf=([^;]+)/) || [])[1] ?? ''
+          const res = await fetch('/api/auth/login', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', 'x-v2-csrf': csrf },
+            body: JSON.stringify({ username: ${JSON.stringify(username)}, password: ${JSON.stringify(password)} }),
+          })
+          return JSON.stringify({ status: res.status })
+        })()`),
+      )
+
+    const wrong = await attempt(ADMIN_USER, 'definitely-not-the-password')
+    console.log(`    · 错误口令 → HTTP ${wrong.status}`)
+    assert.equal(wrong.status, 401, `错误口令必须是 401（拿到 ${wrong.status} 说明这条测试证明不了任何事）`)
+
+    const right = await attempt(ADMIN_USER, ADMIN_PASSWORD)
+    console.log(`    · 正确口令 → HTTP ${right.status}`)
+    assert.equal([200, 201].includes(right.status), true, `正确口令必须是 200/201（拿到 ${right.status}）`)
+  })
+})
 
 describe('Stage 12B：迁移资源在目录里必须真的看得到', () => {
   test('目录页必须渲染资源列表，并列出一条迁移过来的真实资源', async () => {
     await loginAs(ADMIN_USER, ADMIN_PASSWORD)
 
-    // ① 接口是"真值"：找出**确实有资源**的那个目录路径（不是随便挑一个资料夹）
-    const listed = JSON.parse(
-      await browser.session.eval(
-        `fetch('/api/resources?page=1&pageSize=200',{credentials:'same-origin'}).then(r=>r.json()).then(j=>JSON.stringify(j))`,
-      ),
-    )
-    assert.equal((listed.total ?? 0) > 0, true, '迁移之后应当有资源')
-    const byPath = new Map()
-    for (const r of listed.items ?? []) byPath.set(r.directoryPath, (byPath.get(r.directoryPath) ?? 0) + 1)
-    const [targetPath, apiCount] = [...byPath.entries()].sort((a, b) => b[1] - a[1])[0]
-    assert.ok(targetPath, '至少要有一条带目录路径的资源')
-
-    // ② 该目录节点必须 allowFiles=true（否则浏览页根本不渲染列表 —— 这就是原缺陷）
+    /*
+      取"确实装着资源"的资料夹：
+      用目录树自带的 `resourceCount`（接口自己算的），而不是 `?pageSize=200` ——
+      后者超过接口上限会 400，解析出来没有 total，看起来像"迁移没数据"（本轮踩过）。
+    */
     const tree = JSON.parse(
       await browser.session.eval(
         `fetch('/api/directories/tree',{credentials:'same-origin'}).then(r=>r.json()).then(j=>JSON.stringify(j))`,
@@ -97,35 +135,54 @@ describe('Stage 12B：迁移资源在目录里必须真的看得到', () => {
     const flat = []
     const walk = (n, p) => {
       const path = p === '' ? n.slug : `${p}/${n.slug}`
-      flat.push({ id: n.id, path, allowFiles: n.allowFiles, name: n.name })
+      flat.push({ id: n.id, path, name: n.name, allowFiles: n.allowFiles, resourceCount: n.resourceCount ?? 0, type: n.type })
       for (const c of n.children ?? []) walk(c, path)
     }
     for (const r of tree.roots ?? []) walk(r, '')
-    const node = flat.find((f) => f.path === targetPath)
-    assert.ok(node, `目录树里应当有 ${targetPath}`)
+    const folders = flat.filter((f) => f.allowFiles && f.resourceCount > 0)
     assert.equal(
-      node.allowFiles,
+      folders.length > 0,
       true,
-      `目录「${node.name}」的 allowFiles 必须是 true —— 否则浏览页不渲染资源列表、上传也会被拒，` +
-        '资源迁进来了老师也看不到（Stage 12B 修的就是这条）',
+      `树里应当有装着资源的资料夹；实际 allowFiles 节点 ${flat.filter((f) => f.allowFiles).length} 个、` +
+        `其中 resourceCount>0 的 0 个（这本身就说明资源没落在资料夹层）`,
     )
+    const target = folders.sort((a, b) => b.resourceCount - a.resourceCount)[0]
+    /*
+      ⚠️ 不能用"树的 resourceCount"去判"Section 层有没有资源"：父节点的 resourceCount
+      含**子树**，所以任何祖先都大于 0（第一版就是这么写错的）。
+      Section 层是否真的为 0，用**接口按目录精确查**来判 —— 这才是同一口径。
+    */
+    const sectionOnly = flat
+      .filter((f) => !f.allowFiles)
+      .map((f) => f.id)
+      .slice(0, 5)
+    for (const id of sectionOnly) {
+      const own = JSON.parse(
+        await browser.session.eval(
+          `fetch('/api/resources?page=1&pageSize=1&directoryId=${id}',{credentials:'same-origin'}).then(r=>r.json()).then(j=>JSON.stringify({total:j.total}))`,
+        ),
+      )
+      assert.equal(own.total, 0, `导航节点 ${id} 自己不该直接挂资源（应当为 0，实际 ${own.total}）`)
+    }
 
-    // ③ 打开这个目录页：资源列表必须真的渲染出来，并列出资源
-    await browser.goto(`${BASE}/directory/${targetPath}`)
+    // 打开这个目录页：资源列表必须真的渲染出来
+    await browser.goto(`${BASE}/directory/${target.path}`)
     await browser.waitFor('!!document.querySelector(\'[data-testid="directory-page"]\')', 25000, '目录页')
     await browser.waitFor('!!document.querySelector(\'[data-testid="resource-list"]\')', 25000, '资源列表渲染')
     await browser.waitFor('!!document.querySelector(\'[data-testid="resource-card-title"]\')', 25000, '资源卡片')
     const titles = await browser.allTexts('[data-testid="resource-card-title"]')
-    assert.equal(titles.length > 0, true, `目录 ${targetPath} 的页面上应当列出资源，实际 0 条`)
-    const pageTotal = Number(String(await browser.text('[data-testid="resource-total"]')).replace(/\D/g, '') || '0')
-    assert.equal(pageTotal, apiCount, `页面显示 ${pageTotal} 条、接口说 ${apiCount} 条 —— 必须一致`)
-    console.log(`    ✅ ${targetPath}：页面列出 ${titles.length} 条，接口 ${apiCount} 条`)
+    assert.equal(titles.length > 0, true, `目录 ${target.path} 的页面上应当列出资源，实际 0 条`)
 
-    // ④ 目录里能上传（allow_files 也决定这件事）：按钮必须在
+    // 页面条数必须与接口自己算的 resourceCount 一致（防止渲染了却被前端过滤）
+    const pageTotal = Number(String(await browser.text('[data-testid="resource-total"]')).replace(/\D/g, '') || '0')
+    assert.equal(pageTotal, target.resourceCount, `页面显示 ${pageTotal} 条、接口说 ${target.resourceCount} 条 —— 必须一致`)
+    console.log(`    ✅ ${target.path}（${target.name}）：页面列出 ${titles.length} 条，接口 ${target.resourceCount} 条`)
+
+    // 能放资源的目录必须给出上传入口
     assert.equal(
       await browser.exists('[data-testid="directory-upload"]'),
       true,
-      '能放资源的目录必须给出「上传资源」入口（allow_files 的另一半影响）',
+      '能放资源的目录必须给出「上传资源」入口（allowFiles 的另一半影响）',
     )
   })
 
@@ -148,21 +205,13 @@ describe('Stage 12B：迁移资源在目录里必须真的看得到', () => {
     const flat = []
     const walk = (n, p) => {
       const path = p === '' ? n.slug : `${p}/${n.slug}`
-      flat.push({ id: n.id, path, allowFiles: n.allowFiles, name: n.name })
+      flat.push({ id: n.id, path, name: n.name, allowFiles: n.allowFiles, resourceCount: n.resourceCount ?? 0 })
       for (const c of n.children ?? []) walk(c, path)
     }
     for (const r of tree.roots ?? []) walk(r, '')
-    // 选一个**真的装着资源**的资料夹（接口为准），授权给这位老师
-    const listed = JSON.parse(
-      await browser.session.eval(
-        `fetch('/api/resources?page=1&pageSize=200',{credentials:'same-origin'}).then(r=>r.json()).then(j=>JSON.stringify(j))`,
-      ),
-    )
-    const paths = new Set((listed.items ?? []).map((r) => r.directoryPath))
-    const folder = flat.find((f) => f.allowFiles && paths.has(f.path))
+    const folder = flat.filter((f) => f.allowFiles && f.resourceCount > 0).sort((a, b) => b.resourceCount - a.resourceCount)[0]
     assert.ok(folder, '应当有一个装着资源的可放资源目录')
 
-    // 界面上的"权限"入口 → 直接调同一个接口（界面按钮的用例在 stage8/stage10 已覆盖）
     const grant = JSON.parse(
       await browser.session.eval(`(async () => {
         const csrf = (document.cookie.match(/v2_csrf=([^;]+)/) || [])[1] ?? ''
@@ -178,10 +227,10 @@ describe('Stage 12B：迁移资源在目录里必须真的看得到', () => {
       })()`),
     )
     assert.equal(grant.status, 200, `授权必须成功（生产切换要做 PRODUCTION_PERMISSION_BOOTSTRAP）：${JSON.stringify(grant)}`)
-    console.log(`    ✅ 已给 ${teacher.username} 开放 ${folder.path}`)
+    console.log(`    ✅ 已给 ${teacher.username} 开放 ${folder.path}（${folder.resourceCount} 条资源）`)
 
-    // 授权之后，该目录在管理员视角同样要列出资源（教师视角由集成用例覆盖：
-    // 迁移过来的账号口令不在我们手里，不能拿它假装登录）
+    // 授权之后该目录仍然正常列出资源（教师视角由集成用例覆盖：迁移来的口令不在我们手里，
+    // 不能拿它假装登录）
     await browser.goto(`${BASE}/directory/${folder.path}`)
     await browser.waitFor('!!document.querySelector(\'[data-testid="resource-list"]\')', 25000, '资源列表')
     const titles = await browser.allTexts('[data-testid="resource-card-title"]')
