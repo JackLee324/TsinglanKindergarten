@@ -1,0 +1,52 @@
+# 构建上下文白名单之外的**必须**排除项。
+# ============================================================================
+# 三条不能出错的：
+#   1. `.migration/` —— 里面是**生产快照**（含 session_hash 与 MFA 加密材料），
+#      绝不能进镜像层（镜像层可以被任何拿到镜像的人拉出来看）。
+#   2. `credentials/` 与任何 `.env*` —— 生产口令 / TOTP 密钥 / R2 密钥。
+#   3. `tests/`、`.devtools/`、`.devdata/` —— 本地测试数据与工具，不是生产内容。
+
+# 依赖与产物（镜像里自己装、自己构建）
+node_modules
+**/node_modules
+
+# 构建产物（镜像里现构建，避免把宿主机的旧产物带进去）
+dist
+dist *
+*.tsbuildinfo
+
+# ⚠️ 敏感：生产快照 / 迁移证据 / 演练库
+.migration
+migration-evidence
+
+# ⚠️ 敏感：生产凭据（gitignored，同样不能进镜像）
+../credentials
+credentials
+.env
+.env.*
+!.env.example
+!.env.deploy.example
+
+# 本地工具与数据
+.devtools
+.devdata
+*.log
+coverage
+.vscode
+.idea
+
+# 测试（生产镜像不需要；它们还会让镜像无谓变大）
+tests
+**/*.test.mjs
+
+# 文档与版本库
+.git
+.gitignore
+.github
+*.md
+!README.md
+
+# 本机偶发出现的带空格目录（SWC 会扫到它们，历史坑）
+* [0-9]
+server [0-9]
+shared [0-9]

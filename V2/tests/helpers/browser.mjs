@@ -542,7 +542,7 @@ export class Browser {
 }
 
 /** 启动 Chrome 并连上一个页面。 */
-export async function launchBrowser({ headless = true } = {}) {
+export async function launchBrowser({ headless = true, extraArgs = [] } = {}) {
   const chromePath = process.env.CHROME_BIN || CHROME_CANDIDATES.find((p) => existsSync(p))
   if (!chromePath) throw new Error('找不到 Chrome / Chromium（可用 CHROME_BIN 指定）')
 
@@ -558,6 +558,8 @@ export async function launchBrowser({ headless = true } = {}) {
     '--disable-extensions',
     '--disable-gpu',
     '--window-size=1440,1000',
+    // 生产/演练用：把额外的 Chrome 参数交给调用方（例如演练环境的自签证书）
+    ...extraArgs,
     'about:blank',
   ]
   if (headless) args.unshift('--headless=new')

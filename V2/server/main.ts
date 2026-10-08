@@ -18,6 +18,45 @@ async function bootstrap(): Promise<void> {
   // Express 适配器的实例方法（Nest 自己的 INestApplication 类型上没有）
   const express = app.getHttpAdapter().getInstance()
   express.disable('x-powered-by')
+
+  /*
+    反向代理：只信任**我们自己的那一跳**（业主 Stage 12 §11）。
+
+    为什么必须有：
+      · 生产拓扑是 HTTPS → Nginx → App。不设 trust proxy 时，`req.ip` 是代理容器的 IP，
+        审计里所有人的 IP 都一样、按 IP 的判定也全都失准；
+      · 而写 `app.set('trust proxy', true)` 更糟：那等于**相信客户端自己塞的
+        X-Forwarded-For**，任何人都能伪造来源 IP —— 审计与限流同时失效。
+
+    TRUST_PROXY 接受：
+      · 不设 / 0        → 不信任任何代理（直连、本机测试）
+      · 1               → 只信任最近一跳（单层代理，本项目默认）
+      · IP / CIDR 列表  → 只信任这些来源（多跳时用，例如 `10.0.0.0/8,172.16.0.0/12`）
+    一律拒绝 `true`：信任链上不出现"全都信"。
+  */
+  const trustProxyRaw = (process.env.TRUST_PROXY ?? '').trim()
+  if (trustProxyRaw !== '' && trustProxyRaw !== '0') {
+    if (trustProxyRaw.toLowerCase() === 'true') {
+      throw new Error(
+        'TRUST_PROXY=true 被拒绝：那会信任客户端伪造的 X-Forwarded-For。\n' +
+          '  单层代理用 TRUST_PROXY=1；多跳用明确的 IP/CIDR 列表。',
+      )
+    }
+    const hops = Number(trustProxyRaw)
+    if (Number.isInteger(hops) && hops > 0) {
+      express.set('trust proxy', hops)
+      logger.log(`trust proxy: ${hops} 跳（X-Forwarded-For 只取可信来源）`)
+    } else {
+      const list = trustProxyRaw.split(',').map((x) => x.trim()).filter((x) => x !== '')
+      for (const entry of list) {
+        if (!/^[0-9a-fA-F.:]+(\/[0-9]{1,3})?$/.test(entry)) {
+          throw new Error(`TRUST_PROXY 里有一项不是 IP 或 CIDR：「${entry}」`)
+        }
+      }
+      express.set('trust proxy', list)
+      logger.log(`trust proxy: 仅信任 ${list.join(', ')}`)
+    }
+  }
   // 内部工具：前端与 API 同源部署，因此不需要放开跨域。
   app.enableCors({ origin: false })
 

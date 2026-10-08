@@ -1,0 +1,114 @@
+# V2 单实例生产拓扑（业主 Stage 12 §1）
+# ============================================================================
+#   Internet → HTTPS → Nginx（TLS / 安全响应头 / 429 限流 / XFF 覆盖）→ V2 App → PostgreSQL
+#                                                                        └→ S3 兼容对象存储
+#
+# 单实例 App（**不做**横向扩容 / 多实例）—— 业主明确要求，直到限流迁到共享层为止。
+# 只有 proxy 对外暴露端口；app / db / minio 都在内部网络上，宿主机也够不到
+# （要执行一次性任务用 `docker compose run --rm …`，不要为了图方便把库暴露出去）。
+#
+# 本地完整演练与在 Zeabur 上跑的是**同一份镜像、同一套环境变量契约**：
+#   · 本地：db + minio + proxy 全在 compose 里（HTTPS 用自签证书，见 deploy/tls）
+#   · Zeabur：Postgres 用平台服务、对象存储用 V1 的 Cloudflare R2、TLS 用平台边缘，
+#     app 服务仍然由这个 Dockerfile 构建 —— 所以演练验证的东西是真的会用到的。
+
+name: qls-v2
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER 必填}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必填（部署前必须改掉示例值）}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB 必填}
+      # 生产库不做 reseed/truncate；这里也不提供任何"重置"入口。
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks: [internal]
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: qls-v2-app:${APP_VERSION:-local}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SERVER_PORT: '3300'
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # 32 字节 base64；缺了进程直接起不来（config.ts 里刻意没有默认密钥）
+      V2_SESSION_SECRET: ${V2_SESSION_SECRET:?必填（32 字节 base64）}
+      V2_DOWNLOAD_SECRET: ${V2_DOWNLOAD_SECRET:?必填（32 字节 base64）}
+      V2_SESSION_TTL_SECONDS: ${V2_SESSION_TTL_SECONDS:-43200}
+      V2_DOWNLOAD_TTL_SECONDS: ${V2_DOWNLOAD_TTL_SECONDS:-300}
+      # 生产必须 S3 兼容存储（config.ts 会拒绝 local）
+      STORAGE_PROVIDER: s3
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
+      STORAGE_REGION: ${STORAGE_REGION:-auto}
+      STORAGE_BUCKET: ${STORAGE_BUCKET}
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY}
+      STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-1}
+      # 只信任**代理容器**这一跳（业主 §11：不许写 true，也不许直接信客户端给的 XFF）
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      # ⚠️ 绝不设置 V2_ALLOW_DEV_SECRETS —— 生产用它等于把公开的默认密钥放上公网
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3300/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    networks: [internal]
+
+  # 本地演练用的 S3 兼容存储**不在 compose 里**（见 deploy/rehearsal-storage.mjs）：
+  #   · minio/minio 与 quay.io/minio/minio 都拉不到（仓库不存在 / 要认证）；
+  #   · 更重要的是生产里对象存储本来就在应用之外（Cloudflare R2），
+  #     把存储留在容器外反而更贴近生产拓扑。
+  # 演练存储由宿主机进程提供，容器经 host.docker.internal 访问它。
+  proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - '${PROXY_HTTP_PORT:-8080}:80'
+      - '${PROXY_HTTPS_PORT:-8443}:443'
+    environment:
+      # 模板里的变量由官方 entrypoint 的 envsubst 替换（/etc/nginx/templates/*.template）
+      V2_PUBLIC_ORIGIN: ${V2_PUBLIC_ORIGIN:?必填}
+      STORAGE_ORIGIN: ${STORAGE_ORIGIN:?必填（对象存储的 origin）}
+      LOGIN_RATE_LIMIT_RPM: ${LOGIN_RATE_LIMIT_RPM:-5}
+      LOGIN_RATE_LIMIT_BURST: ${LOGIN_RATE_LIMIT_BURST:-3}
+      # 对象存储的上游（演练：宿主机上的 SeaweedFS；生产没有这一项，因为 R2 是公网域名）
+      STORAGE_UPSTREAM: ${STORAGE_UPSTREAM:-host.docker.internal:18443}
+    volumes:
+      - ./deploy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/tls:/etc/nginx/tls:ro
+    healthcheck:
+      test: ['CMD', 'nginx', '-t']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [internal]
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+    driver: bridge
