@@ -40,6 +40,9 @@ const ADMIN_PASSWORD = process.env.MIGRATED_ADMIN_PASSWORD ?? ''
 const WORK = mkdtempSync(join(tmpdir(), 'v2-migrated-'))
 
 let browser
+/** 已经登录过的账号 —— 同一个浏览器只登录一次（代理的登录限流是 5r/m，
+ *  测试自己反复登录会被 429 挡住，那是"测试把门撞上"，不是产品问题）。 */
+let loggedInAs = null
 
 before(async () => {
   if (BASE === '') throw new Error('需要 MIGRATED_BASE_URL（对着已部署的环境跑）')
@@ -52,6 +55,16 @@ after(async () => {
   if (browser) await browser.close()
   rmSync(WORK, { recursive: true, force: true })
 })
+
+/** 需要会话时调用：已经登录就复用，不再打一次登录接口。 */
+async function ensureLoggedIn() {
+  if (loggedInAs !== null) {
+    await browser.goto(`${BASE}/`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="header"]\')', 25000, '会话仍然有效')
+    return
+  }
+  await loginAs(ADMIN_USER, ADMIN_PASSWORD)
+}
 
 async function loginAs(username, password) {
   await browser.goto(`${BASE}/`)
@@ -70,6 +83,7 @@ async function loginAs(username, password) {
   await browser.fill('[data-testid="login-password"]', password)
   await browser.click('[data-testid="login-submit"]')
   await browser.waitFor('!!document.querySelector(\'[data-testid="header"]\')', 30000, `登录 ${username}`)
+  loggedInAs = username
 
   // 业主 §1：逐步打印，不能只看最终结果
   const probe = await browser.session.eval(`(async () => {
@@ -88,6 +102,55 @@ async function loginAs(username, password) {
   console.log(`    · 地址 ${info.url}｜document.cookie: [${info.cookieNames.join(', ')}]`)
   console.log(`    · /api/auth/me → ${info.meStatus}（user=${info.meUser ?? 'null'}）`)
   console.log(`    · /api/resources → ${info.listStatus}（total=${info.total}）${info.listStatus !== 200 ? ' ' + info.listHead : ''}`)
+}
+
+
+/** 点开某一层（折叠的节点不渲染，必须先展开父级）。 */
+async function expandNavTo(path) {
+  const segments = path.split('/')
+  let prefix = ''
+  for (const seg of segments.slice(0, -1)) {
+    prefix = prefix === '' ? seg : `${prefix}/${seg}`
+    const toggle = `[data-nav-toggle="/directory/${prefix}"]`
+    /*
+      ⚠️ 必须**等**这一层的箭头出现再决定要不要点：导航是 React 状态驱动的，
+      上一级刚点开、下一级还没渲染出来时 `exists()` 会返回 false，
+      代码就会跳过它 —— 于是深层节点永远找不到（第一版就是这么失败的）。
+    */
+    const appeared = await browser
+      .waitFor(`!!document.querySelector('${toggle}')`, 8000, `${prefix} 的展开箭头`)
+      .then(() => true)
+      .catch(() => false)
+    if (!appeared) continue
+    if ((await browser.attr(toggle, 'aria-expanded')) !== 'true') {
+      await browser.click(toggle)
+      await new Promise((r) => setTimeout(r, 200))
+    }
+  }
+}
+
+/** 逐级点击进目录（**不输深层 URL**）——业主 §1 的要求。 */
+async function clickInto(path) {
+  if (await browser.exists('[data-testid="nav-open"]')) {
+    await browser.click('[data-testid="nav-open"]')
+    await browser.waitFor(`!!document.querySelector('[data-testid="mobile-drawer"]')`, 15000, '抽屉')
+  }
+  const nav = `[data-nav="/directory/${path}"]`
+  if (!(await browser.exists(nav))) await expandNavTo(path)
+  await browser.waitFor(`!!document.querySelector('${nav}')`, 25000, `导航里有 /directory/${path}`)
+  await browser.click(nav)
+  await browser.waitFor(
+    `document.querySelector('[data-testid="directory-page"]')?.getAttribute('data-directory-path') === '${path}'`,
+    25000,
+    `到达 ${path}`,
+  )
+}
+
+const apiTotal = async (directoryId) => {
+  const raw = await browser.session.eval(
+    `fetch('/api/resources?page=1&pageSize=1&directoryId=${directoryId}',{credentials:'same-origin'}).then(r=>r.json()).then(j=>JSON.stringify({total:j.total}))`,
+  )
+  return JSON.parse(raw).total
 }
 
 describe('Stage 12B：登录与会话必须真的被证明过', () => {
@@ -120,7 +183,7 @@ describe('Stage 12B：登录与会话必须真的被证明过', () => {
 
 describe('Stage 12B：迁移资源在目录里必须真的看得到', () => {
   test('目录页必须渲染资源列表，并列出一条迁移过来的真实资源', async () => {
-    await loginAs(ADMIN_USER, ADMIN_PASSWORD)
+    await ensureLoggedIn()
 
     /*
       取"确实装着资源"的资料夹：
@@ -187,7 +250,7 @@ describe('Stage 12B：迁移资源在目录里必须真的看得到', () => {
   })
 
   test('教师被授权之后同样看得到（生产切换必须做的权限初始化）', async () => {
-    await loginAs(ADMIN_USER, ADMIN_PASSWORD)
+    await ensureLoggedIn()
 
     const users = JSON.parse(
       await browser.session.eval(
@@ -236,5 +299,98 @@ describe('Stage 12B：迁移资源在目录里必须真的看得到', () => {
     const titles = await browser.allTexts('[data-testid="resource-card-title"]')
     assert.equal(titles.length > 0, true, `授权后目录 ${folder.path} 应当列出资源`)
     console.log(`    ✅ ${folder.path} 列出 ${titles.length} 条`)
+  })
+})
+
+describe('Stage 12B：多目录逐级点击验证（Pre-K / K 中文 / 教师成长）', () => {
+  test('Pre-K / 美德 的四类资料夹：页面进入、列表渲染、页面条数与接口一致', async () => {
+    await ensureLoggedIn()
+    const tree = JSON.parse(
+      await browser.session.eval(
+        `fetch('/api/directories/tree',{credentials:'same-origin'}).then(r=>r.json()).then(j=>JSON.stringify(j))`,
+      ),
+    )
+    const flat = []
+    const walk = (n, p) => {
+      const path = p === '' ? n.slug : `${p}/${n.slug}`
+      flat.push({ id: n.id, path, name: n.name, allowFiles: n.allowFiles, resourceCount: n.resourceCount ?? 0 })
+      for (const c of n.children ?? []) walk(c, path)
+    }
+    for (const r of tree.roots ?? []) walk(r, '')
+
+    const virtue = flat.find((f) => f.path === 'edu/prek/virtue')
+    assert.ok(virtue, '树里应当有 edu/prek/virtue')
+    const folders = flat.filter((f) => f.path.startsWith('edu/prek/virtue/') && f.allowFiles)
+    assert.equal(folders.length, 4, `美德下应当有 4 个资料夹，实际 ${folders.length}：${folders.map((f) => f.name).join('/')}`)
+
+    await browser.goto(`${BASE}/`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="header"]\')', 25000, '外壳')
+    for (const folder of folders) {
+      await clickInto(folder.path)
+      // 有资源时渲染 resource-list，空目录渲染 resource-list-empty —— 两种都算"列表区块出现了"
+      await browser.waitFor(
+        `!!document.querySelector('[data-testid="resource-list"]') || !!document.querySelector('[data-testid="resource-list-empty"]')`,
+        25000,
+        `${folder.name} 的资源区块`,
+      )
+      const pageTotal = Number(String(await browser.text('[data-testid="resource-total"]')).replace(/\D/g, '') || '0')
+      const api = await apiTotal(folder.id)
+      assert.equal(pageTotal, api, `${folder.path}：页面 ${pageTotal} 条 / 接口 ${api} 条 必须一致`)
+      console.log(`    ✅ ${folder.path}（${folder.name}）：页面 ${pageTotal} = 接口 ${api}`)
+    }
+  })
+
+  test('K / 中文教学 / 绘本阅读 的四类资料夹（带 sub_subject 那一级）', async () => {
+    await ensureLoggedIn()
+    const tree = JSON.parse(
+      await browser.session.eval(
+        `fetch('/api/directories/tree',{credentials:'same-origin'}).then(r=>r.json()).then(j=>JSON.stringify(j))`,
+      ),
+    )
+    const flat = []
+    const walk = (n, p) => {
+      const path = p === '' ? n.slug : `${p}/${n.slug}`
+      flat.push({ id: n.id, path, name: n.name, allowFiles: n.allowFiles, resourceCount: n.resourceCount ?? 0 })
+      for (const c of n.children ?? []) walk(c, path)
+    }
+    for (const r of tree.roots ?? []) walk(r, '')
+
+    const reading = flat.find((f) => f.path === 'edu/k/chinese/reading')
+    assert.ok(reading, '树里应当有 edu/k/chinese/reading（带 sub_subject 那一级）')
+    const folders = flat.filter((f) => f.path.startsWith('edu/k/chinese/reading/') && f.allowFiles)
+    assert.equal(folders.length, 4, `绘本阅读下应当有 4 个资料夹，实际 ${folders.length}`)
+
+    await browser.goto(`${BASE}/`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="header"]\')', 25000, '外壳')
+    for (const folder of folders) {
+      await clickInto(folder.path)
+      // 有资源时渲染 resource-list，空目录渲染 resource-list-empty —— 两种都算"列表区块出现了"
+      await browser.waitFor(
+        `!!document.querySelector('[data-testid="resource-list"]') || !!document.querySelector('[data-testid="resource-list-empty"]')`,
+        25000,
+        `${folder.name} 的资源区块`,
+      )
+      const pageTotal = Number(String(await browser.text('[data-testid="resource-total"]')).replace(/\D/g, '') || '0')
+      const api = await apiTotal(folder.id)
+      assert.equal(pageTotal, api, `${folder.path}：页面 ${pageTotal} 条 / 接口 ${api} 条 必须一致`)
+      console.log(`    ✅ ${folder.path}（${folder.name}）：页面 ${pageTotal} = 接口 ${api}`)
+    }
+  })
+
+  test('教师成长：L1 → 安全施教规范 → 应急预案 → 传染病识别与防治（刷新后仍在）', async () => {
+    await ensureLoggedIn()
+    await browser.goto(`${BASE}/`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="header"]\')', 25000, '外壳')
+
+    const chain = ['growth', 'growth/l1', 'growth/l1/safety', 'growth/l1/safety/plan', 'growth/l1/safety/plan/disease']
+    for (const path of chain) await clickInto(path)
+    const title = String(await browser.text('[data-testid="directory-title"]'))
+    console.log(`    ✅ 逐级点击到达：${title}`)
+
+    // 刷新后仍在同一个目录（URL 由 code 推导，刷新不该丢）
+    await browser.reload()
+    await browser.waitFor('!!document.querySelector(\'[data-testid="directory-page"]\')', 25000, '刷新后')
+    const after = String(await browser.text('[data-testid="directory-title"]'))
+    assert.equal(after, title, '刷新后应当仍在同一个目录')
   })
 })
