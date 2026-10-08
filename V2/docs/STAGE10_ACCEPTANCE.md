@@ -20,8 +20,8 @@
 | 42 条验收 | **全部通过** |
 | console error / 404 资源 / 500 API / CORS | **0**（且有"采集器自检"证明它不是永远为 0） |
 | 门禁 | unit 194 + integration 529 = **723 通过，0 失败**；typecheck / lint / build 全绿 |
-| Chrome desktop | ✅ 本阶段就是它跑的 |
-| Safari desktop | ⚠ **UNVERIFIED** —— 被一次性系统设置阻塞，见 §4 |
+| Chrome desktop | ✅ 42 条（`tests/integration/browser.stage10.test.mjs`） |
+| Safari desktop | ✅ **真 Safari 已跑通**（`tests/safari/acceptance.safari.test.mjs`，10/10，见 §4） |
 | 422 / 429 | ⚠ **V2 的错误契约里没有这两个码**，见 §5 |
 
 ## 2. 本阶段**发现并补齐**的两处 INCOMPLETE
@@ -83,56 +83,83 @@
 | ⑰ | 空状态 | 完全没有资源 → 「暂无资源」；只有未发布的资源 → 浏览页对谁都显示空（**这是设计**：浏览页只列已发布），而本人在「我的资源 → 草稿」里看得到 |
 | ⑱ | 错误码 | 401（接口 + 界面被送登录页）、403（越权删除，带可读原因）、404（接口 + 界面「找不到这条资源」而不是白屏）、409（用户名重复 → 界面说清是用户名问题）；422/429 见 §5 |
 | ⑲ | Console / 网络 | 整条流程 0 条问题；并有一条**采集器自检**（故意制造 console.error 与 404，确认真的被抓到）——否则"永远为 0"的门禁等于没有门禁 |
-| ⑳ | Chrome / Safari | Chrome ✅；Safari 见 §4 |
-| ㉑ | 测试与门禁 | 723 通过 0 失败；typecheck / lint / build 全绿 |
+| ⑳ | Chrome / Safari | Chrome ✅ 42 条；Safari ✅ 10/10（真 Safari，见 §4） |
+| ㉑ | 测试与门禁 | 723 通过 0 失败；typecheck / lint / build 全绿；Safari 那一遍 10/10 |
 | ㉒ | commit + push | 见提交记录 |
 
-## 4. Safari：为什么是 UNVERIFIED（不是"跑过了"）
+## 4. Safari Desktop：**真 Safari 已跑通**（第二引擎）
 
-`safaridriver` 在机器上是有的（Safari 26.6），但**建会话被系统拒绝**：
+业主 §20 要求 Safari 也跑一次，并在 §"一"里给出了这一遍必须覆盖的步骤。
+脚本：`tests/safari/acceptance.safari.test.mjs`（W3C WebDriver，零依赖，
+`tests/helpers/safari.mjs` 自己实现 —— 没有引入 Playwright）。
+命令：`safaridriver -p 4444` 然后 `npm run test:safari`。
 
-```
-Could not create a session: You must enable 'Allow remote automation'
-in the Developer section of Safari Settings to control Safari via WebDriver.
-```
+### 4.1 结果：10/10 通过，9 个业务步骤全部 PASS
 
-这是 Apple 的**一次性人工开关**，自动化打不开：
+| 步骤 | 结果 | 验的是什么 |
+|---|---|---|
+| 打开登录页并登录 | **PASS** | Safari 里的真实表单提交（`SameSite`/`HttpOnly` Cookie 在 WebKit 上照常工作） |
+| 一格格点进 教学资源 | **PASS** | 教育教学 → Pre-K → 美德 → 教学资源，每一步都核对 `data-directory-path` |
+| 点开资源详情 | **PASS** | 列表 → 详情页，标题一致 |
+| PDF 预览 | **PASS** | iframe + 签名地址；并且**让 Safari 自己去请求那个地址**，核对 `200` / `application/pdf` / 字节数 |
+| 图片预览 | **PASS** | `img.complete && naturalWidth > 0 && naturalHeight > 0` —— Safari 真的解码出来了 |
+| 下载 | **PASS** | 点下载 → 服务端 `resource.download` 审计落库（target 是**文件 id**）→ Safari 取回字节并算 sha256，与上传逐字节一致，且响应带 `Content-Disposition: attachment` |
+| 我的资源 → 提交审核 | **PASS** | 草稿提交后库里变成 `PENDING_REVIEW` |
+| 管理员审核 → 通过并发布 | **PASS** | 同一个 Safari 窗口里换账号登录（退出→登录），点「通过并发布」，库里变成 `PUBLISHED` |
+| 撤回 → 删除 → 回收站 → 恢复 | **PASS** | `published → recall → 删除（软删）→ 回收站恢复`，每一步都回库核对 `status` / `deleted_at` |
 
-* `safaridriver --enable` 会要**管理员密码**（本机试过：`Password is not valid`）；
-* 直接写 Safari 的偏好也不行（Safari 的容器有沙箱：
-  `Could not write domain …/Containers/com.apple.Safari/…`）。
+**关于点击**：这一遍的 100% 点击都走 **WebDriver 标准点击（含 Safari 自己的命中测试）**，
+没有一处退回"页面内 click"。这一点是逐条核对的：驱动在设置不可交互时才会退，
+而这次一次都没退。
 
-所以本阶段**没有**把 Safari 那一遍算作通过。已经准备好的是"打开开关就能跑"：
+**关于下载**：浏览器的下载会落进**用户自己的**下载目录，我们不去翻人家的目录；
+所以字节核对用的是"应用自己申请的签名地址 + Safari 去取"，再叠加服务端审计，
+两条独立证据合起来证明这次下载真的发生了。
 
-```bash
-# 0) Safari → 设置 → 开发者 → 勾选「允许远程自动化」
-#    （没有「开发者」菜单：Safari → 设置 → 高级 → 显示网页开发者功能）
-# 1) 让服务跑起来（例如 npm test 会起 3311，或已部署的地址）
-safaridriver -p 4444
-# 2) 真实 Safari 跑关键路径：登录 → 教育教学 → Pre-K → 美德 → 教学资源 → 资源详情
-npm run verify:safari -- --base http://127.0.0.1:3311 \
-  --user s10_teacher_a --pass 'S10TeacherA!1' --shot /tmp/safari-stage10.png
-```
+### 4.2 Safari 比 Chrome 多做了一件事：它抓出一个真问题
 
-`tests/helpers/safari.mjs`（零依赖的 W3C WebDriver 客户端）+ `scripts/verify-safari.mjs`
-已经写好并验证过**失败路径**：开关没打开时它打印照做即可的两步说明并以退出码 2 结束，
-**不会**假装通过。开关打开后同一条命令会走完关键路径并留下截图。
+第一次跑 Safari 时，侧边栏的 6 个导航项全部被判 `element not interactable`，
+命中测试显示 **尺寸 0×0**。于是量了一遍（Safari 实测）：
 
-> 为什么坚持要第二种引擎：Safari 与 Chromium 在 `SameSite` Cookie、`HttpOnly`、
-> fetch 缓存、PDF 内联预览上都有差异，而这类差异**只会在另一种引擎上暴露**。
-> 阶段 11（手机端）会再遇到一次同样的问题（iPhone 上是 WebKit）。
+| 视口宽 | 侧边栏宽 | 可见导航项 | 汉堡/抽屉按钮 |
+|---:|---:|---:|---:|
+| 1440px | 240px | 9 | 0 |
+| 1200px | 240px | 9 | 0 |
+| **1023px** | **0px** | **0** | **0** |
+| 900px | 0px | 0 | 0 |
+| 390px | 0px | 0 | 0 |
+
+**结论：视口窄于 1024px 时，整个站点没有任何导航入口。**
+侧边栏是 `hidden … lg:flex`，而 **没有**汉堡菜单、也没有底部导航
+（`Layout.tsx` 里除了 `lg:pl-60` 没有任何窄屏分支）。
+也就是说：**在手机上，老师只能靠输地址来进目录** —— 这正是阶段 11 要解决的问题，
+本阶段**只记录、不顺手加功能**（业主的 Stage 11 明确说"不要重新设计 UI，只修响应式"）。
+
+桌面端 Safari 这一遍因此先把窗口设成 1440×900（业主要的就是 "Safari desktop"），
+并把这个前提**写在测试里**（`setWindowRect` 的注释），避免以后有人把视口问题当成业务问题。
+
+### 4.3 前提：Safari 的一次性开关
+
+`safaridriver` 建会话需要系统级的一次性开关（自动化打不开它）：
+
+* Safari → 设置 → 开发者 → 勾选「允许远程自动化」
+  （没有「开发者」菜单：设置 → 高级 → 显示网页开发者功能）；
+* 或 `safaridriver --enable`（要管理员密码）。
+
+没有打开时 `npm run test:safari` 会**红在第一句**，报错信息就是上面这两步 ——
+它不会跳过、也不会假装通过。**业主已打开此开关，本节结果是在打开之后跑出来的真结果。**
 
 ## 5. 422 / 429：这两个码在 V2 里不存在（如实说明，不造假）
 
 业主 §18 要求"真实制造 401/403/404/409/422/429"。前四个已真实制造（见 §3 ⑱）。
 后两个**造不出来**，因为它们是设计上不存在的：
 
-* **422**：V2 的入参校验一律回 **400 + 机器可读的 `code`**（class-validator + 统一错误体），
+* **422**：**V2 的 API 校验用 400**（class-validator + 统一错误体，带机器可读的 `code`），
   没有"语法对、语义错用 422"这一层。用例里钉住的是这条真实契约。
-* **429**：V2 **没有实现限流**（全仓没有任何产出 429 的代码）。
-  用例里如实记录了"连续 5 次登录失败也都是 401，没有 429"。
-  限流属于部署层（Nginx / Caddy），是**阶段 12** 的课题 —— 业主在 §18 里也把 429
-  列进了"阶段 12 要能看到的东西"。
+  **不会为了凑状态码去加 422。**
+* **429**：**限流属于阶段 12 的反向代理**（Nginx / Caddy），本阶段**不在业务层加限流**。
+  V2 目前没有实现限流（全仓没有任何产出 429 的代码），用例里如实记录了
+  "连续 5 次登录失败也都是 401，没有 429"；阶段 12 会在代理层产生并观测 429。
 
 与其伪造一个 422/429，不如把真实发生的事写下来。这是本阶段唯一一处
 "要求的东西不存在"，也是唯一需要在生产验收前补的一课。
@@ -142,8 +169,14 @@ npm run verify:safari -- --base http://127.0.0.1:3311 \
 ```bash
 cd V2
 export V2_TEST_DATABASE_URL='postgresql://qlsadmin:qlsdev_local_only@127.0.0.1:55432/qls_v2_test'
-node --test tests/integration/browser.stage10.test.mjs   # 42 条，约 3 分钟
-npm test                                                  # 全量门禁（含上面这份）
+
+# ① Chrome：42 条业务验收（约 4 分钟）
+node --test tests/integration/browser.stage10.test.mjs
+# ② Safari：同样这条链路的第二引擎验收（10/10）
+safaridriver -p 4444 &
+npm run test:safari
+# ③ 全量门禁（含 ①，不含 ② —— 它需要系统开关）
+npm test
 ```
 
 用例会自己建库、建账号、造文件（八种类型的真实字节）、清理自己的探针，

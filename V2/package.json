@@ -27,7 +27,8 @@
     "storage:check": "node scripts/check-storage.mjs",
     "storage:cors": "node scripts/configure-bucket-cors.mjs",
     "storage:cleanup": "node scripts/cleanup-orphans.mjs",
-    "verify:safari": "node scripts/verify-safari.mjs"
+    "verify:safari": "node scripts/verify-safari.mjs",
+    "test:safari": "node --test --test-concurrency=1 tests/safari/*.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1147.0",
