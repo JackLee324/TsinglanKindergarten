@@ -18,6 +18,10 @@
  *
  * 用法见 docs/V1_MIGRATION.md §12。
  */
+import {
+  buildDirectoryCodeIndex,
+  resolveLegacyResourceDirectory,
+} from './lib/resolve-legacy-directory.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -533,6 +537,8 @@ function arg(name, fallback = null) {
 const has = (name) => process.argv.includes(`--${name}`)
 
 async function main() {
+  /** UNRESOLVED_DIRECTORY 清单（要写进报告、也要在终端里说清楚）。 */
+  const resolutionFailures = []
   const sourceUrl = arg('source') ?? process.env.V1_SOURCE_DATABASE_URL
   const targetUrl = arg('target') ?? process.env.DATABASE_URL
   if (!sourceUrl || sourceUrl === true || !targetUrl) {
@@ -679,6 +685,30 @@ async function main() {
         for (const f of allowFix.slice(0, 5)) console.log(`     ${f.name}（${f.slug}）：${f.from} → ${f.to}`)
       }
 
+      /*
+        ── 目录 code 索引（**必须是建完目录之后的新数据**）────────────────────
+        历史缺陷就出在这里：落位时用的是**导入前**读到的目录列表，新建的资料夹
+        自然查不到 → 找不到资料夹 → 回退到科目层 → 资源落在 allowFiles=false 的节点上
+        （库里对、接口对、老师在目录里看不到）。阶段 9 的预演目标是已有种子树的库，
+        所以那条分支从没跑过，缺陷一直藏着。
+
+        现在：V2 的 directories 表没有 code 列，code 来自 `v1_migration_map`
+        （导入时写进去的 V1 code），这里 join 出 code → {id, path} 的索引，
+        并且**重新查一次** V2 目录（含刚建的）。
+      */
+      const v2DirRows = await tx`
+        WITH RECURSIVE t AS (
+          SELECT id, parent_id, slug::text AS path FROM directories WHERE parent_id IS NULL
+          UNION ALL
+          SELECT d.id, d.parent_id, t.path || '/' || d.slug FROM directories d JOIN t ON d.parent_id = t.id
+        )
+        SELECT DISTINCT d.id::text, m.legacy->>'code' AS code, d.name, t.path
+        FROM directories d
+        JOIN t ON t.id = d.id
+        LEFT JOIN v1_migration_map m
+          ON m.v2_id = d.id::text AND m.entity = 'directory' AND m.source = ${sourceLabel}`
+      const directoryIndex = buildDirectoryCodeIndex(v2DirRows)
+
       // ── 用户 ────────────────────────────────────────────────────────────
       const passwordless = []
       const adminConversions = []
@@ -776,45 +806,43 @@ async function main() {
           problems.push({ level: 'fatal', entity: 'resource', id: r.id, why: `V1 状态「${r.status}」没有对应值` })
           continue
         }
-        const v1Dir = r.directory_id ? dirMap.matched.get(r.directory_id) : null
         /*
-          先按 V1 自己的分类表找**资料夹**（V2 的浏览页只在资料夹层列资源）；
-          找不到就把资源留在 V1 的目录上，并记一笔"这个位置在浏览页看不见"。
+          **唯一的落位判定**：program + subject + sub_subject + folder_type → 精确 code 匹配。
+          见 scripts/lib/resolve-legacy-directory.mjs（导入 / 报告 / 测试共用同一个）。
+          ⚠️ 这里**没有**"找不到就退回科目层"这条退路 —— 那会让资源落在
+          allowFiles=false 的节点上：库里对、接口对、老师在目录里看不到。
         */
-        const folderSlug = FOLDER_TYPE_TO_FOLDER_SLUG[r.folder_type]
-        const anchor = v1Dir ? subjectAnchor(v1.directories, r.directory_id) : null
-        const anchorV2 = anchor ? dirMap.matched.get(anchor.id) ?? null : null
-        const folder = anchorV2 && folderSlug ? v2Child(v2Dirs, anchorV2.id, folderSlug) : null
-        const dir = folder ?? v1Dir
-        if (v1Dir && !folder) {
-          problems.push({
-            level: 'review',
-            entity: 'resource',
-            id: r.id,
-            why: `folder_type「${r.folder_type}」在 V1 的分类表里没有对应资料夹，` +
-              '资源留在原目录；该位置在 V2 的目录浏览里不列资源，需要人工决定去哪个资料夹',
-          })
-        }
-        if (!dir) {
-          const why = r.directory_id ? 'V1 的目录在 V2 找不到对应节点' : 'V1 里就没有目录归属'
-          unassigned.push({ id: r.id, title: r.title, v1DirectoryId: r.directory_id, why })
+        const resolved = resolveLegacyResourceDirectory(
+          {
+            program: r.program,
+            subject: r.subject,
+            sub_subject: r.sub_subject,
+            folder_type: r.folder_type,
+          },
+          directoryIndex,
+        )
+        if (!resolved.resolved) {
           /*
-            ⚠️ 这里必须是 **fatal**，不能只记一笔然后 continue。
-
-            V2 的 `resources.directory_id` 是 NOT NULL，"未归属"在 V2 里不是一个目录节点
-            （产品上也没有这个页面），所以脚本**没有地方**放它。若只是 `continue`，
-            这条资源就从迁移结果里**悄悄消失**了 —— 而"丢了资源"正是本阶段最不能接受的
-            结果，且它不会以任何报错的形式出现（第一版就是这么写的，
-            被 `资源没有目录归属 → 停止` 那条用例当场抓住）。
+            无法唯一确定叶目录 → **不写入任何目录**（尤其不写科目层 Section）。
+            记成 fatal：宁可整批停下、把清单交给人，也不把资源搬到老师找不到的地方。
           */
+          resolutionFailures.push({
+            id: r.id,
+            title: r.title,
+            tuple: `${r.program} / ${r.subject} / ${r.sub_subject ?? '—'} / ${r.folder_type}`,
+            reason: resolved.reason,
+          })
           problems.push({
             level: 'fatal',
             entity: 'resource',
             id: r.id,
-            why: `${why}：V2 没有"未归属"节点，请先决定它应该进哪个目录（清单见 UNASSIGNED_RESOURCES.md）`,
+            why: `目录无法唯一确定（UNRESOLVED_DIRECTORY）：${resolved.reason}；` +
+              `元组 ${r.program} / ${r.subject} / ${r.sub_subject ?? '—'} / ${r.folder_type}`,
           })
           continue
         }
+        const dir = { id: resolved.directoryId }
+
         const uploadedBy = r.uploader_id && userMap.has(r.uploader_id) ? r.uploader_id : null
         if (r.uploader_id && !uploadedBy) {
           problems.push({ level: 'review', entity: 'resource', id: r.id, why: `上传者 ${r.uploader_id} 没有迁移（账号被跳过）` })
@@ -834,8 +862,8 @@ async function main() {
           folderType: r.folder_type, program: r.program, subject: r.subject,
           subSubject: r.sub_subject, semester: r.semester, weekNumber: r.week_number,
           theme: r.theme, v1Status: r.status, v1DirectoryId: r.directory_id,
-          placedIn: folder ? `folder:${folderSlug}` : 'v1-directory',
-          placementBasis: folder ? 'folder_type（V1 的分类表）' : 'V1 的 directory_id（分类表里没有这个值）',
+          placedIn: `folder:${resolved.code}`,
+          placementBasis: `resolver：program+subject+sub_subject+folder_type → ${resolved.code}（${resolved.reason}）`,
           v1Versions: versionCount.get(r.id) ?? 0,
           v1ReviewerId: r.reviewer_id, v1ReviewComment: r.review_comment,
           deletedBy: r.deleted_by, purgeAfter: r.purge_after,
@@ -1001,28 +1029,7 @@ async function main() {
   }
 }
 
-/** 在 V2 的目录表里找某个父节点下、指定 slug 的子节点。 */
-function v2Child(dirs, parentId, slug) {
-  return dirs.find((d) => d.parent_id === parentId && d.slug === slug) ?? null
-}
 
-/**
- * 从 V1 的目录节点往上找到**科目/分支那一层**（跳过 V1 的资料夹节点）。
- *
- * 为什么要往上找：V1 里两种位置都存在 ——
- *   · 实测的 348 条资源挂在**科目层**（美德 / 蒙特梭利 / 英文教学）；
- *   · 但 V1 的目录表里也有 40 个 `folder` 节点，资源完全可能挂在资料夹上。
- * 而 V2 的资料夹是**科目节点的子节点**，所以无论起点是科目还是资料夹，
- * 都要先回到科目那一层，才能找到对应的 V2 资料夹（lesson / outline / …）。
- */
-function subjectAnchor(v1Dirs, v1DirId) {
-  const byId = new Map(v1Dirs.map((d) => [d.id, d]))
-  let node = byId.get(v1DirId) ?? null
-  while (node && node.type === 'folder' && node.parent_id) {
-    node = byId.get(node.parent_id) ?? null
-  }
-  return node
-}
 
 function findDirectoryIdByCode(dirs, code) {
   const hit = dirs.find((d) => d.code === code)
