@@ -284,6 +284,29 @@ export async function startServer(options = {}) {
   serverProcess.stdout.on('data', (d) => logs.push(String(d)))
   serverProcess.stderr.on('data', (d) => logs.push(String(d)))
 
+  /*
+    ⚠️ 下面这两行不是可有可无的：子进程的 stdout/stderr 是**管道**，
+    只要还有人在读，Node 的事件循环就一直"有活干"。
+    于是当 `after` 钩子里的断言先抛了、`stopServer()` 被跳过时，
+    测试进程会**永远不退出**（阶段 11 整跑时真的卡了 40 多分钟），
+    而那个端口上还挂着一个旧服务，后面的套件会踩在它身上 ——
+    表现是一堆"会话不对/资源不是自己的"这类看不懂的失败。
+
+    处理：stream 与子进程都 unref（数据照收，只是不再吊着事件循环），
+    再挂一个 exit 兜底：无论如何都要把服务杀掉。
+  */
+  serverProcess.stdout.unref?.()
+  serverProcess.stderr.unref?.()
+  serverProcess.unref?.()
+  const killServerOnExit = () => {
+    try {
+      serverProcess?.kill('SIGKILL')
+    } catch {
+      /* 已经没了 */
+    }
+  }
+  process.on('exit', killServerOnExit)
+
   let exited = null
   serverProcess.on('exit', (code, signal) => {
     exited = { code, signal }

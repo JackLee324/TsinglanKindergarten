@@ -288,8 +288,24 @@ describe('① 完整业务链：管理员 → 教师 → 上传 → 审核 → �
     await browser.waitFor('!!document.querySelector(\'[data-testid="permission-editor"]\')', 20000, '权限编辑器')
     await browser.click('[data-testid="permission-resource.view"]')
     await browser.click('[data-testid="permission-resource.download"]')
-    const expanded = await browser.exists('[data-testid="directory-option-toggle-pre-k"]')
-    if (expanded) await browser.click('[data-testid="directory-option-toggle-pre-k"]')
+    /*
+      ⚠️ 展开「Pre-K」之前必须先等目录树渲染出来。
+      原来是 `const expanded = await exists(toggle); if (expanded) await click(toggle)`
+      —— 一个静默短路：树还在路上时什么都不做、也不报错，
+      失败会以"「美德」怎么等都不出现"的形式出现在 20 秒之后，
+      完全看不出真正原因。现在树没出来就明确失败。
+    */
+    await browser.waitFor(
+      `document.querySelectorAll('[data-testid^="directory-option-"]').length > 0`,
+      20000,
+      '权限编辑器里的目录树',
+    )
+    assert.equal(
+      await browser.exists('[data-testid="directory-option-toggle-pre-k"]'),
+      true,
+      '权限编辑器里应当有 Pre-K 的展开箭头',
+    )
+    await browser.click('[data-testid="directory-option-toggle-pre-k"]')
     await browser.waitFor('!!document.querySelector(\'[data-testid="directory-option-virtue"]\')', 20000, '「美德」出现')
     await browser.click('[data-testid="directory-option-virtue"]')
     await browser.click('[data-testid="create-user-submit"]')

@@ -41,6 +41,16 @@ export function AdminUsersPage() {
   const [editing, setEditing] = useState<AdminUserRow | null>(null)
   const [permissionTarget, setPermissionTarget] = useState<AdminUserRow | null>(null)
 
+  /*
+    ⚠️ 取数之前先看能力位 —— 这不是装饰：没有这一步的话，一位老师打开
+    `/admin/users` 会**先把页面挂载起来、发出请求、拿到 403**，然后才渲染
+    「你没有教师管理权限」。服务端是对的（403，不泄露任何数据），但在浏览器里
+    会留下 3 条凭空的 403 与 console error —— 阶段 11 的「console 0 错误」门禁
+    在真机上正是被这一类噪音绊住的。能力位在 `RequireAuth` 放行时就已经拿到了
+    （它等 `ready`），所以这里不会出现"还没加载就先不请求"的闪烁。
+  */
+  const canManageUsers = capabilities?.canManageUsers === true
+
   const reload = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -64,10 +74,11 @@ export function AdminUsersPage() {
   }, [appliedQuery, statusFilter, page])
 
   useEffect(() => {
+    if (!canManageUsers) return
     void reload()
-  }, [reload])
+  }, [reload, canManageUsers])
 
-  if (capabilities?.canManageUsers !== true) {
+  if (!canManageUsers) {
     return (
       <EmptyState
         title="你没有教师管理权限"

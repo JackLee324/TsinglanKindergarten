@@ -31,7 +31,14 @@ export function AdminPermissionsPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  /*
+    先看能力位再取数（同 AdminUsersPage / AdminAuditPage）：老师在手机上打开
+    `/admin/permissions` 时不该先发两次必然 403 的请求再被告知"你没权限"。
+  */
+  const canManageUsers = capabilities?.canManageUsers === true
+
   useEffect(() => {
+    if (!canManageUsers) return
     adminApi
       // 只列教师：管理员的"权限"不在这里配（管理员天然拥有全部能力，业主 §26）。
       // ⚠️ 过滤**在服务端做**（列表接口本来就有 role 参数）——
@@ -42,19 +49,19 @@ export function AdminPermissionsPage() {
         setSelectedId((prev) => prev || res.items[0]?.id || '')
       })
       .catch((e) => setError(humanMessage(e, '加载教师列表失败')))
-  }, [])
+  }, [canManageUsers])
 
   useEffect(() => {
-    if (selectedId === '') return
+    if (!canManageUsers || selectedId === '') return
     setGrants(null)
     setNotice(null)
     adminApi
       .userPermissions(selectedId)
       .then((res) => setGrants([...res.items]))
       .catch((e) => setError(humanMessage(e, '加载权限失败')))
-  }, [selectedId])
+  }, [selectedId, canManageUsers])
 
-  if (capabilities?.canManageUsers !== true) {
+  if (!canManageUsers) {
     return (
       <EmptyState
         title="你没有权限管理权限"

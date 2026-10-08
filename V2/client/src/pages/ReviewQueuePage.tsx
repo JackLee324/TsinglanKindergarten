@@ -66,7 +66,16 @@ export function ReviewQueuePage() {
     [params, setParams],
   )
 
+  /*
+    没有审核权限的人（比如只有 Pre-K 美德权限的配班老师）打开 `/review` 时，
+    不该先发一次必然 403 的 `/api/reviews/*` 再看到「你没有审核权限」。
+    app.tsx 的 `RequireReview` 已经把这一类挡在门外，这里再兜一层：
+    能力位来自服务端，前端不判断角色。
+  */
+  const canReview = capabilities?.canReview === true
+
   useEffect(() => {
+    if (!canReview) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -100,7 +109,7 @@ export function ReviewQueuePage() {
     return () => {
       cancelled = true
     }
-  }, [tab, q, directoryId, sort, page])
+  }, [tab, q, directoryId, sort, page, canReview])
 
   const locationOf = (path: string): string =>
     path
@@ -108,7 +117,7 @@ export function ReviewQueuePage() {
       .map((_, index, all) => resolve(all.slice(0, index + 1)).node?.name ?? all[index])
       .join(' / ')
 
-  if (capabilities?.canReview !== true) {
+  if (!canReview) {
     return (
       <EmptyState
         title="你没有审核权限"

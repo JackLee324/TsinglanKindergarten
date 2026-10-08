@@ -19,6 +19,7 @@
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { deflateSync } from 'node:zlib'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -68,6 +69,159 @@ const allowedNoise = []
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 
+// ── 真实文件构造 ────────────────────────────────────────────────────────────
+/*
+  Office（docx/xlsx）与 ZIP 在容器层面**都是 zip**（`shared/file-policy.ts` 里
+  `office: ['zip'] / archive: ['zip']`），所以这里的夹具是**真的 zip 归档**：
+  能 `unzip -t` 过、能被解出条目，不是"以 PK 开头的随机字节"。
+
+  为什么不用现成库：本项目的测试是零依赖的（不引 archiver / jszip）。
+  存储式（compression=0）zip 只需要 CRC32 + 三段固定结构，几十行就够，
+  而且比引一个库更好审。
+*/
+const CRC_TABLE = (() => {
+  const table = new Int32Array(256)
+  for (let n = 0; n < 256; n += 1) {
+    let c = n
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    table[n] = c
+  }
+  return table
+})()
+
+function crc32(buf) {
+  let c = 0 ^ -1
+  for (let i = 0; i < buf.length; i += 1) c = (c >>> 8) ^ CRC_TABLE[(c ^ buf[i]) & 0xff]
+  return (c ^ -1) >>> 0
+}
+
+/** 生成一个**真 zip**（stored，无压缩）：entries = [{ name, data }]。 */
+function zipBytes(entries) {
+  const locals = []
+  const centrals = []
+  let offset = 0
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, 'utf8')
+    const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, 'utf8')
+    const crc = crc32(data)
+
+    const local = Buffer.alloc(30 + name.length)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4) // version needed
+    local.writeUInt16LE(0, 6) // flags
+    local.writeUInt16LE(0, 8) // stored
+    local.writeUInt16LE(0, 10) // time
+    local.writeUInt16LE(0x2821, 12) // date（2000-01-01）
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    local.writeUInt16LE(0, 28)
+    name.copy(local, 30)
+    locals.push(local, data)
+
+    const central = Buffer.alloc(46 + name.length)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4) // version made by
+    central.writeUInt16LE(20, 6) // version needed
+    central.writeUInt16LE(0, 8)
+    central.writeUInt16LE(0, 10)
+    central.writeUInt16LE(0, 12)
+    central.writeUInt16LE(0x2821, 14)
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(name.length, 28)
+    central.writeUInt16LE(0, 30)
+    central.writeUInt16LE(0, 32)
+    central.writeUInt16LE(0, 34)
+    central.writeUInt16LE(0, 36)
+    central.writeUInt32LE(0, 38)
+    central.writeUInt32LE(offset, 42)
+    name.copy(central, 46)
+    centrals.push(central)
+
+    offset += local.length + data.length
+  }
+  const centralBuf = Buffer.concat(centrals)
+  const eocd = Buffer.alloc(22)
+  eocd.writeUInt32LE(0x06054b50, 0)
+  eocd.writeUInt16LE(0, 4)
+  eocd.writeUInt16LE(0, 6)
+  eocd.writeUInt16LE(entries.length, 8)
+  eocd.writeUInt16LE(entries.length, 10)
+  eocd.writeUInt32LE(centralBuf.length, 12)
+  eocd.writeUInt32LE(offset, 16)
+  eocd.writeUInt16LE(0, 20)
+  return Buffer.concat([...locals, centralBuf, eocd])
+}
+
+/**
+ * 生成一张**真的能解码**的大 PNG（业主 §17 要"图片真实解码"，§13 要"进度真的动"）。
+ *
+ * 512×512 的像素用 sha256 链填（不是 Math.random，也不是线性同余）：
+ * 同余数列的低位有短周期，deflate 会把它压成十几 KB，那样限速下根本观察不到进度。
+ * 哈希链的字节压缩不掉，整张图约 780KB —— 正好够在限速下看到进度条真的在动。
+ */
+function pngBytes(width, height) {
+  const raw = Buffer.alloc(height * (1 + width * 3))
+  let block = createHash('sha256').update('stage11-png-fixture').digest()
+  let pos = 0
+  const nextByte = () => {
+    if (pos === block.length) {
+      block = createHash('sha256').update(block).digest()
+      pos = 0
+    }
+    pos += 1
+    return block[pos - 1]
+  }
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * (1 + width * 3)
+    raw[rowStart] = 0 // filter: none
+    for (let x = 0; x < width * 3; x += 1) raw[rowStart + 1 + x] = nextByte()
+  }
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data])
+    const out = Buffer.alloc(8 + data.length + 4)
+    out.writeUInt32BE(data.length, 0)
+    body.copy(out, 4)
+    out.writeUInt32BE(crc32(body), 8 + data.length)
+    return out
+  }
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8 // bit depth
+  ihdr[9] = 2 // truecolor
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
+/** 最小的合法 docx / xlsx（真的 OOXML 包，zip 里带该有的入口文件）。 */
+function ooxmlBytes(kind) {
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/${kind === 'docx' ? 'word/document.xml' : 'xl/workbook.xml'}" ContentType="application/vnd.openxmlformats-officedocument.${kind === 'docx' ? 'wordprocessingml.document' : 'spreadsheetml.sheet'}.main+xml"/>
+</Types>`
+  const main =
+    kind === 'docx'
+      ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>
+<w:p><w:r><w:t>清澜山幼儿园 Pre-K 美德课教案（手机端验收夹具）</w:t></w:r></w:p>
+</w:body></w:document>`
+      : `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="第一周" sheetId="1"/></sheets></workbook>`
+  return zipBytes([
+    { name: '[Content_Types].xml', data: contentTypes },
+    { name: kind === 'docx' ? 'word/document.xml' : 'xl/workbook.xml', data: main },
+  ])
+}
+
 const FILES = {
   pdf: { name: '手机端教案.pdf', bytes: pdfBytes('stage11') },
   jpg: {
@@ -83,6 +237,17 @@ const FILES = {
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
       'base64',
     ),
+  },
+  /** 512×512 真 PNG（约 780KB）：用来观察真实进度、以及中途取消。 */
+  pngBig: { name: '手机端大图.png', bytes: pngBytes(512, 512) },
+  docx: { name: '手机端教案.docx', bytes: ooxmlBytes('docx') },
+  xlsx: { name: '手机端周计划.xlsx', bytes: ooxmlBytes('xlsx') },
+  zip: {
+    name: '手机端素材包.zip',
+    bytes: zipBytes([
+      { name: '说明.txt', data: '清澜山幼儿园手机端验收：这个包里有 2 个文件。\n' },
+      { name: '照片.png', data: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64') },
+    ]),
   },
 }
 
@@ -243,11 +408,21 @@ before(async () => {
   assert.equal(created.status, 201, JSON.stringify(created.data))
   ids.teacher = created.data.id
 
-  // 两条已发布资源（PDF / 图片）+ 一条草稿，供手机端预览、下载、提交、审核
+  // 已发布资源，供手机端预览 / 下载 / 提交 / 审核
   const teacher = client()
   await teacher.login(TEACHER.username, TEACHER.password)
   const { uploadFile } = await import('../helpers/upload.mjs')
-  for (const [key, f] of [['pdf', FILES.pdf], ['png', FILES.png]]) {
+  const MIME = {
+    pdf: 'application/pdf',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    zip: 'application/zip',
+  }
+  // 业主 §16 要的是"PDF / 图片 / Office / ZIP **真实下载**" —— 四种都要有真资源
+  for (const key of ['pdf', 'png', 'jpg', 'docx', 'xlsx', 'zip']) {
+    const f = FILES[key]
     const resource = await teacher.post('/api/resources', {
       directoryId: ids.virtueResources,
       title: `手机端资源（${key}）`,
@@ -255,12 +430,30 @@ before(async () => {
     await uploadFile(teacher, resource.data.id, {
       fileName: f.name,
       bytes: f.bytes,
-      mimeType: key === 'pdf' ? 'application/pdf' : 'image/png',
+      mimeType: MIME[key],
     })
     await teacher.post(`/api/resources/${resource.data.id}/submit`)
-    await adminClient.post(`/api/resources/${resource.data.id}/review`, { action: 'approve' })
+    const approved = await adminClient.post(`/api/resources/${resource.data.id}/review`, { action: 'approve' })
+    assert.equal(approved.status < 400, true, `${key} 发布失败：${JSON.stringify(approved.data)}`)
     ids[`res_${key}`] = resource.data.id
   }
+
+  // 一条标题/文件名都特别长的资源：手机上最容易撑破卡片和详情页的场景
+  const longTitle = `第一学期第 12 周美德课程教案（含家庭延伸活动与观察记录表）${'补充说明'.repeat(8)}`
+  const long = await teacher.post('/api/resources', {
+    directoryId: ids.virtueResources,
+    title: longTitle,
+    description: '手机上检查长标题、长文件名、Badge 会不会把卡片撑破。',
+  })
+  await uploadFile(teacher, long.data.id, {
+    fileName: `${'美德课观察记录表-第12周-'.repeat(4)}附件.pdf`,
+    bytes: pdfBytes('stage11-long'),
+    mimeType: 'application/pdf',
+  })
+  await teacher.post(`/api/resources/${long.data.id}/submit`)
+  await adminClient.post(`/api/resources/${long.data.id}/review`, { action: 'approve' })
+  ids.res_long = long.data.id
+  ids.longTitle = longTitle
 
   browser = await launchBrowser()
   await browser.enableDownloads(DOWNLOAD_DIR)
@@ -391,10 +584,113 @@ describe('② 手机目录浏览：全程点击，不输 URL', () => {
     }
     await assertNoOverflow('首页（390×844）')
   })
+
+  test('面包屑过长不撑破：5 层深链在 390 / 375 / 320 都不越界', async () => {
+    await useDevice(DEVICES['iPhone 14 (390×844)'])
+    await login(ADMIN.username, ADMIN.password)
+    await mobileClickThrough([
+      'growth', 'growth/l1', 'growth/l1/safety', 'growth/l1/safety/plan', 'growth/l1/safety/plan/disease',
+    ])
+
+    for (const width of [390, 375, 320]) {
+      await useWidth(width, 844)
+      await browser.waitFor('!!document.querySelector(\'[data-testid="breadcrumb"]\')', 15000, '面包屑')
+      const box = await browser.session.eval(`(() => {
+        const nav = document.querySelector('[data-testid="breadcrumb"]')
+        const r = nav.getBoundingClientRect()
+        const items = [...nav.querySelectorAll('[data-testid="breadcrumb-root"], [data-testid="breadcrumb-item"], [data-testid="breadcrumb-current"]')]
+          .map((el) => { const b = el.getBoundingClientRect(); return { text: el.innerText.trim(), right: Math.round(b.right), left: Math.round(b.left), top: Math.round(b.top) } })
+        return {
+          vw: window.innerWidth,
+          navRight: Math.round(r.right), navLeft: Math.round(r.left),
+          navScrollWidth: nav.scrollWidth, navClientWidth: nav.clientWidth,
+          wrap: getComputedStyle(nav).flexWrap,
+          items,
+          current: (nav.querySelector('[data-testid="breadcrumb-current"]')?.innerText || '').trim(),
+        }
+      })()`)
+
+      // 1) 面包屑容器本身不许横向溢出（溢出会顶破整页）
+      assert.equal(
+        box.navScrollWidth <= box.navClientWidth + 1,
+        true,
+        `${width}px：面包屑内部横向溢出 ${box.navScrollWidth - box.navClientWidth}px`,
+      )
+      assert.equal(box.navRight <= box.vw + 1, true, `${width}px：面包屑右边 ${box.navRight} 超出视口 ${box.vw}`)
+      // 2) 每一项都要在视口内（长中文名不能把某一项推出屏幕）
+      for (const item of box.items) {
+        assert.equal(
+          item.right <= box.vw + 1 && item.left >= -1,
+          true,
+          `${width}px：「${item.text}」越界（left=${item.left} right=${item.right} vw=${box.vw}）`,
+        )
+      }
+      // 3) 最后一级（当前页）必须还在，而且要能换行（不是被挤没了）
+      assert.equal(box.current, '传染病识别与防治', `${width}px：面包屑最后一级必须还在`)
+      assert.equal(box.wrap, 'wrap', '面包屑要允许换行，否则窄屏只能靠溢出')
+      await assertNoOverflow(`深层目录页（${width}px）`)
+    }
+    await useDevice(DEVICES['iPhone 14 (390×844)'])
+  })
+
+  test('超长标题 / 长文件名 / Badge：320px 也不撑破卡片与详情页', async () => {
+    await useWidth(320, 844)
+    await login(TEACHER.username, TEACHER.password)
+    await browser.goto(`${TEST_BASE}/directory/education/pre-k/virtue/resources`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="resource-card"]\')', 20000, '资源卡片')
+
+    const card = await browser.session.eval(`(() => {
+      const card = document.querySelector('[data-resource-id="${ids.res_long}"]')
+      const title = card.querySelector('[data-testid="resource-card-title"]')
+      const badge = card.querySelector('[data-testid="resource-card-status"]')
+      const location = card.querySelector('[data-testid="resource-card-location"]')
+      const files = card.querySelector('[data-testid="resource-card-files"]')
+      const box = (el) => { const r = el.getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right), w: Math.round(r.width) } }
+      return {
+        vw: window.innerWidth,
+        card: box(card), title: box(title), badge: box(badge), location: box(location), files: box(files),
+        titleText: (title.innerText || '').trim(),
+        badgeText: (badge.innerText || '').trim(),
+        titleOverflow: title.scrollWidth - title.clientWidth,
+      }
+    })()`)
+
+    assert.equal(card.card.r <= card.vw + 1, true, `卡片右边 ${card.card.r} 超出视口 ${card.vw}`)
+    for (const [name, part] of [['标题', card.title], ['状态徽标', card.badge], ['所在位置', card.location], ['文件数', card.files]]) {
+      assert.equal(part.r <= card.card.r + 1 && part.l >= card.card.l - 1, true, `${name}超出卡片：${JSON.stringify(part)} vs 卡片 ${JSON.stringify(card.card)}`)
+    }
+    assert.equal(card.titleText.length > 40, true, '这条资源本来就是超长标题（夹具不对？）')
+    assert.equal(card.badgeText.length > 0, true, '状态徽标必须还在（不能为了不溢出把它藏了）')
+    await assertNoOverflow('超长标题的目录页（320px）')
+
+    // 详情页同样：超长标题 + 超长文件名不能顶破布局
+    await browser.goto(`${TEST_BASE}/resources/${ids.res_long}`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="resource-detail-title"]\')', 20000, '详情页')
+    const detail = await browser.session.eval(`(() => {
+      const root = document.querySelector('[data-testid="resource-detail-page"]')
+      const title = document.querySelector('[data-testid="resource-detail-title"]')
+      const name = document.querySelector('[data-testid="file-name"]')
+      const box = (el) => { const r = el.getBoundingClientRect(); return { l: Math.round(r.left), r: Math.round(r.right) } }
+      return { vw: window.innerWidth, root: box(root), title: box(title), name: box(name),
+               nameText: (name.innerText || '').trim(), titleScroll: title.scrollWidth - title.clientWidth }
+    })()`)
+    assert.equal(detail.title.r <= detail.vw + 1, true, `详情页标题右边 ${detail.title.r} 超出视口 ${detail.vw}`)
+    assert.equal(detail.name.r <= detail.vw + 1, true, `文件名右边 ${detail.name.r} 超出视口 ${detail.vw}`)
+    assert.match(detail.nameText, /附件\.pdf$/, '长文件名要完整可读（可以省略中间，但不能消失）')
+    await assertNoOverflow('超长标题的详情页（320px）')
+  })
 })
 
 describe('③ 断点回归：9 个尺寸都不溢出、不白屏', () => {
   test('每个宽度：核心内容在、无横向溢出', async () => {
+    /*
+      ⚠️ 这一条**自己登录管理员**，不继承上一条测试留下的会话。
+      以前它依赖"上一条恰好是管理员"，于是把一位老师的会话带进来时，
+      管理页会走"无权访问"分支 —— 测试照样绿，但那测的已经不是管理页的断点了
+      （阶段 11 第一次跑就踩到了：3 个管理接口各来一串 403）。
+    */
+    await login(ADMIN.username, ADMIN.password)
+
     for (const width of ALL_WIDTHS) {
       await useWidth(width, width < 1024 ? 844 : 900)
       await browser.goto(`${TEST_BASE}/`)
@@ -411,7 +707,7 @@ describe('③ 断点回归：9 个尺寸都不溢出、不白屏', () => {
       await browser.waitFor('!!document.querySelector(\'[data-testid="my-resources-page"]\')', 25000, `我的资源（${width}px）`)
       await assertNoOverflow(`我的资源 ${width}px`)
 
-      // 管理页（管理员才进得去；张老师会被挡在门外 —— 那也是一种"不能白屏"）
+      // 管理页（管理员身份下必须**真的渲染**管理界面，不能是"无权访问"那个页）
       for (const [path, testid] of [
         ['/admin/users', 'admin-users-page'],
         ['/admin/directories', 'directory-manage-page'],
@@ -419,12 +715,11 @@ describe('③ 断点回归：9 个尺寸都不溢出、不白屏', () => {
         ['/admin/audit', 'admin-audit-page'],
       ]) {
         await browser.goto(`${TEST_BASE}${path}`)
-        await browser.waitFor(
-          `!!document.querySelector('[data-testid="${testid}"]') || !!document.querySelector('[data-testid$="-forbidden"]')`,
-          25000,
-          `${path}（${width}px）`,
-        )
+        await browser.waitFor(`!!document.querySelector('[data-testid="${testid}"]')`, 25000, `${path}（${width}px）`)
         await assertNoOverflow(`${path} ${width}px`)
+        // 页面文字里要有真实内容（不是空壳）
+        const text = String(await browser.text(`[data-testid="${testid}"]`))
+        assert.equal(text.trim().length > 20, true, `${path}（${width}px）渲染了空壳：${text.slice(0, 40)}`)
       }
 
       // 导航入口必须存在（宽屏是侧边栏，窄屏是 hamburger）
@@ -548,6 +843,209 @@ describe('④ 手机上的资源：详情 / 预览 / 下载 / 上传', () => {
       assert.equal(sha256(readFileSync(saved)), f.sha256, `${key} 下载的字节必须与上传一致`)
       rmSync(saved, { force: true })
     }
+  })
+
+  test('下载：JPG / Office（docx、xlsx）/ ZIP 也都是真实下载，不是"点开空白"', async () => {
+    // 业主 §16 点名的四类：PDF / 图片 / Office / ZIP。PDF 与 PNG 上一条已测，这条补齐剩下的。
+    for (const key of ['jpg', 'docx', 'xlsx', 'zip']) {
+      const f = FILES[key]
+      await browser.goto(`${TEST_BASE}/resources/${ids[`res_${key}`]}`)
+      await browser.waitFor('!!document.querySelector(\'[data-testid="file-download"]\')', 20000, `下载按钮（${key}）`)
+      await browser.click('[data-testid="file-download"]')
+      const ext = f.name.split('.').pop()
+      const saved = await browser.waitForDownload(DOWNLOAD_DIR, (n) => n.endsWith(`.${ext}`))
+      const bytes = readFileSync(saved)
+      assert.equal(sha256(bytes), f.sha256, `${key} 下载的字节必须与上传一致`)
+      assert.equal(bytes.length, f.bytes.length, `${key} 下载大小要一致`)
+      // Office / ZIP 是容器格式：下下来的必须还是**能解开**的归档（不是被截断的字节）
+      if (key === 'docx' || key === 'xlsx' || key === 'zip') {
+        assert.equal(bytes.subarray(0, 2).toString('latin1'), 'PK', `${key} 下载结果必须是 zip 容器`)
+        assert.equal(bytes.includes(Buffer.from('0x06054b50', 'hex')), true, `${key} 缺少 zip 结束记录（被截断了？）`)
+      }
+      // 下载真的要留痕（服务端审计），否则老师找不回自己下过什么。
+      // 注意审计的 target_id 是**文件** id（text），而 resource_files.id 是 uuid：要显式转型。
+      const [audit] = await withSql((sql) => sql`
+        SELECT count(*)::int AS n FROM audit_logs a
+        WHERE a.action = 'resource.download'
+          AND a.target_id IN (SELECT id::text FROM resource_files WHERE resource_id = ${ids[`res_${key}`]})`)
+      assert.equal(audit.n >= 1, true, `${key} 下载必须落审计`)
+      rmSync(saved, { force: true })
+    }
+  })
+
+  test('上传：JPG 与 PNG 真实文件各自落库（大小与 sha256 都对得上）', async () => {
+    for (const key of ['jpg', 'png']) {
+      const f = FILES[key]
+      await browser.goto(`${TEST_BASE}/directory/education/pre-k/virtue/resources`)
+      await browser.waitFor('!!document.querySelector(\'[data-testid="directory-upload"]\')', 20000, '上传按钮')
+      await browser.click('[data-testid="directory-upload"]')
+      await browser.waitFor('!!document.querySelector(\'[data-testid="upload-dialog"]\')', 15000, '上传弹窗')
+      await browser.fill('[data-testid="upload-title"]', `手机端上传的图片（${key}）`)
+      await browser.setFileInput('[data-testid="upload-file-input"]', f.path)
+      await browser.click('[data-testid="upload-submit"]')
+      await browser.waitFor('!!document.querySelector(\'[data-testid="resource-detail-page"]\')', 30000, `${key} 上传完成`)
+      const id = await browser.attr('[data-testid="resource-detail-page"]', 'data-resource-id')
+
+      const [row] = await withSql((sql) => sql`
+        SELECT r.status, f.file_name, f.size::int AS size, f.sha256
+        FROM resources r JOIN resource_files f ON f.resource_id = r.id
+        WHERE r.id = ${id}`)
+      assert.equal(row.status, 'DRAFT', `${key}：上传完应当是草稿`)
+      assert.equal(row.file_name, f.name, `${key}：文件名要原样保留`)
+      assert.equal(row.size, f.bytes.length, `${key}：库里的大小要和文件一致`)
+      assert.equal(row.sha256, f.sha256, `${key}：库里的 sha256 要和文件一致`)
+
+      // 图片要真的能预览（解码成功），不能只是"登记了一条记录"
+      await browser.waitFor('!!document.querySelector(\'[data-testid="file-preview"]\')', 20000, '预览按钮')
+      await browser.click('[data-testid="file-preview"]')
+      await browser.waitFor('!!document.querySelector(\'[data-testid="file-preview-image"]\')', 20000, '图片预览')
+      await browser.waitFor(
+        `document.querySelector('[data-testid="file-preview-image"]')?.naturalWidth > 0`,
+        20000,
+        `${key} 预览要真的解码`,
+      )
+      await browser.click('[data-testid="file-preview-close"]')
+      assert.equal(await browser.exists('[data-testid="file-preview-unsupported"]'), false)
+    }
+  })
+
+  test('上传：限速下进度真的在动；中途「取消上传」→ 什么都没保存', async () => {
+    const f = FILES.pngBig
+    await browser.goto(`${TEST_BASE}/directory/education/pre-k/virtue/resources`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="directory-upload"]\')', 20000, '上传按钮')
+    await browser.click('[data-testid="directory-upload"]')
+    await browser.waitFor('!!document.querySelector(\'[data-testid="upload-dialog"]\')', 15000, '上传弹窗')
+
+    const title = '手机端取消上传（不该留下文件）'
+    await browser.fill('[data-testid="upload-title"]', title)
+    await browser.setFileInput('[data-testid="upload-file-input"]', f.path)
+
+    // 限速到 ~180KB/s：769KB 的图要传 4s 以上，进度才有观察窗口（本机本地网络否则是瞬时的）
+    await browser.setUploadThroughput(180 * 1024)
+    await browser.click('[data-testid="upload-submit"]')
+    await browser.waitFor('!!document.querySelector(\'[data-testid="upload-progress"]\')', 30000, '进度条出现')
+
+    // ① 进度必须真的在动（不是永远 0%、也不是一上来就 100% 假进度）
+    const seen = []
+    for (let i = 0; i < 40; i += 1) {
+      const info = await browser.session.eval(`(() => {
+        const bar = document.querySelector('[data-testid="upload-progress-bar"]')
+        const text = document.querySelector('[data-testid="upload-progress-text"]')
+        return bar ? { percent: Number(bar.getAttribute('data-percent')), text: text ? text.innerText.trim() : '' } : null
+      })()`)
+      if (info !== null) seen.push(info.percent)
+      if (seen.some((p) => p > 0 && p < 100)) break
+      await new Promise((r) => setTimeout(r, 120))
+    }
+    assert.equal(
+      seen.some((p) => p > 0 && p < 100),
+      true,
+      `限速下必须能看到中间态进度（实际看到：${seen.join(', ')}）`,
+    )
+
+    // ② 中途取消
+    await browser.waitFor('!!document.querySelector(\'[data-testid="upload-cancel"]\')', 15000, '取消上传按钮')
+    await browser.click('[data-testid="upload-cancel"]')
+    await browser.waitFor('!!document.querySelector(\'[data-testid="upload-error"]\')', 20000, '取消后的说明')
+    const message = String(await browser.text('[data-testid="upload-error"]'))
+    assert.match(message, /取消/, `取消后要说清楚发生了什么：${message}`)
+    assert.match(message, /没有(被)?保存/, `取消后必须说明"没保存"：${message}`)
+    // 弹窗还开着 → 老师可以重新选文件再传（不是被迫关掉重来）
+    assert.equal(await browser.exists('[data-testid="upload-dialog"]'), true, '取消后弹窗应当还开着，便于重试')
+
+    await browser.clearNetworkThrottle()
+
+    // ③ 数据库层面：这次尝试没有登记任何文件（没有半个文件）
+    const rows = await withSql((sql) => sql`
+      SELECT r.id, (SELECT count(*)::int FROM resource_files f WHERE f.resource_id = r.id) AS files
+      FROM resources r WHERE r.title = ${title}`)
+    for (const row of rows) {
+      assert.equal(row.files, 0, `取消上传不该登记文件，实际 ${row.files} 个`)
+    }
+    // ④ 页面上也不该出现"已上传"的假成功
+    assert.equal(await browser.exists('[data-testid="upload-done"]'), false, '取消后不能显示"已上传"')
+
+    await browser.click('[data-testid="dialog-close"]')
+    await browser.waitFor('!document.querySelector(\'[data-testid="upload-dialog"]\')', 15000, '关掉上传弹窗')
+  })
+
+  test('删除确认弹窗：手机上打得开、关得掉，不点确认就不写库', async () => {
+    // 已发布的资源本来就**不能删**（DELETABLE_STATUSES 里没有 PUBLISHED，必须先撤回）。
+    // 所以先把这个状态规则本身验掉，再用一条草稿去验弹窗。
+    await browser.goto(`${TEST_BASE}/resources/${ids.res_png}`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="resource-detail-page"]\')', 20000, '详情页')
+    assert.equal(
+      await browser.exists('[data-testid="resource-detail-delete"]'),
+      false,
+      '已发布的资源不该出现「删除」——必须先撤回（否则会从老师眼前直接消失）',
+    )
+    assert.equal(await browser.exists('[data-testid="action-recall"]'), true, '已发布的资源应当可以撤回')
+
+    // 一条草稿：这才是能删的状态
+    const teacher = client()
+    await teacher.login(TEACHER.username, TEACHER.password)
+    const draft = await teacher.post('/api/resources', {
+      directoryId: ids.virtueResources,
+      title: '手机端删除弹窗（草稿）',
+    })
+    assert.equal(draft.status, 201, JSON.stringify(draft.data))
+    const { uploadFile } = await import('../helpers/upload.mjs')
+    await uploadFile(teacher, draft.data.id, {
+      fileName: '待删除.pdf',
+      bytes: pdfBytes('mobile-delete-dialog'),
+      mimeType: 'application/pdf',
+    })
+
+    await browser.goto(`${TEST_BASE}/resources/${draft.data.id}`)
+    await browser.waitFor('!!document.querySelector(\'[data-testid="resource-detail-delete"]\')', 20000, '删除按钮')
+    await browser.click('[data-testid="resource-detail-delete"]')
+    await browser.waitFor('!!document.querySelector(\'[data-testid="resource-delete-dialog"]\')', 15000, '确认弹窗')
+
+    const box = await browser.session.eval(`(() => {
+      const dialog = document.querySelector('[data-testid="resource-delete-dialog"] [role="dialog"]')
+      const r = dialog.getBoundingClientRect()
+      const close = document.querySelector('[data-testid="dialog-close"]')
+      const cr = close ? close.getBoundingClientRect() : null
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), vh: window.innerHeight,
+               closeVisible: cr !== null && cr.width > 0 && cr.height > 0,
+               closeInView: cr !== null && cr.top >= 0 && cr.bottom <= window.innerHeight + 1 }
+    })()`)
+    assert.equal(box.top >= 0, true, '弹窗顶部跑出屏幕')
+    assert.equal(box.bottom <= box.vh + 1, true, `弹窗底部 ${box.bottom} 超出视口 ${box.vh}`)
+    assert.equal(box.closeVisible, true, '弹窗必须有可见的关闭按钮')
+    assert.equal(box.closeInView, true, '关闭按钮必须在视口内（手机上不能点不到）')
+
+    // 关掉 → 资源必须原样还在（确认弹窗不能"点开就删"）
+    await browser.click('[data-testid="dialog-close"]')
+    await browser.waitFor('!document.querySelector(\'[data-testid="resource-delete-dialog"]\')', 15000, '弹窗关闭')
+    const [row] = await withSql((sql) => sql`SELECT deleted_at FROM resources WHERE id = ${draft.data.id}`)
+    assert.equal(row.deleted_at, null, '只是打开又关掉确认弹窗，资源不该被删')
+    await assertNoOverflow('详情页（关掉删除弹窗后）')
+
+    // 再走一遍并**真的确认**：软删除要生效，而且要回到目录页（不是停在一个已删掉的详情页上）
+    await browser.click('[data-testid="resource-detail-delete"]')
+    await browser.waitFor('!!document.querySelector(\'[data-testid="resource-delete-confirm"]\')', 15000, '确认按钮')
+    await browser.click('[data-testid="resource-delete-confirm"]')
+    await browser.waitFor(
+      `!document.querySelector('[data-testid="resource-detail-page"]') ||
+       document.querySelector('[data-testid="resource-detail-status"]')?.innerText.includes('已删除')`,
+      20000,
+      '删除后离开详情页（或显示已删除）',
+    )
+    const [after] = await withSql((sql) => sql`SELECT deleted_at FROM resources WHERE id = ${draft.data.id}`)
+    assert.equal(after.deleted_at !== null, true, '确认之后必须真的软删除')
+
+    // 目录浏览页不该再列出它（已删除 → 回收站），回收站里能找到
+    await browser.waitFor('!!document.querySelector(\'[data-testid="directory-page"]\')', 20000, '回到目录页')
+    const cards = await browser.allAttrs('[data-resource-id]', 'data-resource-id')
+    assert.equal(
+      cards.includes(draft.data.id),
+      false,
+      '已删除的资源不该还留在目录浏览页',
+    )
+    const bins = await withSql((sql) => sql`
+      SELECT count(*)::int AS n FROM resources WHERE id = ${draft.data.id} AND deleted_at IS NOT NULL`)
+    assert.equal(bins[0].n, 1, '回收站应当能查到这条已删除的资源')
   })
 
   test('上传：选文件 → 进度 → 保存草稿 → 刷新仍在（不重选班型/科目/资料夹/目录）', async () => {
@@ -839,6 +1337,58 @@ describe('⑥ 权限与网络异常（手机端）', () => {
     allowedNoise.push('directoryId=')
   })
 
+  test('张老师：管理页与审核台是"说清没有权限"，不是"先发一串 403 再道歉"', async () => {
+    await useDevice(DEVICES['iPhone 14 (390×844)'])
+    await login(TEACHER.username, TEACHER.password)
+    /*
+      不调用 `clearProblems()`：那会把前面几段流程的采集结果一起丢掉，
+      等于偷偷削弱 ⑦ 那条全局门禁。这里只取**本段新增**的那些。
+    */
+    const before = browser.watchedProblems().length
+
+    /*
+      这一条盯的是一个真实的噪音缺陷：页面的取数 useEffect 跑在能力位判断**之前**，
+      于是老师打开 `/admin/users` 会先发出必然 403 的请求（浏览器里就是 console error），
+      然后才渲染「你没有教师管理权限」。服务端没错（403，不泄露任何数据），
+      但"未授权用户不该产生请求"才是干净的边界 —— 阶段 11 的 console 门禁正是被它绊住的。
+      修法见 `docs/STAGE11_MOBILE.md`（四个页面：教师账号 / 权限 / 审计 / 审核台）。
+    */
+    const pages = [
+      ['/admin/users', 'users-forbidden'],
+      ['/admin/permissions', 'permissions-forbidden'],
+      ['/admin/audit', 'audit-forbidden'],
+      ['/review', 'review-forbidden'],
+    ]
+    for (const [path, forbiddenTestId] of pages) {
+      await browser.goto(`${TEST_BASE}${path}`)
+      await browser.waitFor(
+        `!!document.querySelector('[data-testid="${forbiddenTestId}"]')`,
+        20000,
+        `${path} 要明确告知没有权限`,
+      )
+      const text = String(await browser.text(`[data-testid="${forbiddenTestId}"]`))
+      assert.equal(text.includes('没有'), true, `${path} 的提示要说明原因：${text}`)
+      await assertNoOverflow(`${path}（老师的无权提示）`)
+    }
+
+    // 等一拍，让可能正在飞的请求落地，再看这一段的增量
+    await new Promise((r) => setTimeout(r, 600))
+    const delta = browser.watchedProblems().slice(before)
+    const urlAllowed = (url) => (url ? allowedNoise.some((a) => String(url).includes(a)) : false)
+    const problems = delta.filter((p) => {
+      if (p.kind === 'console' && p.level === 'warning') return false
+      if (urlAllowed(p.url)) return false
+      if (p.text !== undefined && urlAllowed(p.text)) return false
+      return true
+    })
+    assert.equal(
+      problems.length,
+      0,
+      `未授权页面不该产生任何被拒绝的请求或 console 错误，实际 ${problems.length} 条：\n  ` +
+        problems.map((p) => `${p.kind}/${p.status ?? ''} ${p.url ?? p.text ?? ''}`).join('\n  '),
+    )
+  })
+
   test('断网 → Error + Retry；恢复后点重试就能加载（不是永久 spinner）', async () => {
     await useDevice(DEVICES['iPhone 14 (390×844)'])
     await login(TEACHER.username, TEACHER.password)
@@ -894,24 +1444,177 @@ describe('⑥ 权限与网络异常（手机端）', () => {
     }
   })
 
-  test('慢网络：先看到 Loading，再看到内容', async () => {
-    await browser.session.send('Network.emulateNetworkConditions', {
-      offline: false, latency: 1200, downloadThroughput: 40 * 1024, uploadThroughput: 40 * 1024,
+  test('慢网络 / 请求挂起：先看到 Loading、再看到内容（不白屏、不永久转圈）', async () => {
+    // 只靠限速断言"先看到 Loading"是不可靠的：本机响应可能在断言之前就回来了。
+    // 这里用 Fetch 域把 `/api/resources` **按住** 2.5 秒，制造一个确定的加载窗口。
+    const held = []
+    let released = false
+    const release = (requestId) => {
+      void browser.session.send('Fetch.continueRequest', { requestId }).catch(() => {})
+    }
+    browser.session.on('Fetch.requestPaused', (params) => {
+      held.push(params.request.url)
+      if (released) release(params.requestId)
+      else {
+        released = true
+        setTimeout(() => release(params.requestId), 2500)
+      }
     })
+    await browser.session.send('Fetch.enable', {
+      patterns: [{ urlPattern: '*/api/resources*', requestStage: 'Request' }],
+    })
+    // 同时在传输层限速，模拟真实 4G
+    await browser.session.send('Network.emulateNetworkConditions', {
+      offline: false, latency: 600, downloadThroughput: 60 * 1024, uploadThroughput: 60 * 1024,
+    })
+
+    try {
+      await browser.goto(`${TEST_BASE}/directory/education/pre-k/virtue/resources`)
+      // ① 请求还挂着的时候：必须有 Loading 反馈，不能是一片空白
+      await browser.waitFor('!!document.querySelector(\'[data-testid="loading"]\')', 10000, '加载中的 Spinner')
+      const during = await browser.session.eval(`(() => ({
+        loading: document.querySelector('[data-testid="loading"]') !== null,
+        loadingText: (document.querySelector('[data-testid="loading"]')?.innerText || '').trim(),
+        cards: document.querySelectorAll('[data-testid="resource-card"]').length,
+        listRendered: document.querySelector('[data-testid="resource-list"]') !== null,
+      }))()`)
+      assert.equal(during.loading, true, '挂起期间要有 Loading')
+      assert.equal(during.cards, 0, '挂起期间不该已经有卡片（否则这个断言没意义）')
+      assert.equal(during.loadingText.length > 0, true, 'Loading 要有文字说明，不能只有一个转圈')
+
+      // ② 放行之后：内容出来，Loading 收掉
+      await browser.waitFor('!!document.querySelector(\'[data-testid="resource-card"]\')', 30000, '内容加载出来')
+      assert.equal(await browser.exists('[data-testid="loading"]'), false, '加载完成后不能还留着转圈')
+      assert.equal(await browser.exists('[data-testid="resource-list-error"]'), false, '慢一点不等于失败')
+      assert.equal(held.length >= 1, true, '这一条必须真的挂起过请求（否则测试没抓到点上）')
+    } finally {
+      await browser.session.send('Fetch.disable').catch(() => {})
+      await browser.session.send('Network.emulateNetworkConditions', {
+        offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+      }).catch(() => {})
+    }
+  })
+
+  test('滚动：抽屉打开时锁住页面、抽屉自己滚、关闭后恢复（不出双滚动条）', async () => {
+    await useDevice(DEVICES['iPhone 14 (390×844)'])
+    // 管理员导航项最多（目录根 + 管理分组），最考验抽屉的滚动
+    await login(ADMIN.username, ADMIN.password)
     await browser.goto(`${TEST_BASE}/directory/education/pre-k/virtue/resources`)
-    // 加载中必须给反馈（Spinner 或空态），不能是一片空白
-    await browser.waitFor(
-      `!!document.querySelector('[data-testid="resource-list"]') ||
-       !!document.querySelector('[data-testid="resource-list-empty"]') ||
-       !!document.querySelector('[data-testid="resource-list-error"]') ||
-       !!document.querySelector('[data-testid="directory-page"]')`,
-      25000,
-      '慢网络下有反馈',
+    await browser.waitFor('!!document.querySelector(\'[data-testid="resource-card"]\')', 20000, '长页面')
+
+    // 这个页面得真的能滚，否则下面测不出"锁住"
+    const pageHeight = await browser.session.eval(
+      `({ scrollHeight: document.documentElement.scrollHeight, innerHeight: window.innerHeight })`,
     )
-    await browser.waitFor('!!document.querySelector(\'[data-testid="directory-page"]\')', 25000, '慢网络也能出页面')
-    await browser.session.send('Network.emulateNetworkConditions', {
-      offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
-    })
+    assert.equal(
+      pageHeight.scrollHeight > pageHeight.innerHeight + 50,
+      true,
+      `这个页面本应当比视口长（scrollHeight=${pageHeight.scrollHeight} vh=${pageHeight.innerHeight}）`,
+    )
+
+    /*
+      ⚠️ 这里必须用**真实触摸手势**，不能用 `window.scrollTo`。
+      `overflow: hidden` 挡的是"用户滚动"，程序化 `scrollTo` 在隐藏溢出的容器上
+      照样能改 scrollY —— 第一次写这条测试时就因此误判成"锁没生效"。
+      用 CDP 的 `Input.synthesizeScrollGesture`（touch）走的才是手机上真实那条路。
+    */
+    const touchScrollDown = async () => {
+      await browser.session.eval('window.scrollTo(0, 0)')
+      await new Promise((r) => setTimeout(r, 150))
+      await browser.session.send('Input.synthesizeScrollGesture', {
+        x: 195, y: 500, xDistance: 0, yDistance: -400, gestureSourceType: 'touch', speed: 900,
+      })
+      await new Promise((r) => setTimeout(r, 400))
+      return Number(await browser.session.eval('Math.round(window.scrollY)'))
+    }
+
+    // ① 对照：抽屉没开的时候，手指滑动页面要能动
+    const baseline = await touchScrollDown()
+    assert.equal(baseline > 100, true, `抽屉没开时页面必须能滑动（实际 ${baseline}）`)
+
+    await browser.session.eval('window.scrollTo(0, 200)')
+    await browser.click('[data-testid="nav-open"]')
+    await browser.waitFor('!!document.querySelector(\'[data-testid="mobile-drawer"]\')', 15000, '抽屉')
+
+    // ② 抽屉打开：手指滑动页面不许动
+    const locked = await touchScrollDown()
+    assert.equal(locked, 0, `抽屉打开时页面必须锁住（触摸滑动后 scrollY=${locked}，应当是 0）`)
+
+    // 把目录树展开几层：抽屉里条目变多，才可能真的需要滚动
+    for (let round = 0; round < 3; round += 1) {
+      const toggles = await browser.session.eval(`(() => {
+        const list = [...document.querySelectorAll('[data-testid="mobile-drawer"] [data-nav-toggle]')]
+          .filter((el) => el.getAttribute('aria-expanded') !== 'true')
+        return list.slice(0, 6).map((el) => el.getAttribute('data-nav-toggle'))
+      })()`)
+      if (toggles.length === 0) break
+      for (const path of toggles) {
+        await browser.click(`[data-testid="mobile-drawer"] [data-nav-toggle="${path}"]`).catch(() => {})
+      }
+      await new Promise((r) => setTimeout(r, 200))
+    }
+
+    const scroll = await browser.session.eval(`(() => {
+      const drawer = document.querySelector('[data-testid="mobile-drawer"]')
+      const dr = drawer.getBoundingClientRect()
+      // 找出此刻"真的能滚"的元素（scrollHeight 超了 clientHeight）
+      const scrollers = [...document.querySelectorAll('body *')]
+        .filter((el) => {
+          const style = getComputedStyle(el)
+          return (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+                 el.scrollHeight > el.clientHeight + 1
+        })
+        .map((el) => ({
+          testid: el.getAttribute('data-testid') || el.tagName,
+          insideDrawer: drawer.contains(el),
+          scrollHeight: el.scrollHeight, clientHeight: el.clientHeight,
+        }))
+      return {
+        drawerTop: Math.round(dr.top), drawerBottom: Math.round(dr.bottom),
+        vh: window.innerHeight, vw: window.innerWidth,
+        drawerRight: Math.round(dr.right),
+        scrollers,
+        navItems: drawer.querySelectorAll('[data-nav]').length,
+      }
+    })()`)
+
+    // ③ 抽屉自己必须在视口里（页面不会因为它多出一根纵向滚动条）
+    assert.equal(scroll.drawerTop >= 0 && scroll.drawerBottom <= scroll.vh + 1, true,
+      `抽屉超出视口：top=${scroll.drawerTop} bottom=${scroll.drawerBottom} vh=${scroll.vh}`)
+    assert.equal(scroll.drawerRight <= scroll.vw + 1, true, `抽屉右边超出视口：${scroll.drawerRight} > ${scroll.vw}`)
+    assert.equal(scroll.navItems > 0, true, '抽屉里要有导航项')
+
+    // ④ 同一时刻最多只有一个"真的能滚"的元素，而且它必须在抽屉里（这就是"不出双滚动条"）
+    assert.equal(scroll.scrollers.length <= 1, true,
+      `抽屉打开时不该有第二个滚动容器：${JSON.stringify(scroll.scrollers)}`)
+    if (scroll.scrollers.length === 1) {
+      assert.equal(scroll.scrollers[0].insideDrawer, true,
+        `唯一能滚的容器必须在抽屉里，实际：${JSON.stringify(scroll.scrollers[0])}`)
+      // 抽屉内部能用手指滚，且页面不跟着动
+      await browser.session.send('Input.synthesizeScrollGesture', {
+        x: 100, y: 600, xDistance: 0, yDistance: -200, gestureSourceType: 'touch', speed: 900,
+      })
+      await new Promise((r) => setTimeout(r, 400))
+      const inner = await browser.session.eval(`(() => {
+        const drawer = document.querySelector('[data-testid="mobile-drawer"]')
+        const el = [...document.querySelectorAll('body *')].find((e) => {
+          const s = getComputedStyle(e)
+          return (s.overflowY === 'auto' || s.overflowY === 'scroll') && e.scrollHeight > e.clientHeight + 1 && drawer.contains(e)
+        })
+        return { scrollTop: el ? Math.round(el.scrollTop) : -1, page: Math.round(window.scrollY) }
+      })()`)
+      assert.equal(inner.scrollTop > 0, true, '抽屉里应当能用手指滚起来')
+      assert.equal(inner.page, 0, '滚抽屉时页面不该跟着滚')
+    }
+
+    // ⑤ 关闭之后要恢复，不能永久锁死
+    await browser.click('[data-testid="nav-close"]')
+    await browser.waitFor('!document.querySelector(\'[data-testid="mobile-drawer"]\')', 15000, '抽屉关闭')
+    const restoredOverflow = await browser.session.eval('document.body.style.overflow')
+    assert.equal(restoredOverflow === '' || restoredOverflow === 'visible', true,
+      `关闭抽屉后要还原 body 的滚动（实际：'${restoredOverflow}'）`)
+    const afterClose = await touchScrollDown()
+    assert.equal(afterClose > 100, true, `关闭抽屉后页面必须能重新滑动（实际 ${afterClose}）`)
   })
 })
 

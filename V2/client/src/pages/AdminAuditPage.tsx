@@ -36,6 +36,13 @@ export function AdminAuditPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  /*
+    先看能力位再取数：否则老师打开 `/admin/audit` 会先发一次必然 403 的
+    `/api/audit/logs`，再渲染「你没有审计权限」（阶段 11 的 console 门禁抓到过这类噪音，
+    详见 `docs/STAGE11_MOBILE.md`）。服务端的 403 仍然在，这里只是不发无用请求。
+  */
+  const canViewAudit = capabilities?.canViewAudit === true
+
   const reload = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -53,10 +60,11 @@ export function AdminAuditPage() {
   }, [action, result, actorId, targetId, from, to, offset])
 
   useEffect(() => {
+    if (!canViewAudit) return
     void reload()
-  }, [reload])
+  }, [reload, canViewAudit])
 
-  if (capabilities?.canViewAudit !== true) {
+  if (!canViewAudit) {
     return (
       <EmptyState title="你没有审计权限" description="审计只对管理员开放。" testId="audit-forbidden" />
     )

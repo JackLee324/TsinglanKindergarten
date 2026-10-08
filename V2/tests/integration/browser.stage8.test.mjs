@@ -93,8 +93,25 @@ async function openUsersPage() {
  * 而真实原因是 pre-k 是折叠的 —— 它根本没渲染出来。
  */
 async function expandDirectoryOption(slug) {
+  /*
+    ⚠️ 先等树**渲染出来**，再判断有没有展开箭头。
+    原来这里是 `if (!exists(toggle)) return` —— 一个静默的短路：
+    权限编辑器刚打开、目录树还在路上时，`exists` 是 false，于是这里什么都不做、
+    也不报错，后面就会以"美德怎么等都不出现"的形式失败在 20 秒之后，
+    完全看不出真正的原因（阶段 11 整跑时踩到过）。
+    现在：等树出现 → 再找箭头 → 找不到就带着页面状态明确报错。
+  */
+  await browser.waitFor(
+    `document.querySelectorAll('[data-testid^="directory-option-"]').length > 0`,
+    20000,
+    `权限编辑器里的目录树（要展开 ${slug}）`,
+  )
   const toggle = `[data-testid="directory-option-toggle-${slug}"]`
-  if (!(await browser.exists(toggle))) return
+  assert.equal(
+    await browser.exists(toggle),
+    true,
+    `权限编辑器里没有 ${slug} 的展开箭头 —— 页面当时是：${await browser.text('[data-testid="permission-editor"]')}`,
+  )
   // TreeRow 没有 aria-expanded，所以用"渲染出来的节点数变了没有"来判断展开，
   // 选择器要用**前缀**匹配：每个节点的 testid 是 `directory-option-<slug>`，
   // 不存在一个叫 `directory-option` 的元素（第一版就是在这里数出 0 和 0）。

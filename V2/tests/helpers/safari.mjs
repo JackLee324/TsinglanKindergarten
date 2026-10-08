@@ -68,6 +68,21 @@ export async function launchSafari() {
     if (String(error.message).includes('Allow remote automation')) {
       throw new SafariUnavailableError(ALLOW_REMOTE_AUTOMATION_HELP)
     }
+    /*
+      这一类失败**不是**「允许远程自动化」没开，而是 Safari 本身没在跑 /
+      被上一次自动化留在一个坏状态里。safaridriver 会一直等到超时
+      （约 30 秒），报"timed out while connecting to a Safari instance"。
+      给一个能照做的下一步，而不是让人去猜（阶段 11 真的遇到过：
+      safaridriver 在跑、Safari 没在跑，两个视口都建不出会话）。
+    */
+    if (String(error.message).includes('timed out while connecting to a Safari instance')) {
+      throw new SafariUnavailableError(
+        'safaridriver 在跑，但 Safari 起不来（自动化会话超时）。\n' +
+          '  先执行一次：open -a Safari\n' +
+          '  然后重跑：npm run test:safari\n' +
+          '  （「允许远程自动化」是一次性开关，不受这一步影响。）',
+      )
+    }
     throw error
   }
 }

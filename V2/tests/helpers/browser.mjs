@@ -61,11 +61,20 @@ class Session {
     })
   }
 
-  /** 订阅一个 CDP 事件。 */
+  /**
+   * 订阅一个 CDP 事件。
+   *
+   * 返回一个**退订函数**：`goto` / `reload` 每次都订阅一次 load 事件，
+   * 不退订的话监听器会随测试条数一路堆积（虽然不致命，但会越跑越慢）。
+   */
   on(method, handler) {
     const list = this.listeners.get(method) ?? []
     list.push(handler)
     this.listeners.set(method, list)
+    return () => {
+      const now = this.listeners.get(method) ?? []
+      this.listeners.set(method, now.filter((h) => h !== handler))
+    }
   }
 
   send(method, params = {}) {
@@ -107,15 +116,65 @@ export class Browser {
   }
 
   /** 打开一个地址并等待 `readyState === 'complete'`。 */
+  /**
+   * 打开一个地址，**并确保接下来看到的 DOM 是新文档的**。
+   *
+   * ⚠️ 这里有一个很隐蔽的坑：只看 `document.readyState === 'complete'` 是不够的。
+   * 当目标地址与当前地址相同时（测试里很常见 —— 上一条刚好停在同一个页面），
+   * **旧文档本来就已经 complete**，这个条件立刻为真，于是下一行读到的是旧页面的 DOM。
+   * 表现是"刚 waitFor 到按钮，点的时候就不见了"，而且只在机器忙的时候偶发。
+   * （阶段 11 的整跑里，阶段 10 的目录管理页上真的踩到过一次，见
+   * `docs/STAGE11_MOBILE.md`。）
+   *
+   * 所以这里等的是 **`Page.loadEventFired` 事件**：旧文档不会再触发它，
+   * 只有新文档加载完才会来。事件等不到就明确报错，不静默继续。
+   */
   async goto(url) {
-    await this.session.send('Page.navigate', { url })
-    await this.waitFor(`document.readyState === 'complete'`, 20000, `打开 ${url}`)
+    await this.#waitForNewDocument(() => this.session.send('Page.navigate', { url }), `打开 ${url}`)
   }
 
   /** 刷新（真实 reload，用来验证"刷新后仍然存在"）。 */
   async reload() {
-    await this.session.send('Page.reload', { ignoreCache: true })
-    await this.waitFor(`document.readyState === 'complete'`, 20000, '刷新页面')
+    await this.#waitForNewDocument(
+      () => this.session.send('Page.reload', { ignoreCache: true }),
+      '刷新页面',
+    )
+  }
+
+  /**
+   * 执行一次导航动作，并等到**新文档**的 load 事件。
+   *
+   * 为什么要退订：`goto` 一次测试里会调用很多次，不退订监听器会一直堆积。
+   */
+  async #waitForNewDocument(navigate, label) {
+    let fired = false
+    const off = this.session.on('Page.loadEventFired', () => {
+      fired = true
+    })
+    try {
+      await navigate()
+      const deadline = Date.now() + 20000
+      while (!fired) {
+        if (Date.now() > deadline) {
+          throw new Error(`${label} 超时：20 秒内没有收到新文档的 load 事件`)
+        }
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      // load 之后 React 还要挂载：等到**外壳真的渲染出来**再交给测试。
+      // 只等 `readyState === 'complete'` 是不够的 —— 那时的 DOM 还是空的，
+      // 紧接着的 `exists(...)` 会得到 false（"权限树里没有美德"就是这么来的）。
+      // 判据用"外壳或登录页二选一"：这两者在任何页面上必然有一个。
+      await this.waitFor(
+        `document.readyState === 'complete' && (
+           !!document.querySelector('[data-testid="header"]') ||
+           !!document.querySelector('[data-testid="login-page"]')
+         )`,
+        20000,
+        label,
+      )
+    } finally {
+      off()
+    }
   }
 
   async url() {
@@ -165,17 +224,50 @@ export class Browser {
     ).then((json) => JSON.parse(json ?? '[]'))
   }
 
-  /** 点击。用真实的 MouseEvent 序列，走 React 的事件系统。 */
-  async click(selector) {
-    const ok = await this.session.eval(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)})
-      if (!el) return false
-      for (const type of ['mousedown', 'mouseup', 'click']) {
-        el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, view: window }))
+  /**
+   * 点击。用真实的 MouseEvent 序列，走 React 的事件系统。
+   *
+   * ⚠️ **要先等元素出现**（默认最多 3 秒，每 50ms 看一眼）。
+   * 单次 `querySelector` 直接点是一条真实的坑：SPA 在两个 await 之间会重渲染，
+   * "刚 waitFor 到、下一行点的时候已经不在 DOM 里"是**偶发**的 ——
+   * 它会让整条套件在机器繁忙时红一次，而且报错只说"找不到"，
+   * 完全看不出页面当时到底长什么样（阶段 11 的整跑里就出现过一次）。
+   *
+   * 这里不改任何断言强度：等不到就照样抛，只是抛之前把**页面当时的真实状态**
+   * （地址 / 是否被踢回登录页 / 是否显示无权访问 / 页面文字）一起打出来。
+   */
+  async click(selector, { timeout = 3000 } = {}) {
+    const deadline = Date.now() + timeout
+    for (;;) {
+      const ok = await this.session.eval(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)})
+        if (!el) return false
+        for (const type of ['mousedown', 'mouseup', 'click']) {
+          el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, view: window }))
+        }
+        return true
+      })()`)
+      if (ok) return
+      if (Date.now() >= deadline) {
+        const state = await this.session.eval(`(() => ({
+          href: location.pathname + location.search,
+          title: (document.querySelector('[data-testid="page-title"]')?.innerText || '').trim(),
+          login: document.querySelector('[data-testid="login-page"]') !== null,
+          forbidden: !!document.querySelector('[data-testid$="-forbidden"]'),
+          text: (document.body?.innerText || '').replace(/\\s+/g, ' ').slice(0, 300),
+        }))()`).catch(() => null)
+        throw new Error(
+          `点击失败：等了 ${timeout}ms 仍找不到 ${selector}` +
+            (state === null
+              ? ''
+              : `\n  当时地址：${state.href}` +
+                `\n  登录页：${state.login ? '是（被踢回登录）' : '否'}` +
+                `\n  无权访问：${state.forbidden ? '是' : '否'}` +
+                `\n  页面文字：${state.text}`),
+        )
       }
-      return true
-    })()`)
-    if (!ok) throw new Error(`点击失败：找不到 ${selector}`)
+      await new Promise((r) => setTimeout(r, 50))
+    }
   }
 
   /**
@@ -495,6 +587,22 @@ export async function launchBrowser({ headless = true } = {}) {
     child.kill('SIGKILL')
     throw new Error(`Chrome 的 DevTools 端口没起来：\n${stderr.slice(0, 800)}`)
   }
+
+  /*
+    同 harness 里的服务进程：管道的 stderr 会把 Node 的事件循环吊住 ——
+    Chrome 要是没被关掉（比如 `after` 钩子里的断言先抛了），
+    整个测试进程就永远不退出。这里 unref（stderr 照样收，只是不拦住退出），
+    再挂一个 exit 兜底：无论如何都要把这个浏览器杀掉。
+  */
+  child.stderr.unref?.()
+  child.unref?.()
+  process.on('exit', () => {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* 已经没了 */
+    }
+  })
 
   const ws = new WebSocket(wsUrl)
   await new Promise((resolve, reject) => {

@@ -322,6 +322,21 @@ function DirectoryTree({
   readonly testIdPrefix: string
 }) {
   const [expanded, setExpanded] = useState<string[]>(() => roots.map((r) => r.id))
+  /*
+    ⚠️ 目录树是**异步**到的（`DirectoryProvider` 在挂载后请求 `/api/directories/tree`）。
+    如果这个编辑器在树到之前就挂载了，`useState` 的初始值拿到的是**空数组**，
+    默认展开就永远丢了 —— 表现出来是"权限编辑器打开时所有节点都是折叠的"，
+    管理员得自己一层层点开（而且他会以为这就是正常的）。
+    这里补一次：等树第一次真的到了，再按根节点展开一次。
+
+    只初始化一次（`initialized`）：管理员手动折叠之后不许被数据刷新重新撑开。
+  */
+  const initialized = useRef(false)
+  useEffect(() => {
+    if (initialized.current || roots.length === 0) return
+    initialized.current = true
+    setExpanded(roots.map((r) => r.id))
+  }, [roots])
 
   return (
     <ul className="rounded-lg border border-border p-2" data-testid="directory-tree">
