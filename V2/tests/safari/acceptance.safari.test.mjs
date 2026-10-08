@@ -36,6 +36,16 @@ import {
 import { launchSafari, safariStatus, SafariUnavailableError } from '../helpers/safari.mjs'
 import { pdfBytes } from '../helpers/upload.mjs'
 
+/**
+ * 同一个 Safari 要跑两遍：桌面 1440×900 与移动 390×844。
+ * 业主 Stage 11 要求 "Desktop Safari PASS + Mobile Safari PASS" ——
+ * WebKit 是同一个引擎，但**布局分支**完全不同（侧边栏 vs hamburger+抽屉），
+ * 所以两遍都必须真跑。
+ */
+const VIEWPORT = process.env.SAFARI_VIEWPORT === 'mobile'
+  ? { name: 'mobile', width: 390, height: 844 }
+  : { name: 'desktop', width: 1440, height: 900 }
+
 const WORK = mkdtempSync(join(tmpdir(), 'safari10-'))
 const ADMIN = { username: 'saf_admin', password: 'SafAdminPass!1' }
 const TEACHER = { username: 'saf_teacher', password: 'SafTeacherPass!1' }
@@ -88,6 +98,44 @@ async function directoryIdByPath(path) {
     ) SELECT id::text FROM dp WHERE path = ${path}`)
   assert.equal(rows.length, 1, `目录 ${path} 必须存在`)
   return rows[0].id
+}
+
+/**
+ * 进某个目录页 —— 桌面走侧边栏，窄屏走 hamburger + 抽屉。
+ *
+ * 两种模式共用**同一份**导航数据（抽屉里就是 SidebarNav），所以这里只是
+ * "怎么把它打开"不同；这也正是 Stage 11 要验证的东西。
+ */
+async function navigateTo(path) {
+  const mobile = await safari.exists('[data-testid="nav-open"]')
+  if (mobile) {
+    await safari.clickRobust('[data-testid="nav-open"]')
+    await safari.waitFor('[data-testid="mobile-drawer"]', 20000, '抽屉打开')
+  }
+  const nav = `[data-nav="/directory/${path}"]`
+  if (!(await safari.exists(nav))) {
+    const segments = path.split('/')
+    let prefix = ''
+    for (const slug of segments.slice(0, -1)) {
+      prefix = prefix === '' ? slug : `${prefix}/${slug}`
+      const toggle = `[data-nav-toggle="/directory/${prefix}"]`
+      if (await safari.exists(toggle)) {
+        if ((await safari.attr(toggle, 'aria-expanded')) !== 'true') await safari.clickRobust(toggle)
+      }
+    }
+  }
+  await safari.waitFor(nav, 20000, `导航里有 ${path}`)
+  await safari.clickRobust(nav)
+  if (mobile) {
+    // 点完自动关闭（抽屉不关就等于挡住内容）
+    await safari.waitUntil(async () => !(await safari.exists('[data-testid="mobile-drawer"]')), {
+      label: '抽屉自动关闭', timeoutMs: 15000,
+    })
+  }
+  await safari.waitUntil(
+    async () => (await safari.attr('[data-testid="directory-page"]', 'data-directory-path')) === path,
+    { label: `到达 ${path}` },
+  )
 }
 
 /** 在一张资源卡（按标题）上点它的标题链接。 */
@@ -190,8 +238,8 @@ before(async () => {
     窗口太窄会让"点了侧边栏"变成"点了一个 0×0 的元素"，
     那测的是视口，不是业务。窄视口的问题记在验收报告的"发现"里，属于阶段 11。
   */
-  const rect = await safari.setWindowRect({ width: 1440, height: 900 })
-  console.log(`  Safari 窗口：${rect.width}×${rect.height}`)
+  const rect = await safari.setWindowRect(VIEWPORT)
+  console.log(`  Safari 视口：${rect.width}×${rect.height}（${VIEWPORT.name}）`)
 })
 
 after(async () => {
@@ -213,7 +261,9 @@ describe('Safari Desktop 真实业务链（业主 Stage 10 §20）', () => {
       await safari.type('[data-testid="login-username"]', TEACHER.username)
       await safari.type('[data-testid="login-password"]', TEACHER.password)
       await safari.clickRobust('[data-testid="login-submit"]')
-      await safari.waitFor('[data-testid="sidebar"]', 25000, '登录后进入应用外壳')
+      // 登录成功的判据：顶栏出现（桌面与窄屏都有它）。
+      // 不能用 `[data-testid="sidebar"]` —— 窄屏下侧边栏**根本不渲染**（阶段 11 的设计）。
+      await safari.waitFor('[data-testid="header"]', 25000, '登录后进入应用外壳')
     })
   })
 
@@ -222,20 +272,7 @@ describe('Safari Desktop 真实业务链（业主 Stage 10 §20）', () => {
       for (const path of [
         'education', 'education/pre-k', 'education/pre-k/virtue', 'education/pre-k/virtue/resources',
       ]) {
-        const nav = `[data-nav="/directory/${path}"]`
-        if (!(await safari.exists(nav))) {
-          const parent = path.split('/').slice(0, -1).join('/')
-          const toggle = `[data-nav-toggle="/directory/${parent}"]`
-          if (await safari.exists(toggle)) {
-            if ((await safari.attr(toggle, 'aria-expanded')) !== 'true') await safari.clickRobust(toggle)
-          }
-        }
-        await safari.waitFor(nav, 20000, `侧边栏出现 ${path}`)
-        await safari.clickRobust(nav)
-        await safari.waitUntil(
-          async () => (await safari.attr('[data-testid="directory-page"]', 'data-directory-path')) === path,
-          { label: `进入 ${path}` },
-        )
+        await navigateTo(path)
       }
       const title = await safari.text('[data-testid="directory-title"]')
       assert.equal(title, '教学资源')
@@ -300,29 +337,25 @@ describe('Safari Desktop 真实业务链（业主 Stage 10 §20）', () => {
     await step('点下载 → 审计有记录 → Safari 取回的字节 sha256 与上传一致', async () => {
       await safari.goto(`${TEST_BASE}/resources/${ids.res_pdf}`)
       await safari.waitFor('[data-testid="file-download"]', 20000, '下载按钮')
-      await safari.clickRobust('[data-testid="file-download"]')
-
-      // ① 服务端审计：Safari 这次点击真的走到了应用的下载路径
-      await safari.waitUntil(async () => {
-        // 下载审计的 `target_id` 是**文件 id**（服务端精确到"哪个文件被下载了"），
-        // 所以这里必须按文件查 —— 按资源查会永远等不到。
-        const [row] = await withSql((sql) => sql`
-          SELECT count(*)::int AS n FROM audit_logs
-          WHERE action = 'resource.download' AND target_id = ${ids.file_pdf}`)
-        return row.n >= 1
-      }, { label: '下载审计落库', timeoutMs: 20000 })
 
       /*
-        ② 字节核对：拿**应用自己**申请的签名地址，让 Safari 去取。
-        浏览器的下载会落进用户自己的下载目录（我们不去翻人家的目录），
-        所以这里核对的是"Safari 通过那个签名地址真的取回了正确的字节"。
+        顺序有讲究：**先**用 Safari 把字节取回来核对，**再**点下载按钮。
+
+        第一版是反过来的（先点下载再 fetch），在窄屏下偶发 "Load failed" ——
+        因为点击会让浏览器开始一次附件下载（`window.location.assign` 到带
+        `Content-Disposition: attachment` 的地址），Safari 会取消这个页面里
+        还没完成的 fetch。桌面窗口下时序凑巧躲过了，窄屏下就撞上。
+        取字节与"点下载"本来就是两件独立的事，拆开做既准确又没有竞态。
       */
       const url = await safari.executeScript(
         `const res = await fetch('/api/resources/' + arguments[0] + '/files/' + arguments[1] + '/download')
+         if (!res.ok) return null
          const body = await res.json()
          return body.url`,
         [ids.res_pdf, ids.file_pdf],
       )
+      assert.equal(typeof url, 'string', '要能从接口拿到签名下载地址')
+
       const got = await safari.executeScript(
         `const res = await fetch(arguments[0])
          const buf = await res.arrayBuffer()
@@ -336,6 +369,15 @@ describe('Safari Desktop 真实业务链（业主 Stage 10 §20）', () => {
       assert.equal(got.size, FILES.pdf.bytes.length)
       assert.equal(got.sha256, FILES.pdf.sha256, 'Safari 取回的字节必须与上传的逐字节一致')
       assert.match(String(got.disposition), /attachment/, '下载要带 Content-Disposition: attachment')
+
+      // 真正的"点下载"：服务端会为这次下载留下审计
+      await safari.clickRobust('[data-testid="file-download"]')
+      await safari.waitUntil(async () => {
+        const [row] = await withSql((sql) => sql`
+          SELECT count(*)::int AS n FROM audit_logs
+          WHERE action = 'resource.download' AND target_id = ${ids.file_pdf}`)
+        return row.n >= 1
+      }, { label: '下载审计落库', timeoutMs: 25000 })
     })
   })
 
@@ -371,7 +413,7 @@ describe('Safari Desktop 真实业务链（业主 Stage 10 §20）', () => {
       await safari.type('[data-testid="login-username"]', ADMIN.username)
       await safari.type('[data-testid="login-password"]', ADMIN.password)
       await safari.clickRobust('[data-testid="login-submit"]')
-      await safari.waitFor('[data-testid="sidebar"]', 25000, '管理员进入应用')
+      await safari.waitFor('[data-testid="header"]', 25000, '管理员进入应用')
 
       await safari.goto(`${TEST_BASE}/resources/${ids.pendingId}`)
       await safari.waitFor('[data-testid="action-approve"]', 20000, '通过按钮')

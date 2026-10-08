@@ -45,6 +45,58 @@ const BYTES = {
   elf: () => Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]),
 }
 
+describe('中文文本与"只读 64 字节"的边界（阶段 11 手机验收抓出来的缺陷）', () => {
+  const { detectContainer, looksLikeText } = filePolicy
+
+  test('一份正常的中文 .txt，只读开头 64 字节也必须判成文本', () => {
+    /*
+      服务端为了不把整个文件拉回来，只读开头 64 字节做 magic 判断。
+      一个汉字 3 字节，64 不是 3 的倍数 —— 末尾必然可能把某个汉字切开。
+      严格解码会因此报错，于是一份完全正常的中文教案被判成"未知二进制内容"。
+      这条断言就是那个缺陷的门闩。
+    */
+    const bytes = Buffer.from('教案正文：' + '一二三四五六七八九十'.repeat(40), 'utf8')
+    assert.equal(detectContainer(new Uint8Array(bytes.subarray(0, 64))), 'text')
+    assert.equal(detectContainer(new Uint8Array(bytes)), 'text')
+  })
+
+  test('每个可能的截断位置都能过（4..64 字节全部试一遍）', () => {
+    /*
+      从 4 字节起：1~3 字节只够装一个"半个汉字"，那种长度本来就无法判定，
+      判成二进制是安全的（真实文件不会是 1 个字节的中文）。
+      真正要保证的是：一旦文件中**已经有完整内容**，尾巴被切开不影响判定。
+    */
+    const bytes = Buffer.from('美德课程教案：' + '观察记录'.repeat(50), 'utf8')
+    for (let len = 4; len <= 64; len += 1) {
+      assert.equal(
+        looksLikeText(new Uint8Array(bytes.subarray(0, len))),
+        true,
+        `读前 ${len} 字节时被误判成二进制`,
+      )
+    }
+  })
+
+  test('中间的非法字节仍然算二进制（只原谅被截断的尾巴）', () => {
+    const broken = Buffer.concat([Buffer.from('abc'), Buffer.from([0xff, 0xfe]), Buffer.from('def')])
+    assert.equal(looksLikeText(new Uint8Array(broken)), false)
+    assert.equal(detectContainer(new Uint8Array(broken)), 'unknown')
+  })
+
+  test('非法头字节 / 中间坏字节不算文本（退字节不是放水）', () => {
+    assert.equal(looksLikeText(new Uint8Array(Buffer.from([0xff]))), false, '0xFF 不是合法的 UTF-8 头')
+    assert.equal(looksLikeText(new Uint8Array(Buffer.from([0xe5, 0x41]))), false, '头字节后面跟的不是延续字节')
+    assert.equal(
+      looksLikeText(new Uint8Array(Buffer.concat([Buffer.from('美德'), Buffer.from([0x80, 0x80])]))),
+      false,
+      '孤立延续字节（前面没有头字节）不是文本',
+    )
+  })
+
+  test('含 NUL 的仍然是二进制', () => {
+    assert.equal(detectContainer(new Uint8Array(Buffer.from([0x41, 0x00, 0x42]))), 'unknown')
+  })
+})
+
 describe('允许的类型就是业主给的那张清单', () => {
   test('九个扩展名，一个不多一个不少', () => {
     assert.deepEqual(

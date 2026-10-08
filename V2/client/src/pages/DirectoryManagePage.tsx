@@ -318,7 +318,8 @@ function IconButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'rounded-lg p-2 transition-colors disabled:opacity-40',
+        // 手机上给足触控区（≥40px），桌面保持原来的紧凑外观
+        'rounded-lg p-2 transition-colors disabled:opacity-40 min-h-10 min-w-10 sm:min-h-0 sm:min-w-0',
         danger
           ? 'text-destructive hover:bg-destructive/10'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
@@ -536,7 +537,13 @@ function CreateDialog({
             value={slug}
             onChange={(e) => setSlug(e.target.value)}
             placeholder="activities"
-            pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+            /*
+              ⚠️ `pattern` 用的是 HTML 的 `v` 标志正则：字符类里的 `-` 必须转义，
+              否则浏览器会抛 "Invalid character class" 并**静默忽略这个约束**
+              （手机上验收时它作为一条 console error 被抓出来）。
+              这条正则与 `shared/directory.ts` 的 `isValidSlug` 语义一致。
+            */
+            pattern="[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?"
             data-testid="manage-create-slug"
             required
           />

@@ -19,14 +19,46 @@ import type { DirectoryNode } from '../api/types'
 import { cn } from './ui/cn'
 
 /**
- * 侧边栏。**完全由目录数据生成** —— 这里没有一处写死的栏目名。
+ * 侧边栏（**桌面**）。
  *
- * 一级栏目 = `GET /api/directories/tree` 返回的 roots。
- * 管理员在数据库里新增「活动」，它就自动出现在这里，不需要改 React。
- *
- * 视觉取自 V1：240px 固定宽、紫色渐变、白字、当前项 `bg-white/15`。
+ * 它只负责"外壳"：240px 固定宽、紫色渐变、白字、贴着左边固定。
+ * 里面的导航项一律来自 `SidebarNav` —— 移动端的抽屉用的是**同一个组件**，
+ * 所以"有哪些入口"这件事全站只有一份定义（业主明确禁止第二套导航数据）。
  */
 export function Sidebar() {
+  return (
+    <aside
+      className="sidebar-gradient fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-sidebar-border text-white lg:flex"
+      data-testid="sidebar"
+    >
+      <SidebarBrand />
+      <SidebarNav />
+    </aside>
+  )
+}
+
+/** 侧边栏/抽屉顶部的品牌块（两处共用，避免两边各写一份）。 */
+export function SidebarBrand() {
+  return (
+    <div className="flex h-16 shrink-0 items-center gap-3 border-b border-white/15 px-5">
+      <div className="flex size-9 items-center justify-center rounded-lg bg-white/20">
+        <FolderTree className="size-5" />
+      </div>
+      <div className="leading-tight">
+        <p className="text-sm font-semibold text-white">教师平台</p>
+        <p className="text-xs text-white/70">清澜山幼儿园</p>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 导航本体 —— **桌面侧边栏与移动抽屉共用这一份**。
+ *
+ * `onNavigate` 给移动端用：抽屉里点任意一项之后要自动关上。
+ * 桌面端不传，于是行为与从前完全一致。
+ */
+export function SidebarNav({ onNavigate }: { readonly onNavigate?: () => void } = {}) {
   const { roots, loading, ready } = useDirectory()
   const { capabilities } = useAuth()
 
@@ -46,21 +78,14 @@ export function Sidebar() {
     : ''
 
   return (
-    <aside
-      className="sidebar-gradient fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-sidebar-border text-white lg:flex"
-      data-testid="sidebar"
+    <nav
+      className="flex-1 overflow-y-auto px-3 py-4"
+      data-testid="sidebar-nav"
+      onClick={(e) => {
+        // 点导航项（或它里面的文字/图标）就关抽屉；点空白不关。
+        if (onNavigate !== undefined && (e.target as HTMLElement).closest('a') !== null) onNavigate()
+      }}
     >
-      <div className="flex h-16 items-center gap-3 border-b border-white/15 px-5">
-        <div className="flex size-9 items-center justify-center rounded-lg bg-white/20">
-          <FolderTree className="size-5" />
-        </div>
-        <div className="leading-tight">
-          <p className="text-sm font-semibold text-white">教师平台</p>
-          <p className="text-xs text-white/70">清澜山幼儿园</p>
-        </div>
-      </div>
-
-      <nav className="flex-1 overflow-y-auto px-3 py-4" data-testid="sidebar-nav">
         <NavItem to="/" label="首页" icon={<Home className="size-5" />} testId="nav-home" />
         {/* 「我的资源」是**固定条目**，不是目录节点 —— 它由后端按 uploader 过滤，
             与目录树无关。除此之外侧边栏里的一切都来自目录数据。 */}
@@ -147,8 +172,7 @@ export function Sidebar() {
           </nav>
         </div>
       )}
-      </nav>
-    </aside>
+    </nav>
   )
 }
 
@@ -176,7 +200,8 @@ function NavItem({
       data-directory-slug={dataSlug}
       className={({ isActive }) =>
         cn(
-          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+          // 抽屉在手机上用时，导航项也要够高（≥40px）
+          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors min-h-10 sm:min-h-0',
           isActive ? 'bg-white/20 font-medium text-white' : 'text-white/90 hover:bg-white/10',
         )
       }

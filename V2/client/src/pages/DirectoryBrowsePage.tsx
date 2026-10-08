@@ -26,12 +26,37 @@ export function DirectoryBrowsePage() {
   const params = useParams()
   const navigate = useNavigate()
   const segments = (params['*'] ?? '').split('/').filter((s) => s.length > 0)
-  const { roots, ready, loading, resolve, refresh } = useDirectory()
+  const { roots, ready, loading, resolve, refresh, error: treeError } = useDirectory()
   const { capabilities } = useAuth()
   const [uploading, setUploading] = useState(false)
   const [creatingFolder, setCreatingFolder] = useState(false)
 
   if (!ready && loading) return <Spinner label="正在加载目录…" />
+
+  /*
+    目录树没加载成功（断网、超时、服务端 5xx）时，**不能**掉进"找不到这个目录" ——
+    那会把"网络问题"说成"这个目录不存在"，老师会以为目录被删了。
+    （阶段 11 的手机验收就是这么抓到的：断网后页面写的是
+     「地址里的 education / pre-k / virtue 已不存在或已被停用」。）
+
+    判据是 `treeError !== null && roots.length === 0`：树根本没拿到 → 说清原因 + 重试。
+    如果只是"已经有树、但某次刷新失败"，那就继续用手里这份树（不要把人踢到错误页）。
+  */
+  if (treeError !== null && roots.length === 0) {
+    return (
+      <div data-testid="directory-page">
+        <div
+          className="mt-6 flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-6"
+          data-testid="directory-load-error"
+        >
+          <p className="text-sm text-destructive">目录没能加载出来：{treeError}</p>
+          <Button type="button" variant="outline" onClick={() => void refresh()} data-testid="directory-retry">
+            重试
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   const target = resolve(segments)
   const unresolved = segments.slice(target.resolvedCount).join('/')

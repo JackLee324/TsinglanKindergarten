@@ -18,9 +18,17 @@ const VARIANTS: Record<Variant, string> = {
   danger: 'bg-destructive text-destructive-foreground hover:opacity-90',
 }
 
+/**
+ * 尺寸。
+ *
+ * ⚠️ 小号按钮在**窄屏**上加了 `min-h-10`（40px）：这是手机上的触控下限，
+ * 而桌面端的设计稿是 32~34px —— 所以用 `sm:min-h-0` 把桌面像素**原样保留**。
+ * 这条来自阶段 11 的实测：390px 视口下 `file-download` / `file-preview`
+ * 只有 78×34，手机上不好点。
+ */
 const SIZES: Record<Size, string> = {
-  sm: 'px-3 py-1.5 text-sm',
-  md: 'px-5 py-2 text-sm',
+  sm: 'px-3 py-1.5 text-sm min-h-10 sm:min-h-0',
+  md: 'px-5 py-2 text-sm min-h-10 sm:min-h-0',
 }
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

@@ -209,12 +209,69 @@ export function looksLikeText(buf: Uint8Array): boolean {
     // 允许 \t \n \r，其余 C0 控制字符视为二进制
     if (byte < 0x20 && byte !== 0x09 && byte !== 0x0a && byte !== 0x0d) return false
   }
+
+  /*
+    ⚠️ 这里必须容忍**末尾被切开的多字节字符**，否则中文文本会被判成二进制。
+
+    为什么：服务端做 magic 判断时只读文件开头的 64 字节（`readRange(key, 64)`，
+    为了不把整个文件拉回 VPS）。一个 UTF-8 汉字占 3 字节，64 不是 3 的倍数 ——
+    于是"第 64 个字节正好是某个汉字的中间"是**常态**，严格解码必然抛错。
+
+    这个缺陷是阶段 11 的手机端验收抓出来的：一份正常的中文 `.txt`
+    报「文件内容与扩展名不符（.txt 的实际内容看起来是未知二进制内容）」。
+    之前没暴露，只是因为测试夹具的文本都短于 64 字节。
+
+    容忍的范围很窄：**只**原谅"一个多字节序列开了头、但被读断了"这一种情况，
+    而且要求它前面已经有完整内容。中间的非法字节、非法的头字节（如 0xFF）
+    依旧算二进制 —— 退字节不等于放水。
+  */
+  if (decodesAsUtf8(buf)) return true
+  return hasTruncatedMultiByteTail(buf)
+}
+
+function decodesAsUtf8(buf: Uint8Array): boolean {
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(buf)
     return true
   } catch {
     return false
   }
+}
+
+/** 末尾是不是"一个合法多字节序列被读断"（前面已有完整内容）。 */
+function hasTruncatedMultiByteTail(buf: Uint8Array): boolean {
+  for (let trim = 1; trim <= 3 && trim < buf.length; trim += 1) {
+    const cut = buf.length - trim
+    if (cut === 0) return false
+    const lead = buf[cut]
+    /*
+      只有在"切点那个字节声明的序列长度**比被切掉的部分更长**"时，才算读断。
+      两头都对得上才是截断：
+
+        `…e4`      ：cut 处 lead=0xe4 声明 3 字节，只切掉 1 个 → 1 < 3，成立；
+        `…e4 b8`   ：cut 处 lead=0xe4 声明 3 字节，切掉 2 个 → 2 < 3，成立；
+        `…41 e4 ff`：cut 处 lead=0xe4 声明 3 字节、trim=1 < 3 看着成立，
+                     但被切掉的那个字节 0xff 不是延续字节 → 判否；
+        `e5 41`    ：trim=1 时 cut=1、lead=0x41 不是任何头字节（expected=0，跳过）；
+                     trim=2 时 cut=0（前面没有完整内容）→ 判否。
+
+      退字节不等于放水：被切掉的部分只要有非延续字节、或者头字节本身非法
+      （如孤立 0xff），后续的"前缀能解码"这一关也过不去（前缀里那个头字节找不到续接）。
+    */
+    const expected =
+      (lead & 0xe0) === 0xc0 ? 2 : (lead & 0xf0) === 0xe0 ? 3 : (lead & 0xf8) === 0xf0 ? 4 : 0
+    if (!(trim < expected)) continue
+    let continuationOnly = true
+    for (let i = cut + 1; i < buf.length; i += 1) {
+      if ((buf[i] & 0xc0) !== 0x80) {
+        continuationOnly = false
+        break
+      }
+    }
+    if (!continuationOnly) continue
+    if (decodesAsUtf8(buf.subarray(0, cut))) return true
+  }
+  return false
 }
 
 export interface FileRejection {

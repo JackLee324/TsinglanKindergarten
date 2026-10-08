@@ -36,6 +36,8 @@ export function ResourceList({
   const [appliedQuery, setAppliedQuery] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  /** 点「重试」时 +1，让上面的 effect 再跑一次。 */
+  const [reloadToken, setReloadToken] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -65,7 +67,8 @@ export function ResourceList({
     return () => {
       cancelled = true
     }
-  }, [directoryId, page, pageSize, appliedQuery])
+    // reloadToken 让"重试"有一个明确的触发点（见下面的错误块）。
+  }, [directoryId, page, pageSize, appliedQuery, reloadToken])
 
   /** slug 路径 → 中文位置（在已加载的目录树里查，不额外发请求）。 */
   const labelOf = (path: string): string => {
@@ -136,10 +139,27 @@ export function ResourceList({
         </form>
       </div>
 
+      {/*
+        出错时给一个**明确的重试入口**（业主 Stage 11 §20：Loading → Error → Retry）。
+        以前只有一个红条：网络恢复之后，老师唯一的办法是自己再搜一次或刷新整页 ——
+        在手机上这两件事都不顺手。
+      */}
       {error !== null && (
-        <p className="mb-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="resource-list-error">
-          {error}
-        </p>
+        <div
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-destructive/10 px-3 py-2"
+          data-testid="resource-list-error"
+        >
+          <p className="text-sm text-destructive">{error}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setReloadToken((n) => n + 1)}
+            data-testid="resource-list-retry"
+          >
+            重试
+          </Button>
+        </div>
       )}
 
       {items.length === 0 ? (
