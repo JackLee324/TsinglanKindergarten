@@ -246,6 +246,35 @@ const FOLDER_SLUG_BY_SUFFIX = {
 }
 
 /** slug 只能是 [a-z0-9-]。V1 的 code 末段（如 `prek:virtue_outline`）需要规整。 */
+/**
+ * V1 的哪些目录节点**该能放资源**（对应 V2 的 `allow_files = true`）。
+ *
+ * ⚠️ 这是一条**必须**有的映射，不是可选项：
+ * V2 的目录浏览页只在 `allowFiles = true` 的节点渲染资源列表
+ * （`DirectoryBrowsePage`：`{target.node.allowFiles && <ResourceList …/>}`），
+ * 上传接口也要求目标目录 `allow_files = true`。
+ * 所以如果迁移把节点建成 `allow_files = false`，结果就是
+ * **数据搬进来了、接口也查得到，但老师在目录里一条都看不到、也传不上去。**
+ *
+ * 判定规则与 V1 自己的分类表一致（资料夹 code 的后缀）：
+ *   `_outline`   课程大纲      → 能量文件
+ *   `_lesson`    教学详案      → 能量文件
+ *   `_resource`  教学资源      → 能量文件
+ *   `_assessment` 考核评估     → 能量文件
+ * 其它（美育这种中间层、Pre-K/美德这种科目层）只做导航，保持 false ——
+ * 这与 V2 自己种子树的约定一致：**只有叶节点允许放资源**。
+ */
+export function isFileBearingDirectory(code, name) {
+  const tail = String(code ?? '')
+    .split(':')
+    .pop()
+    .toLowerCase()
+  if (/_outline$|_lesson$|_resource$|_assessment$/.test(tail)) return true
+  // 有些 V1 节点没有 code（或 code 不带后缀）：用资料夹中文名兜底，绝不漏掉
+  const label = String(name ?? '').trim()
+  return ['课程大纲', '教学详案', '教学资源', '考核评估'].includes(label)
+}
+
 export function slugFromV1Code(code, name) {
   const tail = String(code ?? '')
     .split(':')
@@ -602,12 +631,19 @@ async function main() {
         }
         const slug = slugFromV1Code(node.code, node.name)
         const type = node.type === 'folder' ? 'FOLDER' : node.parent_id === null ? 'ROOT' : 'SECTION'
+        /*
+          ⚠️ `allow_files` 由**映射规则**决定，不能写死 false。
+          写死 false 的后果是"资源迁进来了但目录页不列、上传也被拒"
+          （阶段 9 的预演目标是已有种子树、`匹配 69 需新建 0`，所以没暴露；
+          生产的新库要新建全部 69 个节点 —— 一写死就全站看不到资源）。
+        */
+        const allowFiles = isFileBearingDirectory(node.code, node.name)
         const [created] = await tx`
           INSERT INTO directories (parent_id, slug, name, name_en, description, type, sort_order,
                                    enabled, allow_children, allow_files, allow_custom_folders)
           VALUES (${parentV2?.id ?? null}, ${slug}, ${node.name}, ${node.name_en ?? null},
                   ${node.description ?? null}, ${type}, ${node.sort_order ?? 0},
-                  ${node.enabled ?? true}, true, false, ${node.allow_custom_folders ?? false})
+                  ${node.enabled ?? true}, true, ${allowFiles}, ${node.allow_custom_folders ?? false})
           RETURNING id::text`
         dirMap.matched.set(node.id, { id: created.id })
         await tx`
@@ -616,6 +652,31 @@ async function main() {
                   ${tx.json({ code: node.code, type: node.type, createdByImport: true })}, ${runId})
           ON CONFLICT DO NOTHING`
         bump('directories', 'inserted')
+      }
+
+      /*
+        ── 修复自己建过的目录节点（自愈）──────────────────────────────────────
+        阶段 9 的导入把新建节点的 `allow_files` 写死成 false，后果是
+        "资源迁进来了、接口查得到，但目录页不列、上传也被拒"。
+        这里**只修这次导入自己创建的节点**（`v1_migration_map.legacy.createdByImport`），
+        不碰任何人后来手工建的目录 —— 迁移对自己留下的痕迹负责。
+      */
+      const createdNodes = await tx`
+        SELECT d.id::text, d.slug, d.name, d.allow_files, m.legacy->>'code' AS v1_code
+        FROM directories d
+        JOIN v1_migration_map m ON m.v2_id = d.id::text AND m.entity = 'directory'
+        WHERE (m.legacy->>'createdByImport')::boolean IS TRUE`
+      const allowFix = []
+      for (const node of createdNodes) {
+        const should = isFileBearingDirectory(node.v1_code, node.name)
+        if (node.allow_files !== should) {
+          await tx`UPDATE directories SET allow_files = ${should}, updated_at = now() WHERE id = ${node.id}`
+          allowFix.push({ slug: node.slug, name: node.name, from: node.allow_files, to: should })
+        }
+      }
+      if (allowFix.length > 0) {
+        console.log(`  ↻ 修正了 ${allowFix.length} 个目录的 allow_files（否则资源在目录页不可见）`)
+        for (const f of allowFix.slice(0, 5)) console.log(`     ${f.name}（${f.slug}）：${f.from} → ${f.to}`)
       }
 
       // ── 用户 ────────────────────────────────────────────────────────────
