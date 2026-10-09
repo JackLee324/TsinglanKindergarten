@@ -1,4 +1,4 @@
-# Stage 13C：正式切换就绪（Production Cutover Readiness）
+# Stage 13C / 13C.1：正式切换就绪（Production Cutover Readiness）
 
 > 业主 Stage 13C 的范围是**收尾门禁**，不是加功能：把文档里的矛盾消掉、把最高权限脚本加固、
 > 把"缺什么才能切换"变成一张可执行、可核对的清单。
@@ -20,7 +20,7 @@ Zeabur 预发布 + 真实浏览器验收 : NOT RUN     （前置：解除 Zeabur
 PRODUCTION CUTOVER           : NOT READY
 ```
 
-## 1. 本轮做完的四件事
+## 1. 本轮做完的五件事（13C 四件 + 13C.1 工具加固）
 
 | # | 事 | 产物 | 证据 |
 |---|---|---|---|
@@ -28,6 +28,7 @@ PRODUCTION CUTOVER           : NOT READY
 | 2 | **权限矩阵状态同步**（业主 §1） | `docs/PRODUCTION_PERMISSION_MATRIX.md` | 拆成三件事：超级管理员 **PASS**（唯一 `TsinglanAdmin`）、教师目录授权 **BLOCKED**、生产登录 **NOT RUN**；删掉"管理员身份仍需逐条确认"的过期文字；新增 §4 数据隔离、§5.3 目录清单（69 个）、§6 决策流程 |
 | 3 | **预检报告同步 + 门禁清单**（业主 §1/§3） | `docs/CUTOVER_PREFLIGHT_REPORT.md` | §0 结论块拆开写；§7 重写为"身份 PASS / 授权 BLOCKED / 登录 NOT RUN"；新增 §12.1 **G1–G10 门禁表**；§12 按业主给的五步顺序重排 |
 | 4 | **两件只读工具**（业主 §1/§3） | `scripts/propose-directory-grants.mjs`、`scripts/r2-inventory.mjs` | 授权决策清单（不连库、不猜、不覆盖业主填过的表）；R2 对象清单（**源码里没有任何写/删动作**，由 `tests/unit/r2-inventory-safety.test.mjs` 静态盯住） |
+| 5 | **R2 工具加固**（业主 Stage 13C.1 审查发现的 3 个问题） | `scripts/lib/{csv,inventory-source,r2-target}.mjs` | ① **默认只允许 HTTPS**（http 仅限 `--allow-http-local` + 本机地址，远端 http 永远拒绝）；② CSV 改走 **RFC 4180** 解析（引号/内嵌逗号/CRLF/BOM/带引号换行），坏行**报错**而不是跳过；③ 产物带**完整性元数据**（`complete` / `usableForProductionComparison` / `scope`），`--max` 恒为不完整，`--compare` 拒绝不完整清单与范围不一致 |
 
 ## 2. 数据隔离：演练库**不是**迁移来源（业主 §2）
 
@@ -53,7 +54,7 @@ PRODUCTION CUTOVER           : NOT READY
 | G2 | 迁移来源隔离 | 本文件 §2 + 矩阵 §4 | 演练数据不进正式库（规则 + 计数对照） | PASS（规则已写死） |
 | G3 | 超级管理员唯一 | `tests/integration/account-privileges.test.mjs`；`scripts/transfer-superadmin.mjs` | 只能有一名有效 `ADMIN`；换人走交接脚本；缺 `DATABASE_URL` 不动数据 | PASS（本轮） |
 | G4 | 教师目录授权决策 | `node scripts/propose-directory-grants.mjs` → 业主填写 → `/admin/permissions` 初始化 | 24 个账号逐条有明确决定（含"暂不开放"）；**不是**全站开放 | **BLOCKED（等业务）** |
-| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out .migration/r2-inventory.json`（或 `--from-console <导出>`） | 有一份对象清单 + 前缀分布；据此说明"有无需要迁移的文件" | **BLOCKED（缺只读凭证/导出）** |
+| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out .migration/r2-inventory.json`（或 `--from-console <导出> --bucket <桶名>`） | 有一份**`complete=true`** 的清单（`--max` 产物不算证据）+ 前缀分布 + 范围声明；据此说明"有无需要迁移的文件" | **BLOCKED（缺只读凭证/导出）** |
 | G6 | 独立 V2 PostgreSQL | Zeabur 控制台建库（与 V1 完全分离） | 连接串可达；`node scripts/migrate.mjs status` = 0 pending | **BLOCKED（无 Zeabur 访问）** |
 | G7 | V1 备份 + **恢复演练** | 备份 V1 → 在**另一个库**恢复 → 行数/关键表核对 | 恢复出来的行数与备份源一致；演练有记录 | **NOT RUN** |
 | G8 | 预发布部署 + 真实浏览器验收 | `deploy/verify.mjs --base <预发布域名>`；`tests/production/*`（桌面 + 移动） | 全部通过；样式真的生效；上传/预览/下载哈希一致 | **NOT RUN** |
@@ -80,7 +81,10 @@ node scripts/propose-directory-grants.mjs
 > ⚠️ **不得**给所有教师开放全部目录；**不得**按 V1 角色名批量换算 ——
 > 那会把"角色制"换成"人人全站可见"，是权限降级，不是初始化。
 
-### G5 R2 对象清单（BLOCKED）
+### G5 R2 对象清单（BLOCKED：缺只读凭证或控制台导出）
+
+**优先用完整 JSON 导出**（没有歧义）；只有 CSV 时才依赖 RFC 4180 解析器。
+两种方式都**只读**：工具只调用 List/Head，源码里没有任何写/删动作。
 
 ```bash
 # 方式 A：只读凭证（走环境变量，不要写进命令行历史、不要贴到聊天里）
@@ -88,18 +92,29 @@ R2_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com \
 R2_BUCKET=<桶名> R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… \
 node scripts/r2-inventory.mjs --out .migration/r2-inventory.json
 
-# 方式 B：没有只读凭证 —— 从 R2 控制台导出清单，完全不连网
-node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects.csv \
-  --out .migration/r2-inventory.json
+# 方式 B：没有只读凭证 —— 从 R2 控制台导出清单，完全不连网（**优先 JSON**）
+node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects.json \
+  --bucket <桶名> --out .migration/r2-inventory.json
 
-# 之后可以逐次对比（有对象"消失"时退出码 5，交给人工判断）
-node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects-2.csv \
-  --compare .migration/r2-inventory.json
+# 逐次对比（两次都必须是完整清单；桶/前缀范围必须一致）
+node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects-2.json \
+  --bucket <桶名> --compare .migration/r2-inventory.json
 ```
 
-工具的三条保证：**只有 List/Head**（无任何写/删，静态测试盯着）；**缺配置就退出**（不猜桶）；
-**产物只有 key/size/etag/时间**（不含凭证）。
-**在清单核实之前，不删除、不覆盖任何生产对象。**
+**三条保证（Stage 13C.1 加固后）**：
+
+| 项 | 行为 |
+|---|---|
+| 端点安全 | 默认**只接受 `https://`**；`http://` 必须显式 `--allow-http-local` **且**指向本机（`127.0.0.1` / `::1` / `localhost`），远端 http 任何情况下都拒绝；缺配置/空白配置在**创建 S3 客户端之前**就失败；报错里不含 Access Key / Secret Key |
+| 解析健壮性 | JSON 支持数组 / `objects` / `Contents`；CSV 走 RFC 4180（引号、字段内逗号、双引号转义、CRLF、UTF-8 BOM、带引号的换行）；**空 key / 非法 size / 列数不符 / 重复 key / 结构无法解释 → 明确报错并带行号**，不静默跳过（CSV 尤其重要：对象键里本来就可能有逗号） |
+| 完整性 | 默认走完全部分页 → `complete=true`；只要用了 `--max`（抽样）→ `complete=false`、`usableForProductionComparison=false`，**不能**作为 G5 证据；`--compare` 遇到任一份不完整 → 拒绝（退出码 6）；桶/前缀/endpoint 主机不一致 → 拒绝（退出码 7）；`--max` 与 `--compare` 同用 → 直接拒绝 |
+
+**退出码**：0 成功 / 2 参数或配置不合法（含默认拒绝 http）/ 3 列举失败 /
+4 产物已存在（拒绝覆盖）/ 5 对比发现对象消失（**交人工判断**）/
+6 对比里有不完整或非本工具的清单 / 7 对比范围不一致 / 8 清单来源解析失败。
+
+**通过判据（G5 才能从 BLOCKED 转 PASS）**：产物里 `complete=true`；范围（桶 + 前缀）明确；
+对象数与总字节数有记录；与数据库记录核对过；并且**在清单核实之前不删除、不覆盖任何生产对象**。
 
 ### G6 独立 V2 PostgreSQL（BLOCKED）
 
@@ -146,6 +161,7 @@ psql -d qls_restore_verify -c "SELECT count(*) FROM resources;"
 3. 不把演练库当作迁移来源，不做"演练 → 正式"的数据复制；
 4. 不重新部署 V1、不退役 V1（前置门禁未满足）；
 5. 不把 R2 Secret / 数据库口令贴到聊天、命令行历史或仓库里（工具只从环境变量读）；
+   **也不为了"本地能跑"放宽生产默认安全规则** —— http 只对本机模拟器、且要显式开关；
 6. 不用"文档里写了"代替"实际执行过" —— 状态词按 §3 的判据填写。
 
 ## 6. 本轮实际执行的证据
@@ -153,14 +169,17 @@ psql -d qls_restore_verify -c "SELECT count(*) FROM resources;"
 | 命令 | 结果 |
 |---|---|
 | `node --test tests/unit/db-target.test.mjs` | **9 / 9 PASS** |
-| `node --test tests/unit/r2-inventory-safety.test.mjs` | **9 / 9 PASS** |
+| `node --test tests/unit/r2-inventory-safety.test.mjs` | **15 / 15 PASS**（含端点安全 6 条：默认拒绝 http、远端 http 即使开了本地开关也拒绝、本地模拟器放行、https 放行、其它协议拒绝、loopback 判定） |
+| `node --test tests/unit/r2-inventory-parsing.test.mjs` | **16 / 16 PASS**（业主点名的 10 种情形 + 表头别名 + JSON 三种形状 + 结构错误 + 缺 key/非法 size/重复 key） |
+| `node --test tests/unit/r2-inventory-completeness.test.mjs` | **10 / 10 PASS**（完整/截断标记、compare 拒绝不完整与范围不一致、退出码 2/5/6/7、`--from-console` 必须声明 `--bucket`） |
 | `node --test tests/unit/grant-decision-sheet.test.mjs` | **4 / 4 PASS** |
 | `node --test tests/integration/account-privileges.test.mjs` | **17 / 17 PASS**（含"缺 `DATABASE_URL` 不动数据"、"输出不含口令"） |
 | `node scripts/transfer-superadmin.mjs`（不设 `DATABASE_URL`） | 退出码 **2**，提示"不接受任何默认库"，**未建立连接** |
 | `node scripts/propose-directory-grants.mjs` | 生成 24 账号 / 69 目录 / 11 项可授予权限的决策清单；**未连数据库** |
-| `node scripts/r2-inventory.mjs --from-console …` | 清单 + 前缀分布；重复写同一产物 → 退出码 **4**（拒绝覆盖）；对比有对象消失 → 退出码 **5** |
+| `node scripts/r2-inventory.mjs --from-console …` | 清单 + 前缀分布 + 完整性标记；**带逗号的对象键**（`uploads/x/校服申领登记,副本.png`）+ BOM + CRLF 的 CSV 解析后 key 完整保留（`split(',')` 会把它劈成两列）；重复写同一产物 → 退出码 **4**；对比有对象消失 → 退出码 **5** |
+| `R2_ENDPOINT=http://…`（默认） | 退出码 **2**，提示"必须是 https"并说明本地开关；**未创建 S3 客户端** |
 | `npm run build` / `npm run typecheck` / `npm run lint` | 全部退出码 0 |
-| `npm run test:unit` | **228 / 228 PASS**（Stage 13B 是 206，本轮 +22：db-target 9、r2-inventory-safety 9、grant-decision-sheet 4） |
+| `npm run test:unit` | **260 / 260 PASS**（Stage 13B 是 206，本轮 +54：db-target 9、r2-inventory-safety 15、r2-inventory-parsing 16、r2-inventory-completeness 10、grant-decision-sheet 4） |
 | `npm run test:integration` | **615 / 615 PASS**（Stage 13B 是 614，本轮 +1：交接脚本"缺 `DATABASE_URL` 就不动数据"） |
 | `npm run test:safari`（桌面 1440×900） | **10 / 10 PASS** |
 | `SAFARI_VIEWPORT=mobile npm run test:safari` | **10 / 10 PASS** |

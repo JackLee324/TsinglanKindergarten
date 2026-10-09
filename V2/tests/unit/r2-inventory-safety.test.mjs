@@ -17,7 +17,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildInventoryArtifact, resolveR2Config, summarizeObjects } from '../../scripts/lib/r2-target.mjs'
+import { buildInventoryArtifact, isLoopbackHost, resolveR2Config, summarizeObjects } from '../../scripts/lib/r2-target.mjs'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const SOURCE = readFileSync(join(ROOT, 'scripts', 'r2-inventory.mjs'), 'utf8')
@@ -52,15 +52,27 @@ describe('① 只读：源码里不许有任何写/删动作', () => {
       generatedAt: '2026-01-01T00:00:00.000Z',
       source: 'ListObjectsV2 endpoint=acct.r2.cloudflarestorage.com bucket=b',
       objects: [{ key: 'uploads/a/1.png', size: 10, etag: 'abc', lastModified: '2026-01-01' }],
+      scope: { method: 'api-list', endpointHost: 'acct.r2.cloudflarestorage.com', bucket: 'b', prefix: '' },
+      completeness: { complete: true, reason: 'listed-all-pages' },
     })
+    // 顶层字段是**枚举式**断言：多一个字段就要人来确认它写的是什么（防止以后混进凭证）
     assert.deepEqual(Object.keys(artifact).sort(), [
       'compare',
+      'complete',
+      'completeness',
       'generatedAt',
       'objects',
       'readOnly',
+      'scope',
       'source',
       'summary',
     ])
+    assert.deepEqual(Object.keys(artifact.completeness).sort(), [
+      'complete',
+      'reason',
+      'usableForProductionComparison',
+    ])
+    assert.deepEqual(Object.keys(artifact.scope).sort(), ['bucket', 'endpointHost', 'method', 'prefix'])
     assert.deepEqual(Object.keys(artifact.objects[0]).sort(), ['etag', 'key', 'lastModified', 'size'])
     const text = JSON.stringify(artifact)
     for (const secret of ['secretAccessKey', 'accessKeyId', 'SECRET', 'AKIA']) {
@@ -111,6 +123,57 @@ describe('② 缺配置就退出（不猜桶、不回显凭证）', () => {
     })
     assert.equal(out.ok, false)
     assert.match(out.reason, /http/)
+  })
+})
+
+describe('②bis 端点安全：默认只允许 HTTPS（业主 Stage 13C.1 §一）', () => {
+  const base = { R2_BUCKET: 'tsinglan-curriculum', R2_ACCESS_KEY_ID: 'AK', R2_SECRET_ACCESS_KEY: 'SK' }
+
+  test('http:// 默认被拒（凭证不许明文发送），并说清怎么开本地开关', () => {
+    const out = resolveR2Config({ ...base, R2_ENDPOINT: 'http://127.0.0.1:18443' })
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /必须是 https/)
+    assert.match(out.reason, /--allow-http-local/, '要告诉操作者本地模拟器怎么开')
+    assert.equal(out.reason.includes('AK'), false, '理由里不能出现 Access Key')
+  })
+
+  test('即使开了 --allow-http-local，**远端** http 仍然被拒', () => {
+    for (const host of ['evil.example.com', 'acct123.r2.cloudflarestorage.com', '10.0.0.5', '0.0.0.0']) {
+      const out = resolveR2Config({ ...base, R2_ENDPOINT: `http://${host}` }, { allowInsecureLocal: true })
+      assert.equal(out.ok, false, `${host} 不该被放行`)
+      assert.match(out.reason, /本机/)
+    }
+  })
+
+  test('本地模拟器：显式开关 + 本机地址才放行，并标记 insecureLocal', () => {
+    for (const host of ['127.0.0.1:18443', 'localhost:18443', '[::1]:18443']) {
+      const out = resolveR2Config({ ...base, R2_ENDPOINT: `http://${host}` }, { allowInsecureLocal: true })
+      assert.equal(out.ok, true, `${host} 应当放行`)
+      assert.equal(out.insecureLocal, true)
+    }
+  })
+
+  test('https 永远放行（含远端），且不标记 insecureLocal', () => {
+    const out = resolveR2Config({ ...base, R2_ENDPOINT: 'https://acct123.r2.cloudflarestorage.com' })
+    assert.equal(out.ok, true)
+    assert.equal(out.insecureLocal, false)
+  })
+
+  test('其它协议一律拒绝', () => {
+    for (const url of ['ftp://x/y', 'file:///etc/passwd', 's3://bucket']) {
+      const out = resolveR2Config({ ...base, R2_ENDPOINT: url })
+      assert.equal(out.ok, false, url)
+      assert.match(out.reason, /http\(s\)/)
+    }
+  })
+
+  test('isLoopbackHost：只认真正的本机写法', () => {
+    for (const host of ['127.0.0.1', '127.1.2.3', 'localhost', 'x.localhost', '::1']) {
+      assert.equal(isLoopbackHost(host), true, host)
+    }
+    for (const host of ['0.0.0.0', '10.0.0.1', 'example.com', 'localhost.evil.com', '']) {
+      assert.equal(isLoopbackHost(host), false, host)
+    }
   })
 })
 

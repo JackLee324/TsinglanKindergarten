@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * scripts/r2-inventory.mjs —— **只读**的对象存储清单（业主 Stage 13C §3）
+ * scripts/r2-inventory.mjs —— **只读**的对象存储清单（业主 Stage 13C §3 + 13C.1 加固）
  * ============================================================================
  * 为什么需要它：V1 的数据库里 `resource_files = 0` **不能**推断"线上桶里没有东西"。
  * 数据库记录与桶里的对象是两套事实；正式切换前必须**真的列一次桶**，
@@ -9,14 +9,22 @@
  *
  * 安全边界（写进代码，不靠人工小心）：
  *   · **只读**：唯一会调用的接口是 `ListObjectsV2` / `HeadBucket`。
- *     没有 PutObject / DeleteObject / CopyObject —— 这一点由
+ *     没有 PutObject / DeleteObject / CopyObject —— 由
  *     `tests/unit/r2-inventory-safety.test.mjs` **静态扫描源码**盯着；
+ *   · **默认只允许 HTTPS**（Stage 13C.1 §一）：本工具会带只读凭证发请求，
+ *     `http://` 默认一律拒绝；本地 S3 兼容模拟器要明文必须显式 `--allow-http-local`，
+ *     且端点必须是本机地址（远端 HTTP 永远拒绝）；
  *   · **缺配置就退出**：不猜默认桶、不猜 endpoint（猜错桶 = 已经越界）；
  *   · **凭证只从环境变量读**，不接受命令行参数（不进 shell 历史），且**永不回显**：
  *     输出里只有 endpoint 主机、桶名、对象数、总字节数、前缀分布；
  *   · **不覆写任何已有产物**：`--out` 指向已存在的文件时拒绝（除非显式 `--force`）；
- *   · `--from-console <json>` 允许**完全不连网**：直接用 R2 控制台导出的清单，
- *     适合"没有只读凭证、但能从控制台下载清单"的情况。
+ *   · **完整性必须可辨**（Stage 13C.1 §三）：默认走完全部分页 → `complete=true`；
+ *     只要用了 `--max` 且没证明列完 → `complete=false` 且 `usableForProductionComparison=false`，
+ *     这种产物**不能**用于正式对账，也不能作为 G5 的通过证据；
+ *   · **对比前先核范围**：桶 / 前缀 / endpoint 主机不一致、或任一份不完整 → 直接拒绝，
+ *     不输出"看起来有效"的差异结论；
+ *   · `--from-console <json|csv>` 允许**完全不连网**：用 R2 控制台导出的清单
+ *     （**优先完整 JSON**；CSV 走 RFC 4180 解析，坏行会明确报错而不是被跳过）。
  *
  * 用法（本机，凭证走环境变量）：
  *   R2_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com \
@@ -24,17 +32,28 @@
  *   R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… \
  *   node scripts/r2-inventory.mjs --out .migration/r2-inventory.json
  *
- *   node scripts/r2-inventory.mjs --from-console ./r2-console-export.json --out .migration/r2-inventory.json
- *   node scripts/r2-inventory.mjs --compare .migration/r2-inventory.prev.json --from-console ./now.json
+ *   node scripts/r2-inventory.mjs --from-console ./r2-objects.json --bucket tsinglan-curriculum \
+ *     --out .migration/r2-inventory.json
+ *   node scripts/r2-inventory.mjs --from-console ./r2-objects-2.json --bucket tsinglan-curriculum \
+ *     --compare .migration/r2-inventory.json
  *
- * 退出码：0 成功 / 2 缺配置或参数不合法 / 3 列举失败 / 4 产物已存在（未给 --force）
- *         / 5 对比发现对象消失（**这是要人来判断的事，不能静默通过**）
+ * 退出码：0 成功 / 2 缺配置或参数不合法（含"默认拒绝 http"）
+ *         3 列举失败 / 4 产物已存在（未给 --force）
+ *         5 对比发现对象消失（**要人来判断，不能静默通过**）
+ *         6 对比里有不完整清单（拒绝对比） / 7 对比范围不一致（拒绝对比）
+ *         8 清单来源解析失败（CSV/JSON 坏行、缺 key、非法 size 等）
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HeadBucketCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
-import { buildInventoryArtifact, resolveR2Config, summarizeObjects } from './lib/r2-target.mjs'
+import { InventorySourceError, parseConsoleExport } from './lib/inventory-source.mjs'
+import {
+  assertComparable,
+  buildInventoryArtifact,
+  resolveR2Config,
+  summarizeObjects,
+} from './lib/r2-target.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const arg = (name, fallback = null) => {
@@ -51,106 +70,162 @@ function fail(message, code = 2) {
 const OUT = arg('out', null)
 const CONSOLE_FILE = arg('from-console', null)
 const COMPARE = arg('compare', null)
+const BUCKET_ARG = arg('bucket', null)
 const PREFIX = arg('prefix', '')
 const MAX = Number(arg('max', '0')) || 0
+/** 仅本地模拟器：显式允许**指向本机**的 http（远端 http 仍然拒绝）。 */
+const ALLOW_HTTP_LOCAL = has('allow-http-local')
 
-/** R2 控制台导出的清单（CSV/JSON）→ 统一形状；只读解析，不猜字段名以外的东西。 */
-function readConsoleExport(path) {
-  const text = readFileSync(resolve(ROOT, path), 'utf8')
-  const trimmed = text.trim()
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    const parsed = JSON.parse(trimmed)
-    const rows = Array.isArray(parsed) ? parsed : (parsed.objects ?? parsed.Contents ?? [])
-    return rows.map((r) => ({
-      key: String(r.key ?? r.Key ?? ''),
-      size: Number(r.size ?? r.Size ?? 0),
-      lastModified: String(r.lastModified ?? r.LastModified ?? ''),
-      etag: String(r.etag ?? r.ETag ?? ''),
-    }))
-  }
-  // CSV：第一行是表头，取 key/size 两列（列名大小写不敏感）
-  const lines = trimmed.split('\n').filter((l) => l.trim() !== '')
-  const header = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/"/g, ''))
-  const keyIdx = header.findIndex((h) => h === 'key' || h === 'name' || h === 'object key')
-  const sizeIdx = header.findIndex((h) => h === 'size' || h === 'bytes')
-  if (keyIdx < 0) fail('控制台导出的 CSV 里找不到 key/name 列。', 2)
-  return lines.slice(1).map((line) => {
-    const cells = line.split(',').map((c) => c.trim().replace(/^"|"$/g, ''))
-    return { key: cells[keyIdx], size: sizeIdx >= 0 ? Number(cells[sizeIdx]) : 0, lastModified: '', etag: '' }
-  })
+if (MAX < 0) fail('--max 不能是负数。')
+if (MAX > 0 && COMPARE !== null) {
+  fail(
+    '--max（抽样）与 --compare（对账）不能一起用：抽样清单不能被当作全量清单去判断"对象是否消失"。\n' +
+      '    需要对比就先跑一次全量（不加 --max）。',
+  )
 }
 
-/** 连网列举（只读）。分页直到列完或到 --max。 */
-async function listFromEndpoint(config) {
-  const client = new S3Client({
-    region: 'auto',
-    endpoint: config.endpoint,
-    forcePathStyle: true,
-    credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey },
-  })
-  await client.send(new HeadBucketCommand({ Bucket: config.bucket }))
-  const objects = []
-  let token
-  do {
-    const page = await client.send(
-      new ListObjectsV2Command({
-        Bucket: config.bucket,
-        ...(PREFIX === '' ? {} : { Prefix: PREFIX }),
-        ...(token === undefined ? {} : { ContinuationToken: token }),
-      }),
-    )
-    for (const item of page.Contents ?? []) {
-      objects.push({
-        key: String(item.Key ?? ''),
-        size: Number(item.Size ?? 0),
-        lastModified: item.LastModified instanceof Date ? item.LastModified.toISOString() : String(item.LastModified ?? ''),
-        etag: String(item.ETag ?? '').replaceAll('"', ''),
-      })
-      if (MAX > 0 && objects.length >= MAX) return objects
-    }
-    token = page.IsTruncated === true ? page.NextContinuationToken : undefined
-  } while (token !== undefined)
-  return objects
-}
-
-// ── 主体 ─────────────────────────────────────────────────────────────────────
+// ── ① 取清单：控制台导出（离线）或只读列举 ─────────────────────────────────
 let objects
 let source
+let scope
+let truncatedByMax = false
+
 if (CONSOLE_FILE !== null) {
-  objects = readConsoleExport(CONSOLE_FILE)
-  source = `控制台导出 ${CONSOLE_FILE}（未连网）`
-} else {
-  const config = resolveR2Config(process.env)
-  if (!config.ok) fail(config.reason)
+  /*
+    控制台导出里没有 endpoint 信息，也看不出"导的是哪个桶" —— 而桶/前缀正是
+    对比时唯一能证明"两份清单说的是同一个集合"的东西。所以这里要求显式声明。
+  */
+  if (BUCKET_ARG === null) {
+    fail(
+      '用 --from-console 时必须同时声明 --bucket <桶名>：\n' +
+        '    导出文件里没有桶信息，而"对比两份清单"的前提就是它们说的是同一个桶/同一个前缀。',
+    )
+  }
+  let parsed
   try {
-    objects = await listFromEndpoint(config)
+    parsed = parseConsoleExport(readFileSync(resolve(ROOT, CONSOLE_FILE), 'utf8'), { label: CONSOLE_FILE })
+  } catch (error) {
+    if (error instanceof InventorySourceError) fail(`清单来源解析失败（${CONSOLE_FILE}）：${error.message}`, 8)
+    fail(`读不到清单文件 ${CONSOLE_FILE}：${error?.message ?? error}`, 8)
+  }
+  objects = parsed.objects
+  source = `控制台导出 ${CONSOLE_FILE}（未连网，格式 ${parsed.format}）`
+  scope = { method: 'console-export', endpointHost: null, bucket: BUCKET_ARG, prefix: PREFIX }
+  console.log(`  控制台导出：${parsed.format.toUpperCase()}，解析出 ${parsed.objects.length} 个对象`)
+  if (MAX > 0 && objects.length > MAX) {
+    objects = objects.slice(0, MAX)
+    truncatedByMax = true
+  }
+} else {
+  const config = resolveR2Config(process.env, { allowInsecureLocal: ALLOW_HTTP_LOCAL })
+  if (!config.ok) fail(config.reason)
+  if (config.insecureLocal) {
+    console.warn(
+      '⚠ 正在用 **http** 连接本机端点（--allow-http-local）。只读凭证会明文发送 —— 仅限本机模拟器，绝不要对生产使用。',
+    )
+  }
+  try {
+    const client = new S3Client({
+      region: 'auto',
+      endpoint: config.endpoint,
+      forcePathStyle: true,
+      credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey },
+    })
+    await client.send(new HeadBucketCommand({ Bucket: config.bucket }))
+    objects = []
+    let token
+    let stoppedByMax = false
+    do {
+      const page = await client.send(
+        new ListObjectsV2Command({
+          Bucket: config.bucket,
+          ...(PREFIX === '' ? {} : { Prefix: PREFIX }),
+          ...(token === undefined ? {} : { ContinuationToken: token }),
+        }),
+      )
+      for (const item of page.Contents ?? []) {
+        objects.push({
+          key: String(item.Key ?? ''),
+          size: Number(item.Size ?? 0),
+          lastModified:
+            item.LastModified instanceof Date ? item.LastModified.toISOString() : String(item.LastModified ?? ''),
+          etag: String(item.ETag ?? '').replaceAll('"', ''),
+        })
+        if (MAX > 0 && objects.length >= MAX) {
+          stoppedByMax = true
+          break
+        }
+      }
+      if (stoppedByMax) break
+      token = page.IsTruncated === true ? page.NextContinuationToken : undefined
+    } while (token !== undefined)
+    /*
+      完整性判据只有一条：**把所有分页都走完了**。
+      `--max` 触顶时哪怕"看起来刚好列完"，也不能声称完整 —— 那种巧合无法自证。
+    */
+    truncatedByMax = stoppedByMax && MAX > 0
   } catch (error) {
     fail(`列举对象失败：${error?.message ?? error}（endpoint=${config.redactedEndpoint} bucket=${config.bucket}）`, 3)
   }
   source = `ListObjectsV2 endpoint=${config.redactedEndpoint} bucket=${config.bucket}${PREFIX === '' ? '' : ` prefix=${PREFIX}`}`
+  scope = { method: 'api-list', endpointHost: config.redactedEndpoint, bucket: config.bucket, prefix: PREFIX }
 }
 
 objects = objects.filter((o) => o.key !== '')
 const summary = summarizeObjects(objects)
+const completeness = {
+  complete: !truncatedByMax,
+  reason: truncatedByMax
+    ? 'truncated-by-max'
+    : scope.method === 'console-export'
+      ? 'console-export-declared-complete'
+      : 'listed-all-pages',
+}
 
 console.log('对象存储清单（**只读**，没有任何写/删动作）')
 console.log(`  来源：${source}`)
+console.log(`  范围：bucket=${scope.bucket ?? '(未声明)'} prefix="${scope.prefix}" method=${scope.method}`)
 console.log(`  对象数：${summary.count}`)
 console.log(`  总字节：${summary.totalBytes}`)
+console.log(
+  `  完整性：${completeness.complete ? '完整（可用于正式对账）' : '★ 不完整（抽样/截断）—— 不可用于正式对账'}` +
+    `（reason=${completeness.reason}）`,
+)
+if (!completeness.complete) {
+  console.warn(
+    '⚠ 用了 --max：这份清单是**抽样**，不是桶的全貌。它不能用来判断"某个对象是否消失"，\n' +
+      '  也不能作为 G5（R2 对象清单）的通过证据。',
+  )
+}
 if (summary.prefixes.length > 0) {
   console.log('  前缀分布（前 10）：')
   for (const p of summary.prefixes.slice(0, 10)) console.log(`    ${p.prefix}  ${p.count} 个`)
 }
 
+// ── ② 对比（先核范围与完整性，再算差异） ────────────────────────────────────
 let compareResult = null
 if (COMPARE !== null) {
-  const previous = JSON.parse(readFileSync(resolve(ROOT, COMPARE), 'utf8'))
+  let previous
+  try {
+    previous = JSON.parse(readFileSync(resolve(ROOT, COMPARE), 'utf8'))
+  } catch (error) {
+    fail(`读不到前一份清单 ${COMPARE}：${error?.message ?? error}`, 6)
+  }
+  const comparable = assertComparable(previous, { complete: completeness.complete, scope })
+  if (!comparable.ok) {
+    // 退出码按 kind 选，不靠正则猜：6 = 不能确定完整性，7 = 范围不同。
+    const code = comparable.kind === 'scope' ? 7 : 6
+    fail(`拒绝对比：${comparable.reason}`, code)
+  }
+
   const prevKeys = new Set((previous.objects ?? []).map((o) => o.key))
   const nowKeys = new Set(objects.map((o) => o.key))
   const missing = [...prevKeys].filter((k) => !nowKeys.has(k))
   const added = [...nowKeys].filter((k) => !prevKeys.has(k))
   compareResult = {
     comparedWith: COMPARE,
+    previousGeneratedAt: previous.generatedAt ?? null,
+    scopeChecked: { bucket: scope.bucket, prefix: scope.prefix, endpointHost: scope.endpointHost },
     missingCount: missing.length,
     addedCount: added.length,
     missingSample: missing.slice(0, 20),
@@ -162,6 +237,7 @@ if (COMPARE !== null) {
   }
 }
 
+// ── ③ 产物 ──────────────────────────────────────────────────────────────────
 if (OUT !== null) {
   const outPath = resolve(ROOT, OUT)
   if (existsSync(outPath) && !has('force')) {
@@ -170,12 +246,11 @@ if (OUT !== null) {
   mkdirSync(dirname(outPath), { recursive: true })
   // 产物由纯函数构造（见 lib/r2-target.mjs）：它的入参里没有凭证，
   // 所以"清单里混进 secret"这种事在结构上就不可能发生。
-  writeFileSync(
-    outPath,
-    JSON.stringify(buildInventoryArtifact({ source, objects, compare: compareResult }), null, 2) + '\n',
-    'utf8',
+  const artifact = buildInventoryArtifact({ source, objects, compare: compareResult, scope, completeness })
+  writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
+  console.log(
+    `  已写入：${OUT}（只含 key/size/etag/时间与完整性标记，不含任何凭证；complete=${artifact.complete}）`,
   )
-  console.log(`  已写入：${OUT}（该文件只含 key/size/etag/时间，不含任何凭证）`)
 }
 
 if (compareResult !== null && compareResult.missingCount > 0) process.exit(5)

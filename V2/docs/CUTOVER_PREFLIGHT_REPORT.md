@@ -304,7 +304,7 @@ V1 存储里的两个 smoke 对象保持原样、不动；V2 采用独立 Bucket
 | G2 | 迁移来源隔离（不得用演练库） | 见 `docs/PRODUCTION_PERMISSION_MATRIX.md` §4 | PASS（文档规则 + 计数器对照） |
 | G3 | 超级管理员唯一 | `scripts/transfer-superadmin.mjs` 加固 + `account-privileges.test.mjs` | PASS（Stage 13C 本轮） |
 | G4 | 教师目录授权决策 | `node scripts/propose-directory-grants.mjs` → 业主填写 → 界面初始化 | **BLOCKED**（等业务） |
-| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out …`（只读；需业主给只读凭证或控制台导出） | **BLOCKED**（无凭证） |
+| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out …`（只读；需业主给只读凭证或控制台导出）。**Stage 13C.1 加固**：默认只接受 https（http 仅限本机模拟器 + 显式开关）、CSV 走 RFC 4180、`--max` 产物恒标 `complete=false` 且不能作为证据、`--compare` 拒绝不完整清单与范围不一致 | **BLOCKED**（无凭证）；工具侧已加固并复测 |
 | G6 | 独立 V2 PostgreSQL | Zeabur 控制台建库 | **BLOCKED**（无访问） |
 | G7 | V1 备份 + 恢复演练 | 备份 → 在**另一个**库恢复 → 行数核对 | **NOT RUN** |
 | G8 | Zeabur 预发布部署 + 真实浏览器验收 | `deploy/verify.mjs` + `tests/production/*`（桌面 + 移动） | **NOT RUN** |
