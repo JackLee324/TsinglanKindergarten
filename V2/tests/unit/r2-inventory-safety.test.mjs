@@ -67,12 +67,26 @@ describe('① 只读：源码里不许有任何写/删动作', () => {
       'source',
       'summary',
     ])
+    // 完整性字段是**枚举式**断言：以后多写一个字段就要人来确认它写的是什么
+    // （尤其是"操作者声明"与"工具验证"必须分开——报告里不能把两者混为一谈）
     assert.deepEqual(Object.keys(artifact.completeness).sort(), [
       'complete',
+      'declaredBy',
+      'expectSource',
+      'expectedCount',
+      'explanation',
+      'observedCount',
       'reason',
       'usableForProductionComparison',
+      'verification',
     ])
-    assert.deepEqual(Object.keys(artifact.scope).sort(), ['bucket', 'endpointHost', 'method', 'prefix'])
+    assert.deepEqual(Object.keys(artifact.scope).sort(), [
+      'bucket',
+      'endpointHost',
+      'method',
+      'prefix',
+      'prefixFilterApplied',
+    ])
     assert.deepEqual(Object.keys(artifact.objects[0]).sort(), ['etag', 'key', 'lastModified', 'size'])
     const text = JSON.stringify(artifact)
     for (const secret of ['secretAccessKey', 'accessKeyId', 'SECRET', 'AKIA']) {

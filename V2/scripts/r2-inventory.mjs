@@ -18,9 +18,15 @@
  *   · **凭证只从环境变量读**，不接受命令行参数（不进 shell 历史），且**永不回显**：
  *     输出里只有 endpoint 主机、桶名、对象数、总字节数、前缀分布；
  *   · **不覆写任何已有产物**：`--out` 指向已存在的文件时拒绝（除非显式 `--force`）；
- *   · **完整性必须可辨**（Stage 13C.1 §三）：默认走完全部分页 → `complete=true`；
- *     只要用了 `--max` 且没证明列完 → `complete=false` 且 `usableForProductionComparison=false`，
- *     这种产物**不能**用于正式对账，也不能作为 G5 的通过证据；
+ *   · **完整性必须可辨**（Stage 13C.1 §三 + 13C.2 §一/§二）：
+ *     - **只要用了 `--max`，产物一律 `complete=false`**（哪怕对象数没到上限、哪怕是空桶）——
+ *       "这次刚好没截断"不能自证完整；`usableForProductionComparison=false`，
+ *       这种产物**不能**用于正式对账，也不能作为 G5 的通过证据；
+ *     - **控制台导出默认不完整**：格式正确 ≠ 已证明全量。要用它做正式对账，
+ *       必须 `--expect-count <控制台显示的对象数> --expect-source <来源>`，
+ *       且工具会把预期数量与解析结果**核对一致**才标 `complete=true`；
+ *     - 文件自带 `IsTruncated: true` / 下一页令牌 / 与自身总数不符 → **直接失败**；
+ *     - 产物里把「操作者声明」与「工具验证」分开记录（`declaredBy` / `verification`）。
  *   · **对比前先核范围**：桶 / 前缀 / endpoint 主机不一致、或任一份不完整 → 直接拒绝，
  *     不输出"看起来有效"的差异结论；
  *   · `--from-console <json|csv>` 允许**完全不连网**：用 R2 控制台导出的清单
@@ -33,6 +39,7 @@
  *   node scripts/r2-inventory.mjs --out .migration/r2-inventory.json
  *
  *   node scripts/r2-inventory.mjs --from-console ./r2-objects.json --bucket tsinglan-curriculum \
+ *     --expect-count 1234 --expect-source "R2 控制台对象数" \
  *     --out .migration/r2-inventory.json
  *   node scripts/r2-inventory.mjs --from-console ./r2-objects-2.json --bucket tsinglan-curriculum \
  *     --compare .migration/r2-inventory.json
@@ -41,7 +48,8 @@
  *         3 列举失败 / 4 产物已存在（未给 --force）
  *         5 对比发现对象消失（**要人来判断，不能静默通过**）
  *         6 对比里有不完整清单（拒绝对比） / 7 对比范围不一致（拒绝对比）
- *         8 清单来源解析失败（CSV/JSON 坏行、缺 key、非法 size 等）
+ *         8 清单来源解析失败（CSV/JSON 坏行、缺 key、非法 size、分页未走完等）
+ *         9 预期数量与实际解析结果不一致（不产出可对账的完整清单）
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -49,8 +57,10 @@ import { fileURLToPath } from 'node:url'
 import { HeadBucketCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { InventorySourceError, parseConsoleExport } from './lib/inventory-source.mjs'
 import {
+  applyPrefixFilter,
   assertComparable,
   buildInventoryArtifact,
+  decideCompleteness,
   resolveR2Config,
   summarizeObjects,
 } from './lib/r2-target.mjs'
@@ -73,10 +83,28 @@ const COMPARE = arg('compare', null)
 const BUCKET_ARG = arg('bucket', null)
 const PREFIX = arg('prefix', '')
 const MAX = Number(arg('max', '0')) || 0
+/** 控制台导出的**预期对象数**：必须来自控制台/独立核验来源，脚本不自行推导。 */
+const EXPECT_COUNT_RAW = arg('expect-count', null)
+const EXPECT_SOURCE = arg('expect-source', null)
+const EXPECT_COUNT = EXPECT_COUNT_RAW === null ? null : Number(EXPECT_COUNT_RAW)
 /** 仅本地模拟器：显式允许**指向本机**的 http（远端 http 仍然拒绝）。 */
 const ALLOW_HTTP_LOCAL = has('allow-http-local')
 
 if (MAX < 0) fail('--max 不能是负数。')
+if (EXPECT_COUNT !== null) {
+  if (!Number.isInteger(EXPECT_COUNT) || EXPECT_COUNT < 0) {
+    fail(`--expect-count 必须是非负整数（实际给了 "${EXPECT_COUNT_RAW}"）。`)
+  }
+  if (EXPECT_SOURCE === null || String(EXPECT_SOURCE).trim() === '') {
+    fail(
+      '--expect-count 必须同时给 --expect-source（例如 "R2 控制台对象数 2026-10-10 15:04"）：\n' +
+        '    数字是从哪来的必须写进产物 —— 否则它只是一句无法追溯的口头声明。',
+    )
+  }
+  if (CONSOLE_FILE === null) {
+    fail('--expect-count 只用于 --from-console（实时列举的完整性由"走完全部分页"自证，不需要人工数字）。')
+  }
+}
 if (MAX > 0 && COMPARE !== null) {
   fail(
     '--max（抽样）与 --compare（对账）不能一起用：抽样清单不能被当作全量清单去判断"对象是否消失"。\n' +
@@ -108,13 +136,60 @@ if (CONSOLE_FILE !== null) {
     if (error instanceof InventorySourceError) fail(`清单来源解析失败（${CONSOLE_FILE}）：${error.message}`, 8)
     fail(`读不到清单文件 ${CONSOLE_FILE}：${error?.message ?? error}`, 8)
   }
-  objects = parsed.objects
+  const parsedObjects = parsed.objects
+  const filtered = applyPrefixFilter(parsedObjects, PREFIX)
+  objects = filtered
   source = `控制台导出 ${CONSOLE_FILE}（未连网，格式 ${parsed.format}）`
-  scope = { method: 'console-export', endpointHost: null, bucket: BUCKET_ARG, prefix: PREFIX }
-  console.log(`  控制台导出：${parsed.format.toUpperCase()}，解析出 ${parsed.objects.length} 个对象`)
-  if (MAX > 0 && objects.length > MAX) {
-    objects = objects.slice(0, MAX)
-    truncatedByMax = true
+  scope = {
+    method: 'console-export',
+    endpointHost: null,
+    bucket: BUCKET_ARG,
+    prefix: PREFIX,
+    prefixFilterApplied: PREFIX !== '',
+  }
+  console.log(`  控制台导出：${parsed.format.toUpperCase()}，解析出 ${parsedObjects.length} 个对象`)
+  if (PREFIX !== '') {
+    console.log(`  前缀过滤："${PREFIX}" → 保留 ${filtered.length} 个（元数据与实际集合一致）`)
+    if (filtered.length === 0) {
+      fail(
+        `声明的前缀 "${PREFIX}" 在导出里没有任何对象 —— 拒绝产出一份空清单（它会被误读成"这个前缀下没有文件"）。`,
+      )
+    }
+    if (filtered.length === parsedObjects.length) {
+      console.log('  ⓘ 说明：导出里的对象**全部**落在该前缀下 —— 这份导出本身可能就是一个前缀导出。')
+    }
+  } else if (parsedObjects.length > 0) {
+    /*
+      "看起来像子集"只是一句提醒，不是结论：没有 `--prefix` 时我们**无法**证明
+      这份导出覆盖的是整桶。产物里仍然按"整桶"记录，而完整性由 --expect-count 决定。
+    */
+    const firstSegments = new Set(parsedObjects.map((o) => (o.key.includes('/') ? o.key.split('/')[0] : '(根目录)')))
+    if (firstSegments.size === 1) {
+      const only = [...firstSegments][0]
+      console.log(
+        `  ⓘ 提示：导出里的对象全部在 "${only}" 下 —— 如果它其实是一个前缀导出，请用 --prefix 声明范围，` +
+          '否则元数据会把它说成整桶清单。',
+      )
+    }
+  }
+  if (MAX > 0) {
+    if (objects.length > MAX) {
+      objects = objects.slice(0, MAX)
+      truncatedByMax = true
+    } else {
+      /* 业主 Stage 13C.2 §一：**只要给了 --max 就不完整**，哪怕这次没截到。 */
+      truncatedByMax = true
+    }
+  }
+
+  // 预期数量核对：不一致**直接失败**，不产出可用于正式对账的完整清单。
+  if (EXPECT_COUNT !== null && EXPECT_COUNT !== objects.length) {
+    fail(
+      `预期对象数与实际解析结果不一致：--expect-count ${EXPECT_COUNT}，解析出 ${objects.length}` +
+        `${PREFIX === '' ? '（整桶）' : `（前缀 "${PREFIX}"）`}。\n` +
+        '    不一致说明导出不完整或范围声明不对 —— 拒绝产出清单；请重新导出或核对 --prefix/--expect-count。',
+      9,
+    )
   }
 } else {
   const config = resolveR2Config(process.env, { allowInsecureLocal: ALLOW_HTTP_LOCAL })
@@ -160,27 +235,38 @@ if (CONSOLE_FILE !== null) {
       token = page.IsTruncated === true ? page.NextContinuationToken : undefined
     } while (token !== undefined)
     /*
-      完整性判据只有一条：**把所有分页都走完了**。
-      `--max` 触顶时哪怕"看起来刚好列完"，也不能声称完整 —— 那种巧合无法自证。
+      完整性判据只有一条：**把所有分页都走完了**，而且**没有用 --max**。
+      业主 Stage 13C.2 §一：只要传了 `--max`，无论有没有触顶（空桶也一样），
+      一律不完整 —— "这次刚好没截断"不能自证完整。
     */
-    truncatedByMax = stoppedByMax && MAX > 0
+    truncatedByMax = MAX > 0
+    void stoppedByMax
   } catch (error) {
     fail(`列举对象失败：${error?.message ?? error}（endpoint=${config.redactedEndpoint} bucket=${config.bucket}）`, 3)
   }
   source = `ListObjectsV2 endpoint=${config.redactedEndpoint} bucket=${config.bucket}${PREFIX === '' ? '' : ` prefix=${PREFIX}`}`
-  scope = { method: 'api-list', endpointHost: config.redactedEndpoint, bucket: config.bucket, prefix: PREFIX }
+  // 实时列举的 Prefix 由 S3 服务端执行（ListObjectsV2 的 Prefix 参数），所以集合本身就是该前缀的
+  scope = {
+    method: 'api-list',
+    endpointHost: config.redactedEndpoint,
+    bucket: config.bucket,
+    prefix: PREFIX,
+    prefixFilterApplied: PREFIX !== '',
+  }
 }
 
 objects = objects.filter((o) => o.key !== '')
 const summary = summarizeObjects(objects)
 const completeness = {
-  complete: !truncatedByMax,
-  reason: truncatedByMax
-    ? 'truncated-by-max'
-    : scope.method === 'console-export'
-      ? 'console-export-declared-complete'
-      : 'listed-all-pages',
+  ...decideCompleteness({
+    source: scope.method === 'console-export' ? 'console-export' : 'api-list',
+    usedMax: MAX > 0,
+    expectCount: EXPECT_COUNT,
+    observedCount: objects.length,
+  }),
+  expectSource: EXPECT_COUNT === null ? null : String(EXPECT_SOURCE),
 }
+void truncatedByMax
 
 console.log('对象存储清单（**只读**，没有任何写/删动作）')
 console.log(`  来源：${source}`)
@@ -192,10 +278,19 @@ console.log(
     `（reason=${completeness.reason}）`,
 )
 if (!completeness.complete) {
-  console.warn(
-    '⚠ 用了 --max：这份清单是**抽样**，不是桶的全貌。它不能用来判断"某个对象是否消失"，\n' +
-      '  也不能作为 G5（R2 对象清单）的通过证据。',
-  )
+  if (completeness.reason === 'truncated-by-max') {
+    console.warn(
+      '⚠ 用了 --max：这份清单是**抽样**，不是桶的全貌（哪怕这次没截到上限也一样）。\n' +
+        '  它不能用来判断"某个对象是否消失"，也不能作为 G5（R2 对象清单）的通过证据。',
+    )
+  } else if (completeness.reason === 'console-export-unverified') {
+    console.warn(
+      '⚠ 控制台导出只证明"文件格式有效"，**不证明**它覆盖了整个桶/前缀。\n' +
+        '  要用于正式对账，请补 `--expect-count <控制台显示的对象数> --expect-source <来源>`，\n' +
+        '  让工具把预期数量与实际解析结果核对一遍（那时才会标 complete=true）。',
+    )
+  }
+  console.warn(`  ${completeness.explanation ?? ''}`)
 }
 if (summary.prefixes.length > 0) {
   console.log('  前缀分布（前 10）：')

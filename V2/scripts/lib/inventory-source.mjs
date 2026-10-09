@@ -48,7 +48,16 @@ function assertNoDuplicates(objects) {
   }
 }
 
-/** JSON 导出 → objects（接受数组 / {objects} / {Contents} / {items} 四种形状）。 */
+/**
+ * JSON 导出 → objects（接受数组 / {objects} / {Contents} / {items} 四种形状）。
+ *
+ * 除了"能不能解析"，这里还要回答"**这份文件自己有没有说它是分页的一页**"：
+ *   · `IsTruncated: true` / 非空的 `NextContinuationToken`（S3 ListObjectsV2 的字段）
+ *     —— 那就是**半页**，绝不能当全量清单；
+ *   · 文件里自带的总数（`KeyCount` / `ObjectCount` / `total` / `count`）与行数不符
+ *     —— 也说明它不是完整导出。
+ * 这两类都要**明确失败**（业主 Stage 13C.2 §二 1、2）。
+ */
 function parseJsonExport(text) {
   let parsed
   try {
@@ -58,6 +67,7 @@ function parseJsonExport(text) {
   }
 
   let rows
+  let meta = {}
   if (Array.isArray(parsed)) rows = parsed
   else if (parsed !== null && typeof parsed === 'object') {
     const candidate = parsed.objects ?? parsed.Contents ?? parsed.items
@@ -67,8 +77,34 @@ function parseJsonExport(text) {
       )
     }
     rows = candidate
+    meta = parsed
   } else {
     throw new InventorySourceError('JSON 结构无法解释：既不是数组也不是对象。')
+  }
+
+  const nextToken = meta.NextContinuationToken ?? meta.nextContinuationToken ?? meta.nextToken ?? meta.NextToken
+  if (meta.IsTruncated === true || meta.isTruncated === true) {
+    throw new InventorySourceError(
+      '这份 JSON 自己声明了 `IsTruncated: true` —— 它只是**一页**，不是全量清单。\n' +
+        '    请从控制台重新导出完整清单（或把分页全部导出后合并）。',
+    )
+  }
+  if (typeof nextToken === 'string' && nextToken.trim() !== '') {
+    throw new InventorySourceError(
+      '这份 JSON 里带着下一页令牌（`NextContinuationToken`）—— 说明导出没有走完分页，不是全量清单。',
+    )
+  }
+  const declaredTotal = meta.KeyCount ?? meta.keyCount ?? meta.ObjectCount ?? meta.objectCount ?? meta.total ?? meta.count
+  if (declaredTotal !== undefined && declaredTotal !== null) {
+    const declared = Number(declaredTotal)
+    if (!Number.isInteger(declared) || declared < 0) {
+      throw new InventorySourceError(`JSON 里的总数（${JSON.stringify(declaredTotal)}）不是非负整数。`)
+    }
+    if (declared !== rows.length) {
+      throw new InventorySourceError(
+        `JSON 自己声明有 ${declared} 个对象，但文件里只有 ${rows.length} 行 —— 这不是完整导出，拒绝使用。`,
+      )
+    }
   }
 
   return rows.map((r, index) => {

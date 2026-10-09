@@ -130,6 +130,93 @@ export function summarizeObjects(objects) {
 }
 
 /**
+ * 按 S3 的**字面前缀语义**过滤对象（`key.startsWith(prefix)`）。
+ *
+ * 业主 Stage 13C.2 §三：`--from-console` 以前只把 Prefix 写进元数据，**没有**真的过滤 ——
+ * 于是"整桶导出 + 声明 `--prefix uploads/`"会产出一份元数据说 `uploads/`、
+ * 内容却是整桶的清单，再拿去对比就会报出误导性的新增/消失。
+ * 元数据必须描述**真实的对象集合**，所以过滤要真的做。
+ *
+ * @param {{key: string}[]} objects
+ * @param {string} prefix 空串 = 不过滤（整桶）
+ */
+export function applyPrefixFilter(objects, prefix) {
+  const p = String(prefix ?? '')
+  return p === '' ? objects : objects.filter((o) => o.key.startsWith(p))
+}
+
+/**
+ * 完整性判定（纯函数）。
+ *
+ * 规则（业主 Stage 13C.2 §一 / §二，两处都写死在这里，两个来源共用）：
+ *   · **只要用了 `--max`** → 永远 `complete=false`（无论实际对象数是 0、刚好等于上限、
+ *     还是少于上限）。"这次刚好没截断"不能自证完整；
+ *   · 控制台导出**默认不完整**：格式正确 ≠ 已证明全量。
+ *     只有操作者给出预期数量（来自控制台或独立核验来源）**且与解析结果一致**，
+ *     才允许 `complete=true`；否则一律 `complete=false`；
+ *   · 实时列举：走完全部分页才是完整。
+ *
+ * 返回里同时记录"谁声明的、工具验证了什么"，便于报告里区分
+ * **操作者确认** 与 **工具独立验证**（业主明确要求这两者不能混为一谈）。
+ *
+ * @param {{source: 'api-list' | 'console-export', usedMax: boolean, expectCount: number | null,
+ *          observedCount: number}} input
+ */
+export function decideCompleteness({ source, usedMax, expectCount, observedCount }) {
+  const base = {
+    expectedCount: expectCount ?? null,
+    observedCount,
+    declaredBy: expectCount === null ? null : 'operator:--expect-count',
+  }
+  if (usedMax) {
+    return {
+      complete: false,
+      reason: 'truncated-by-max',
+      verification: 'none',
+      ...base,
+      explanation: '使用了 --max（抽样）：无论是否触顶，都不构成"已证明全量"。',
+    }
+  }
+  if (source === 'console-export') {
+    if (expectCount === null) {
+      return {
+        complete: false,
+        reason: 'console-export-unverified',
+        verification: 'none',
+        ...base,
+        explanation:
+          '控制台导出只证明"文件格式有效"，不证明"覆盖了整个桶/前缀"。' +
+          '要用它做正式对账，必须给出 `--expect-count <控制台显示的对象数> --expect-source <来源>`。',
+      }
+    }
+    if (expectCount !== observedCount) {
+      // 调用方会把它变成硬失败；这里仍然返回可判定的结果，避免静默通过。
+      return {
+        complete: false,
+        reason: 'expect-count-mismatch',
+        verification: 'tool-verified-mismatch',
+        ...base,
+        explanation: `预期 ${expectCount} 个，实际解析出 ${observedCount} 个 —— 不一致。`,
+      }
+    }
+    return {
+      complete: true,
+      reason: 'console-export-count-verified',
+      verification: 'tool-verified-count-match',
+      ...base,
+      explanation: `操作者声明的数量与解析结果一致（${observedCount} 个）—— 数量核对通过。`,
+    }
+  }
+  return {
+    complete: true,
+    reason: 'listed-all-pages',
+    verification: 'tool-listed-all-pages',
+    ...base,
+    explanation: '分页全部走完（未使用 --max）。',
+  }
+}
+
+/**
  * 构造清单产物（纯函数，凭证**不可能**混进来：它的入参里根本没有凭证）。
  *
  * 完整性是这里的头等事（业主 Stage 13C.1 §三）：
@@ -153,12 +240,24 @@ export function buildInventoryArtifact({ generatedAt, source, objects, compare =
       reason: completeness?.reason ?? 'unknown',
       /** 正式对账（尤其是"对象是否消失"）只认完整清单。 */
       usableForProductionComparison: complete,
+      /**
+       * 把"操作者声明"与"工具验证"分开写：只写一个 `complete` 的话，
+       * 报告里就分不清"数量核对通过了"和"有人口头说它是全量"。
+       */
+      verification: completeness?.verification ?? 'none',
+      declaredBy: completeness?.declaredBy ?? null,
+      expectSource: completeness?.expectSource ?? null,
+      expectedCount: completeness?.expectedCount ?? null,
+      observedCount: completeness?.observedCount ?? null,
+      explanation: completeness?.explanation ?? null,
     },
     scope: {
       method: scope?.method ?? 'unknown',
       endpointHost: scope?.endpointHost ?? null,
       bucket: scope?.bucket ?? null,
       prefix: scope?.prefix ?? '',
+      /** 过滤是否真的作用在对象集合上（不是只写在元数据里）。 */
+      prefixFilterApplied: scope?.prefixFilterApplied === true,
     },
     source,
     summary: { count: summary.count, totalBytes: summary.totalBytes, prefixes: summary.prefixes },
