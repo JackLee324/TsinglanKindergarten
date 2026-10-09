@@ -65,7 +65,14 @@ describe('① 只读：源码里不许有任何写/删动作', () => {
       'readOnly',
       'scope',
       'source',
+      'storageIdentity',
       'summary',
+    ])
+    assert.deepEqual(Object.keys(artifact.storageIdentity).sort(), [
+      'declaredId',
+      'endpointHost',
+      'fingerprint',
+      'kind',
     ])
     // 完整性字段是**枚举式**断言：以后多写一个字段就要人来确认它写的是什么
     // （尤其是"操作者声明"与"工具验证"必须分开——报告里不能把两者混为一谈）

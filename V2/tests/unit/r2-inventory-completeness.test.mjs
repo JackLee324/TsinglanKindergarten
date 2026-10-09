@@ -94,7 +94,7 @@ describe('① --max：只要用了，就一律不完整（业主 Stage 13C.2 §�
     const full = writeExport('full-for-compare.json', FOUR)
     const fullOut = join(WORK, 'full-for-compare-out.json')
     assert.equal(
-      run(['--from-console', full, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture', '--out', fullOut]).code,
+      run(['--from-console', full, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture', '--storage-id', 'fixture-storage', '--out', fullOut]).code,
       0,
     )
 
@@ -105,14 +105,16 @@ describe('① --max：只要用了，就一律不完整（业主 Stage 13C.2 §�
     // 当前不完整：--max 与 --compare 同时出现 → 参数级拒绝（退出码 2）
     const bothFlags = run([
       '--from-console', partial, '--bucket', BUCKET, '--max', '2',
-      '--expect-count', '4', '--expect-source', 'fixture', '--compare', fullOut,
+      '--expect-count', '4', '--expect-source', 'fixture', '--storage-id', 'fixture-storage',
+      '--compare', fullOut,
     ])
     assert.equal(bothFlags.code, 2, bothFlags.out)
     assert.match(bothFlags.out, /不能一起用/)
     assert.equal(DIFF_LINE.test(bothFlags.out), false, '参数级拒绝也不能输出差异')
     // 前一份不完整 → 6
     const { code, out } = run([
-      '--from-console', full, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture', '--compare', partialOut,
+      '--from-console', full, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture',
+      '--storage-id', 'fixture-storage', '--compare', partialOut,
     ])
     assert.equal(code, 6, out)
     assert.match(out, /拒绝对比/)
@@ -312,13 +314,14 @@ describe('⑤ 对比守卫：范围不同的清单不产生差异结论', () => 
     const base = writeExport('cmp-base.json', FOUR)
     const baseOut = join(WORK, 'cmp-base-out.json')
     assert.equal(
-      run(['--from-console', base, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture', '--out', baseOut]).code,
+      run(['--from-console', base, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture', '--storage-id', 'fixture-storage', '--out', baseOut]).code,
       0,
     )
 
     const other = writeExport('cmp-other.json', FOUR)
     const byBucket = run([
-      '--from-console', other, '--bucket', 'another-bucket', '--expect-count', '4', '--expect-source', 'fixture', '--compare', baseOut,
+      '--from-console', other, '--bucket', 'another-bucket', '--expect-count', '4', '--expect-source', 'fixture',
+      '--storage-id', 'fixture-storage', '--compare', baseOut,
     ])
     assert.equal(byBucket.code, 7, byBucket.out)
     assert.match(byBucket.out, /桶不一致/)
@@ -326,7 +329,7 @@ describe('⑤ 对比守卫：范围不同的清单不产生差异结论', () => 
 
     const byPrefix = run([
       '--from-console', other, '--bucket', BUCKET, '--prefix', 'uploads/', '--expect-count', '3',
-      '--expect-source', 'fixture', '--compare', baseOut,
+      '--expect-source', 'fixture', '--storage-id', 'fixture-storage', '--compare', baseOut,
     ])
     assert.equal(byPrefix.code, 7, byPrefix.out)
     assert.match(byPrefix.out, /前缀不一致/)
@@ -337,13 +340,14 @@ describe('⑤ 对比守卫：范围不同的清单不产生差异结论', () => 
     const base = writeExport('cmp-base2.json', FOUR)
     const baseOut = join(WORK, 'cmp-base2-out.json')
     assert.equal(
-      run(['--from-console', base, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture', '--out', baseOut]).code,
+      run(['--from-console', base, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture', '--storage-id', 'fixture-storage', '--out', baseOut]).code,
       0,
     )
 
     const fewer = writeExport('cmp-fewer.json', FOUR.slice(1))
     const { code, out } = run([
-      '--from-console', fewer, '--bucket', BUCKET, '--expect-count', '3', '--expect-source', 'fixture', '--compare', baseOut,
+      '--from-console', fewer, '--bucket', BUCKET, '--expect-count', '3', '--expect-source', 'fixture',
+      '--storage-id', 'fixture-storage', '--compare', baseOut,
     ])
     assert.equal(code, 5, out)
     assert.match(out, /消失 1 个/)
@@ -360,9 +364,15 @@ describe('⑤ 对比守卫：范围不同的清单不产生差异结论', () => 
   test('不是本工具产出的对比文件 → 退出码 6', () => {
     const bogus = writeRaw('bogus.json', JSON.stringify({ objects: toObjects(FOUR) }))
     const file = writeExport('for-bogus.json', FOUR)
-    const { code, out } = run(['--from-console', file, '--bucket', BUCKET, '--compare', bogus])
+    // 当前这份要"合格"，否则会先撞上完整性门禁，测不到"前一份不是本工具产物"
+    const { code, out } = run([
+      '--from-console', file, '--bucket', BUCKET, '--expect-count', '4', '--expect-source', 'fixture',
+      '--storage-id', 'fixture-storage', '--compare', bogus,
+    ])
     assert.equal(code, 6, out)
     assert.match(out, /拒绝对比/)
+    // 具体理由由工具给出（缺 objects / 缺 readOnly …）；这里只要求它说清"不可用于对账"
+    assert.match(out, /不可用于对账/)
     assert.equal(DIFF_LINE.test(out), false)
   })
 

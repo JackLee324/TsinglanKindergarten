@@ -22,6 +22,9 @@
  *     - **只要用了 `--max`，产物一律 `complete=false`**（哪怕对象数没到上限、哪怕是空桶）——
  *       "这次刚好没截断"不能自证完整；`usableForProductionComparison=false`，
  *       这种产物**不能**用于正式对账，也不能作为 G5 的通过证据；
+ *     - `--max` **只接受正整数**：`--max 0` / 负数 / 小数 / 非数字 / 缺少数值一律
+ *       退出码 2（**参数解析失败绝不回退成"全量"**）—— 判据是"参数有没有出现"，
+ *       不是"数值是不是 0"；
  *     - **控制台导出默认不完整**：格式正确 ≠ 已证明全量。要用它做正式对账，
  *       必须 `--expect-count <控制台显示的对象数> --expect-source <来源>`，
  *       且工具会把预期数量与解析结果**核对一致**才标 `complete=true`；
@@ -39,7 +42,7 @@
  *   node scripts/r2-inventory.mjs --out .migration/r2-inventory.json
  *
  *   node scripts/r2-inventory.mjs --from-console ./r2-objects.json --bucket tsinglan-curriculum \
- *     --expect-count 1234 --expect-source "R2 控制台对象数" \
+ *     --expect-count 1234 --expect-source "R2 控制台对象数" --storage-id cf-account-tsinglan \
  *     --out .migration/r2-inventory.json
  *   node scripts/r2-inventory.mjs --from-console ./r2-objects-2.json --bucket tsinglan-curriculum \
  *     --compare .migration/r2-inventory.json
@@ -47,7 +50,8 @@
  * 退出码：0 成功 / 2 缺配置或参数不合法（含"默认拒绝 http"）
  *         3 列举失败 / 4 产物已存在（未给 --force）
  *         5 对比发现对象消失（**要人来判断，不能静默通过**）
- *         6 对比里有不完整清单（拒绝对比） / 7 对比范围不一致（拒绝对比）
+ *         6 对比里有不完整 / 字段自相矛盾 / 来源身份无法确认的清单（拒绝对比）
+ *         7 对比范围不同、或存储身份不同（拒绝对比）
  *         8 清单来源解析失败（CSV/JSON 坏行、缺 key、非法 size、分页未走完等）
  *         9 预期数量与实际解析结果不一致（不产出可对账的完整清单）
  */
@@ -58,8 +62,10 @@ import { HeadBucketCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/clie
 import { InventorySourceError, parseConsoleExport } from './lib/inventory-source.mjs'
 import {
   applyPrefixFilter,
+  assertArtifactSelfConsistent,
   assertComparable,
   buildInventoryArtifact,
+  buildStorageIdentity,
   decideCompleteness,
   resolveR2Config,
   summarizeObjects,
@@ -77,12 +83,45 @@ function fail(message, code = 2) {
   process.exit(code)
 }
 
+/**
+ * 严格解析一个"正整数"参数。
+ *
+ * ⚠️ 为什么不能写 `Number(arg('max','0')) || 0`：`--max 0`、`--max abc`、`--max`(
+ * 缺少数值) 都会被静默变成 0，而完整性保护判的是 `MAX > 0` —— 于是
+ * **显式传了 `--max` 却走全量分支、产出 `complete=true`**，直接绕过门禁。
+ * 所以这里区分"没传"与"传了但无效"，后者一律报错退出。
+ */
+function readPositiveIntArg(name) {
+  const i = process.argv.indexOf(`--${name}`)
+  if (i < 0) return { present: false, value: null, invalid: null }
+  const raw = process.argv[i + 1]
+  if (raw === undefined || raw.startsWith('--')) {
+    return { present: true, value: null, invalid: `--${name} 后面缺少数值` }
+  }
+  if (!/^[1-9]\d*$/.test(raw)) {
+    return { present: true, value: null, invalid: `--${name} 只接受正整数（实际给了 "${raw}"）` }
+  }
+  const value = Number(raw)
+  if (!Number.isSafeInteger(value)) {
+    return { present: true, value: null, invalid: `--${name} 数值过大（"${raw}"）` }
+  }
+  return { present: true, value, invalid: null }
+}
+
 const OUT = arg('out', null)
 const CONSOLE_FILE = arg('from-console', null)
 const COMPARE = arg('compare', null)
 const BUCKET_ARG = arg('bucket', null)
+/** 存储身份标签：控制台导出用它"确认自己是哪个存储"；实时列举用它给自己起可读的名字。 */
+const STORAGE_ID = arg('storage-id', null)
 const PREFIX = arg('prefix', '')
-const MAX = Number(arg('max', '0')) || 0
+const maxArg = readPositiveIntArg('max')
+if (maxArg.invalid !== null) {
+  // 不产出任何产物、不连任何存储：参数无效就是无效，绝不"退化成全量"。
+  fail(`${maxArg.invalid}。\n    提示：--max 只用于抽样调试；正式对账请**不要**传 --max。`)
+}
+const MAX_USED = maxArg.present
+const MAX = maxArg.value ?? 0
 /** 控制台导出的**预期对象数**：必须来自控制台/独立核验来源，脚本不自行推导。 */
 const EXPECT_COUNT_RAW = arg('expect-count', null)
 const EXPECT_SOURCE = arg('expect-source', null)
@@ -90,7 +129,6 @@ const EXPECT_COUNT = EXPECT_COUNT_RAW === null ? null : Number(EXPECT_COUNT_RAW)
 /** 仅本地模拟器：显式允许**指向本机**的 http（远端 http 仍然拒绝）。 */
 const ALLOW_HTTP_LOCAL = has('allow-http-local')
 
-if (MAX < 0) fail('--max 不能是负数。')
 if (EXPECT_COUNT !== null) {
   if (!Number.isInteger(EXPECT_COUNT) || EXPECT_COUNT < 0) {
     fail(`--expect-count 必须是非负整数（实际给了 "${EXPECT_COUNT_RAW}"）。`)
@@ -105,7 +143,7 @@ if (EXPECT_COUNT !== null) {
     fail('--expect-count 只用于 --from-console（实时列举的完整性由"走完全部分页"自证，不需要人工数字）。')
   }
 }
-if (MAX > 0 && COMPARE !== null) {
+if (MAX_USED && COMPARE !== null) {
   fail(
     '--max（抽样）与 --compare（对账）不能一起用：抽样清单不能被当作全量清单去判断"对象是否消失"。\n' +
       '    需要对比就先跑一次全量（不加 --max）。',
@@ -117,6 +155,7 @@ let objects
 let source
 let scope
 let truncatedByMax = false
+let identity = null
 
 if (CONSOLE_FILE !== null) {
   /*
@@ -147,6 +186,18 @@ if (CONSOLE_FILE !== null) {
     prefix: PREFIX,
     prefixFilterApplied: PREFIX !== '',
   }
+  /*
+    控制台导出**没有**端点/账号信息 → 身份只能是"未知"或"操作者声明"。
+    绝不猜（业主 Stage 13C.3 §B 3）。
+  */
+  identity = buildStorageIdentity({ method: 'console-export', endpointHost: null, declaredId: STORAGE_ID })
+  if (identity.kind === 'unknown') {
+    console.log(
+      '  ⓘ 存储身份：未知（控制台导出不含账号/端点）。要与实时清单对比，请两次都加 `--storage-id <标签>`。',
+    )
+  } else {
+    console.log(`  存储身份：操作者声明 "${identity.declaredId}"（可审计的对齐方式）`)
+  }
   console.log(`  控制台导出：${parsed.format.toUpperCase()}，解析出 ${parsedObjects.length} 个对象`)
   if (PREFIX !== '') {
     console.log(`  前缀过滤："${PREFIX}" → 保留 ${filtered.length} 个（元数据与实际集合一致）`)
@@ -172,14 +223,10 @@ if (CONSOLE_FILE !== null) {
       )
     }
   }
-  if (MAX > 0) {
-    if (objects.length > MAX) {
-      objects = objects.slice(0, MAX)
-      truncatedByMax = true
-    } else {
-      /* 业主 Stage 13C.2 §一：**只要给了 --max 就不完整**，哪怕这次没截到。 */
-      truncatedByMax = true
-    }
+  if (MAX_USED) {
+    if (objects.length > MAX) objects = objects.slice(0, MAX)
+    /* 业主 Stage 13C.2 §一：**只要给了 --max 就不完整**，哪怕这次没截到、哪怕是空桶。 */
+    truncatedByMax = true
   }
 
   // 预期数量核对：不一致**直接失败**，不产出可用于正式对账的完整清单。
@@ -226,7 +273,7 @@ if (CONSOLE_FILE !== null) {
             item.LastModified instanceof Date ? item.LastModified.toISOString() : String(item.LastModified ?? ''),
           etag: String(item.ETag ?? '').replaceAll('"', ''),
         })
-        if (MAX > 0 && objects.length >= MAX) {
+        if (MAX_USED && objects.length >= MAX) {
           stoppedByMax = true
           break
         }
@@ -239,7 +286,7 @@ if (CONSOLE_FILE !== null) {
       业主 Stage 13C.2 §一：只要传了 `--max`，无论有没有触顶（空桶也一样），
       一律不完整 —— "这次刚好没截断"不能自证完整。
     */
-    truncatedByMax = MAX > 0
+    truncatedByMax = MAX_USED
     void stoppedByMax
   } catch (error) {
     fail(`列举对象失败：${error?.message ?? error}（endpoint=${config.redactedEndpoint} bucket=${config.bucket}）`, 3)
@@ -253,6 +300,17 @@ if (CONSOLE_FILE !== null) {
     prefix: PREFIX,
     prefixFilterApplied: PREFIX !== '',
   }
+  /*
+    身份 = `sha256(endpointHost|accessKeyId)` 的**指纹**（截断）—— 能唯一标识
+    "哪个账号的哪个端点"，但不落 Access Key / Secret 原文。
+  */
+  identity = buildStorageIdentity({
+    method: 'api-list',
+    endpointHost: config.redactedEndpoint,
+    accessKeyId: config.accessKeyId,
+    declaredId: STORAGE_ID,
+  })
+  console.log(`  存储身份：${identity.fingerprint}${identity.declaredId === null ? '' : `（--storage-id "${identity.declaredId}"）`}`)
 }
 
 objects = objects.filter((o) => o.key !== '')
@@ -260,7 +318,7 @@ const summary = summarizeObjects(objects)
 const completeness = {
   ...decideCompleteness({
     source: scope.method === 'console-export' ? 'console-export' : 'api-list',
-    usedMax: MAX > 0,
+    usedMax: MAX_USED,
     expectCount: EXPECT_COUNT,
     observedCount: objects.length,
   }),
@@ -306,10 +364,27 @@ if (COMPARE !== null) {
   } catch (error) {
     fail(`读不到前一份清单 ${COMPARE}：${error?.message ?? error}`, 6)
   }
-  const comparable = assertComparable(previous, { complete: completeness.complete, scope })
+  /*
+    当前清单同样要自洽（业主 Stage 13C.3 §C）：用与"前一份"**同一套**判据，
+    避免"上游松、下游严"这种两头都不算错、合起来能放过的缝。
+  */
+  const currentArtifact = buildInventoryArtifact({ source, objects, scope, completeness, identity })
+  const currentConsistent = assertArtifactSelfConsistent(currentArtifact)
+  if (!currentConsistent.ok) {
+    fail(`当前清单不能用于对账：${currentConsistent.reason}。`, 6)
+  }
+  const comparable = assertComparable(previous, {
+    complete: completeness.complete,
+    scope,
+    storageIdentity: identity,
+  })
   if (!comparable.ok) {
-    // 退出码按 kind 选，不靠正则猜：6 = 不能确定完整性，7 = 范围不同。
-    const code = comparable.kind === 'scope' ? 7 : 6
+    /*
+      退出码按 kind 选，不靠正则猜：
+        7 = 范围不同或**存储身份不同**（"这两份说的不是同一个集合"）；
+        6 = 其余（不是本工具产物 / 字段自相矛盾 / 不完整 / **身份无法确认**）。
+    */
+    const code = comparable.kind === 'scope' || comparable.kind === 'identity-mismatch' ? 7 : 6
     fail(`拒绝对比：${comparable.reason}`, code)
   }
 
@@ -341,7 +416,7 @@ if (OUT !== null) {
   mkdirSync(dirname(outPath), { recursive: true })
   // 产物由纯函数构造（见 lib/r2-target.mjs）：它的入参里没有凭证，
   // 所以"清单里混进 secret"这种事在结构上就不可能发生。
-  const artifact = buildInventoryArtifact({ source, objects, compare: compareResult, scope, completeness })
+  const artifact = buildInventoryArtifact({ source, objects, compare: compareResult, scope, completeness, identity })
   writeFileSync(outPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
   console.log(
     `  已写入：${OUT}（只含 key/size/etag/时间与完整性标记，不含任何凭证；complete=${artifact.complete}）`,

@@ -1,4 +1,4 @@
-# Stage 13C / 13C.1 / 13C.2：正式切换就绪（Production Cutover Readiness）
+# Stage 13C / 13C.1 / 13C.2 / 13C.3：正式切换就绪（Production Cutover Readiness）
 
 > 业主 Stage 13C 的范围是**收尾门禁**，不是加功能：把文档里的矛盾消掉、把最高权限脚本加固、
 > 把"缺什么才能切换"变成一张可执行、可核对的清单。
@@ -20,7 +20,7 @@ Zeabur 预发布 + 真实浏览器验收 : NOT RUN     （前置：解除 Zeabur
 PRODUCTION CUTOVER           : NOT READY
 ```
 
-## 1. 本轮做完的五件事（13C 四件 + 13C.1 工具加固）
+## 1. 本轮做完的七件事（13C 四件 + 13C.1/13C.2/13C.3 工具加固）
 
 | # | 事 | 产物 | 证据 |
 |---|---|---|---|
@@ -29,6 +29,7 @@ PRODUCTION CUTOVER           : NOT READY
 | 3 | **预检报告同步 + 门禁清单**（业主 §1/§3） | `docs/CUTOVER_PREFLIGHT_REPORT.md` | §0 结论块拆开写；§7 重写为"身份 PASS / 授权 BLOCKED / 登录 NOT RUN"；新增 §12.1 **G1–G10 门禁表**；§12 按业主给的五步顺序重排 |
 | 4 | **两件只读工具**（业主 §1/§3） | `scripts/propose-directory-grants.mjs`、`scripts/r2-inventory.mjs` | 授权决策清单（不连库、不猜、不覆盖业主填过的表）；R2 对象清单（**源码里没有任何写/删动作**，由 `tests/unit/r2-inventory-safety.test.mjs` 静态盯住） |
 | 5 | **R2 工具加固**（业主 Stage 13C.1 审查发现的 3 个问题） | `scripts/lib/{csv,inventory-source,r2-target}.mjs` | ① **默认只允许 HTTPS**（http 仅限 `--allow-http-local` + 本机地址，远端 http 永远拒绝）；② CSV 改走 **RFC 4180** 解析（引号/内嵌逗号/CRLF/BOM/带引号换行），坏行**报错**而不是跳过；③ 产物带**完整性元数据**（`complete` / `usableForProductionComparison` / `scope`），`--compare` 拒绝不完整清单与范围不一致 |
+| 7 | **参数解析与来源身份**（业主 Stage 13C.3 复核发现的 2 个边界） | `scripts/r2-inventory.mjs`、`scripts/lib/r2-target.mjs` | ① **`--max` 严格解析**：判据是"参数有没有出现"而不是"数值是不是 0" —— `--max 0` / 负数 / 小数 / 非数字 / 缺少数值一律退出码 2（以前会被静默变成 0，**绕过"只要用了 `--max` 就不完整"这条门禁**）；② **存储身份**：产物带 `storageIdentity`（实时列举 = `sha256(端点\|AccessKey)` 指纹，只落指纹不落凭据；控制台导出 = `--storage-id <标签>` 操作者声明；都不给 = 未知），**桶名相同不再足以证明是同一个存储** → 身份未知/不同一律拒绝比较；③ **旧清单自洽校验**：`readOnly`/`complete`/`usableForProductionComparison`/`verification`/`reason`/计数/`summary.count`/`scope` 必须互相印证，被手改或旧版本写的产物直接拒绝 |
 | 6 | **完整性最后一道门禁**（业主 Stage 13C.2 复核发现的 3 个边界） | `scripts/r2-inventory.mjs`、`scripts/lib/{inventory-source,r2-target}.mjs` | ① **只要用了 `--max` 就恒不完整**（空桶 / 未触顶 / 刚好等于上限都不例外，两个来源统一）；② **控制台导出不再自动算完整**：必须 `--expect-count <控制台对象数> --expect-source <来源>` 且工具核对一致才标 `complete=true`（产物分开记录「操作者声明」与「工具验证」）；文件自带 `IsTruncated` / 下一页令牌 / 总数不符 → 直接失败；③ **声明的 Prefix 真的过滤对象集合**（不再只改元数据），前缀下没有对象直接拒绝 |
 
 ## 2. 数据隔离：演练库**不是**迁移来源（业主 §2）
@@ -55,7 +56,7 @@ PRODUCTION CUTOVER           : NOT READY
 | G2 | 迁移来源隔离 | 本文件 §2 + 矩阵 §4 | 演练数据不进正式库（规则 + 计数对照） | PASS（规则已写死） |
 | G3 | 超级管理员唯一 | `tests/integration/account-privileges.test.mjs`；`scripts/transfer-superadmin.mjs` | 只能有一名有效 `ADMIN`；换人走交接脚本；缺 `DATABASE_URL` 不动数据 | PASS（本轮） |
 | G4 | 教师目录授权决策 | `node scripts/propose-directory-grants.mjs` → 业主填写 → `/admin/permissions` 初始化 | 24 个账号逐条有明确决定（含"暂不开放"）；**不是**全站开放 | **BLOCKED（等业务）** |
-| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out .migration/r2-inventory.json`（或 `--from-console <导出> --bucket <桶名> --expect-count <控制台对象数> --expect-source <来源>`） | 有一份**`complete=true` 且 `verification` 非 `none`** 的清单（`--max` 产物恒不算证据，未核对数量的控制台导出也不算）+ 前缀分布 + 范围声明（桶/前缀/是否过滤）；据此说明"有无需要迁移的文件" | **BLOCKED（缺只读凭证/导出）** |
+| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out .migration/r2-inventory.json`（或 `--from-console <导出> --bucket <桶名> --expect-count <控制台对象数> --expect-source <来源> --storage-id <标签>`） | 有一份**`complete=true`、`verification` 非 `none`、字段自洽**的清单（`--max` 产物恒不算证据，未核对数量的控制台导出也不算）+ 前缀分布 + 范围声明（桶/前缀/是否过滤）+ **存储身份**（指纹或操作者声明）；据此说明"有无需要迁移的文件" | **BLOCKED（缺只读凭证/导出）** |
 | G6 | 独立 V2 PostgreSQL | Zeabur 控制台建库（与 V1 完全分离） | 连接串可达；`node scripts/migrate.mjs status` = 0 pending | **BLOCKED（无 Zeabur 访问）** |
 | G7 | V1 备份 + **恢复演练** | 备份 V1 → 在**另一个库**恢复 → 行数/关键表核对 | 恢复出来的行数与备份源一致；演练有记录 | **NOT RUN** |
 | G8 | 预发布部署 + 真实浏览器验收 | `deploy/verify.mjs --base <预发布域名>`；`tests/production/*`（桌面 + 移动） | 全部通过；样式真的生效；上传/预览/下载哈希一致 | **NOT RUN** |
@@ -95,11 +96,14 @@ node scripts/r2-inventory.mjs --out .migration/r2-inventory.json
 
 # 方式 B：没有只读凭证 —— 从 R2 控制台导出清单，完全不连网（**优先 JSON**）
 node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects.json \
-  --bucket <桶名> --out .migration/r2-inventory.json
+  --bucket <桶名> --expect-count <控制台显示的对象数> --expect-source "R2 控制台 <时间>" \
+  --storage-id <存储身份标签，例如 cf-account-tsinglan> \
+  --out .migration/r2-inventory.json
 
-# 逐次对比（两次都必须是完整清单；桶/前缀范围必须一致）
+# 逐次对比（两次都必须是完整清单；桶/前缀**以及存储身份**都必须一致）
 node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects-2.json \
-  --bucket <桶名> --compare .migration/r2-inventory.json
+  --bucket <桶名> --expect-count <新数字> --expect-source "R2 控制台 <时间>" \
+  --storage-id cf-account-tsinglan --compare .migration/r2-inventory.json
 ```
 
 **核心规则（Stage 13C.1 + 13C.2 加固后）**：
@@ -112,6 +116,9 @@ node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects-2.json \
 | 控制台导出 + `--expect-count` 与解析结果**一致** | `complete=true`，`verification=tool-verified-count-match`，`declaredBy=operator:--expect-count` | ✅ 可以（数量核对通过） |
 | 控制台导出 + 数量**不一致** | 退出码 **9**，**不产出产物** | — |
 | 导出文件自称 `IsTruncated: true` / 带下一页令牌 / 自带总数与行数不符 | 退出码 **8** | — |
+| 两份清单**存储身份不同**（跨账号同桶名） | 退出码 **7**，且不输出差异 | — |
+| 两份清单**身份无法确认**（控制台导出没给 `--storage-id`） | 退出码 **6**，且不输出差异 | — |
+| 前一份清单**字段不自洽**（被手改 / 旧版本产物） | 退出码 **6**，且不输出差异 | — |
 
 **三条保证（Stage 13C.1 加固后）**：
 
@@ -121,12 +128,16 @@ node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects-2.json \
 | 解析健壮性 | JSON 支持数组 / `objects` / `Contents`；CSV 走 RFC 4180（引号、字段内逗号、双引号转义、CRLF、UTF-8 BOM、带引号的换行）；**空 key / 非法 size / 列数不符 / 重复 key / 结构无法解释 → 明确报错并带行号**，不静默跳过（CSV 尤其重要：对象键里本来就可能有逗号） |
 | 完整性 | 默认走完全部分页 → `complete=true`；**只要用了 `--max` → `complete=false`**（无论是否触顶）且 `usableForProductionComparison=false`；控制台导出必须 `--expect-count` 核对一致才算完整；`--compare` 遇到任一份不完整 → 拒绝（退出码 6）；桶/前缀/endpoint 主机不一致 → 拒绝（退出码 7）；`--max` 与 `--compare` 同用 → 直接拒绝（2） |
 | 范围一致性 | 声明的 `--prefix` **真的过滤对象集合**（`prefixFilterApplied=true`），过滤后为空则拒绝产出；没有声明前缀时不会替你把子集说成整桶（只给一句提示）；对比时桶 / 前缀 / endpoint 主机必须完全一致 |
+| 参数解析 | `--max` 只接受**正整数**；`--max 0` / 负数 / 小数 / 非数字 / 缺少数值 → 退出码 **2**（判据是"参数有没有出现"，绝不静默退化成"全量"）；`--max` 与 `--compare` 同用 → 退出码 2 |
+| 存储身份 | 桶名**只在账号内唯一**，跨账号可以重名 —— 所以对比还要求身份一致：实时列举落 `sha256(端点\|AccessKey)` 指纹（不含凭据原文），控制台导出用 `--storage-id <标签>` 声明；**身份未知或不同 → 拒绝比较**（6 / 7） |
+| 旧清单自洽 | 对比前逐字段核对 `readOnly` / `complete` / `usableForProductionComparison` / `verification` / `reason` / `expectSource` / `expectedCount` / `observedCount` / `summary.count` / `scope`；**缺字段、互相矛盾、或来源身份不明 → 拒绝**，不接受"补一下元数据再放行" |
 
-**退出码**：0 成功 / 2 参数或配置不合法（含默认拒绝 http、`--max`+`--compare` 同用）/
+**退出码**：0 成功 / 2 参数或配置不合法（含默认拒绝 http、`--max` 取值无效、`--max`+`--compare` 同用）/
 3 列举失败 / 4 产物已存在（拒绝覆盖）/ 5 对比发现对象消失（**交人工判断**）/
-6 对比里有不完整或非本工具的清单 / 7 对比范围不一致 /
-**8 清单来源解析失败**（CSV/JSON 坏行、缺 key、非法 size、分页未走完、自带总数不符）/
-**9 预期数量与实际解析结果不一致**（不产出可对账的完整清单）。
+**6 对比里有不完整 / 字段自相矛盾 / 来源身份无法确认的清单** /
+**7 对比范围不同或存储身份不同** /
+8 清单来源解析失败（CSV/JSON 坏行、缺 key、非法 size、分页未走完、自带总数不符）/
+9 预期数量与实际解析结果不一致（不产出可对账的完整清单）。
 
 **通过判据（G5 才能从 BLOCKED 转 PASS）**：产物里 `complete=true`；范围（桶 + 前缀）明确；
 对象数与总字节数有记录；与数据库记录核对过；并且**在清单核实之前不删除、不覆盖任何生产对象**。
@@ -196,10 +207,10 @@ psql -d qls_restore_verify -c "SELECT count(*) FROM resources;"
 | `--from-console`（整桶导出）+ `--prefix uploads/` | 输出"前缀过滤：保留 3 个"，产物 `prefixFilterApplied=true`、`objects` 只剩前缀内对象（元数据与实际集合一致） |
 | `--max 10`（4 个对象）/ `--max 4`（刚好等于上限）/ 空清单 + `--max 10` | 三者产物都是 `complete=false`、`usableForProductionComparison=false` |
 | `npm run build` / `npm run typecheck` / `npm run lint` | 全部退出码 0 |
-| `npm run test:unit` | **274 / 274 PASS**（Stage 13B 是 206，本轮 +68：db-target 9、r2-inventory-safety 15、r2-inventory-parsing 16、**r2-inventory-completeness 24**、grant-decision-sheet 4） |
-| `npm run test:integration` | **615 / 615 PASS**（Stage 13B 是 614，本轮 +1：交接脚本"缺 `DATABASE_URL` 就不动数据"） |
-| `npm run test:safari`（桌面 1440×900） | **10 / 10 PASS** |
-| `SAFARI_VIEWPORT=mobile npm run test:safari` | **10 / 10 PASS** |
+| `npm run test:unit` | **307 / 307 PASS**（Stage 13B 是 206，本轮 +101：db-target 9、r2-inventory-safety 15、r2-inventory-parsing 16、r2-inventory-completeness 24、**r2-inventory-args 17**、**r2-inventory-identity 16**、grant-decision-sheet 4） |
+| `npm run test:integration` | **615 / 615 PASS**（Stage 13B 是 614，本轮 +1：交接脚本"缺 `DATABASE_URL` 就不动数据"）。<br>⚠️ 13C.3 那一轮第一次跑出现过 **1 条偶发红**（`browser.stage4` 的"教师成长"导航）：单独跑 **16 / 16**、紧接着的全量 **615 / 615** 全绿；与 13C.1 时观察到的 stage11 偶发红同类，**尚未定位到根因** —— 若再出现请保留完整输出再查，不要当偶发忽略 |
+| `npm run test:safari`（桌面 1440×900） | **10 / 10 PASS**（13C.3 轮） |
+| `SAFARI_VIEWPORT=mobile npm run test:safari` | **10 / 10 PASS**（单独跑；见下面的两条前提） |
 
 > ⚠️ Safari 那两条有**两个环境前提**：① `safaridriver` 在跑之外，**Safari 应用本身也要开着**
 > （关掉时 10 条会全部因会话建不起来而"cancel"，报错里已写明"先执行一次 `open -a Safari`"）；

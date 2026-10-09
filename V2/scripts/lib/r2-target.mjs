@@ -19,6 +19,8 @@
  * 且**永不回显** —— 打印的只有 endpoint 主机、桶名、对象数、总字节数。
  */
 
+import { createHash } from 'node:crypto'
+
 const REQUIRED = [
   ['R2_ENDPOINT', '对象存储端点，例如 https://<accountid>.r2.cloudflarestorage.com'],
   ['R2_BUCKET', '要列清单的桶名'],
@@ -130,6 +132,43 @@ export function summarizeObjects(objects) {
 }
 
 /**
+ * 清单的**存储身份**（业主 Stage 13C.3 §B）。
+ *
+ * 为什么不能只看桶名：桶名在 R2 里是**账号内唯一**，跨账号完全可以重名。
+ * 一份控制台清单和一份实时 API 清单即使桶名、前缀都一样，也可能是
+ * "同一个桶名的两个不同账号" —— 那样比出来的差异是彻头彻尾的假结论。
+ *
+ * 身份的三种形态（`kind`）：
+ *   · `api-endpoint-fingerprint`：实时列举，能算出"端点 + 凭据身份"的**指纹**
+ *     （`sha256(endpointHost|accessKeyId)` 截断）。Access Key 本身不是密钥，
+ *     但仍然不落原文 —— 只落指纹，既能比对又不泄漏。
+ *   · `operator-declared`：控制台导出没有 endpoint/账号信息，**只能**由操作者
+ *     用 `--storage-id <标签>` 显式声明（例如 `cf-account-tsinglan`）。
+ *   · `unknown`：两边都没有 → **拒绝比较**（不许拿桶名当身份）。
+ *
+ * `assertComparable` 的规则：
+ *   · 两边都是 api 指纹 → 指纹必须相同；
+ *   · 一边 API、一边控制台 → 要求 API 那份也带**相同**的 `--storage-id`
+ *     （即操作者显式确认"这份实时清单和那份导出说的是同一个存储"）；
+ *   · 两边都是控制台 → 两个 `--storage-id` 必须相同且非空；
+ *   · 任何一边 unknown → 拒绝。
+ *
+ * @param {{method: string, endpointHost: string | null, accessKeyId?: string | null, declaredId?: string | null}} input
+ */
+export function buildStorageIdentity({ method, endpointHost, accessKeyId = null, declaredId = null }) {
+  const declared = declaredId === null || String(declaredId).trim() === '' ? null : String(declaredId).trim()
+  if (method === 'api-list' && endpointHost !== null && endpointHost !== undefined) {
+    const seed = `${endpointHost}|${accessKeyId ?? ''}`
+    const fingerprint = `sha256:${createHash('sha256').update(seed).digest('hex').slice(0, 16)}`
+    return { kind: 'api-endpoint-fingerprint', fingerprint, declaredId: declared, endpointHost }
+  }
+  if (declared === null) {
+    return { kind: 'unknown', fingerprint: null, declaredId: null, endpointHost: endpointHost ?? null }
+  }
+  return { kind: 'operator-declared', fingerprint: null, declaredId: declared, endpointHost: endpointHost ?? null }
+}
+
+/**
  * 按 S3 的**字面前缀语义**过滤对象（`key.startsWith(prefix)`）。
  *
  * 业主 Stage 13C.2 §三：`--from-console` 以前只把 Prefix 写进元数据，**没有**真的过滤 ——
@@ -228,7 +267,7 @@ export function decideCompleteness({ source, usedMax, expectCount, observedCount
  *          scope: {method: string, endpointHost: string | null, bucket: string | null, prefix: string},
  *          completeness: {complete: boolean, reason: string}}} input
  */
-export function buildInventoryArtifact({ generatedAt, source, objects, compare = null, scope, completeness }) {
+export function buildInventoryArtifact({ generatedAt, source, objects, compare = null, scope, completeness, identity = null }) {
   const summary = summarizeObjects(objects)
   const complete = completeness?.complete === true
   return {
@@ -259,6 +298,11 @@ export function buildInventoryArtifact({ generatedAt, source, objects, compare =
       /** 过滤是否真的作用在对象集合上（不是只写在元数据里）。 */
       prefixFilterApplied: scope?.prefixFilterApplied === true,
     },
+    /**
+     * 存储身份：**没有它就不能比较**（业主 Stage 13C.3 §B）。
+     * 只落指纹或操作者声明的标签，绝不落凭据原文。
+     */
+    storageIdentity: identity ?? { kind: 'unknown', fingerprint: null, declaredId: null, endpointHost: null },
     source,
     summary: { count: summary.count, totalBytes: summary.totalBytes, prefixes: summary.prefixes },
     compare,
@@ -272,33 +316,113 @@ export function buildInventoryArtifact({ generatedAt, source, objects, compare =
 }
 
 /**
- * 对比两份清单**之前**的范围与完整性核对（业主 Stage 13C.1 §三）。
+ * 校验一份清单产物**自身是否自洽**（业主 Stage 13C.3 §C）。
  *
- * 不满足时返回 `{ok:false, kind:'not-artifact'|'incomplete'|'scope', reason}`（退出码由调用方按 kind 选），
- * 满足时返回 `{ok: true}`。
- * 这里刻意**不**做"尽力而为的对比"：范围不同的两份清单算出来的差异是假结论，
- * 比"没有结论"危险得多 —— 它会让人以为某个生产对象被删了。
+ * 为什么不能只看 `complete === true`：产物是磁盘上的文件，可能被手改过、
+ * 可能是旧版本工具写的、也可能是两次运行拼起来的。只看一个字段就等于
+ * "相信文件自己说自己没问题"。这里把**互相印证的字段**全部对一遍：
+ *
+ *   · `readOnly === true`（不是只读工具产出的东西不参与对账）；
+ *   · `complete === true` 且 `completeness.complete === true`
+ *     且 `completeness.usableForProductionComparison === true`；
+ *   · `verification` 与来源匹配：`api-list` → `tool-listed-all-pages`；
+ *     `console-export` → `tool-verified-count-match`；`reason` 也要对得上；
+ *   · 控制台导出：`expectedCount === observedCount === objects.length` 且 `expectSource` 非空；
+ *   · 实时列举：`verification` 必须表示"分页全部走完"（不接受 `none`）；
+ *   · `summary.count === objects.length`；
+ *   · `scope` 三要素齐备（`method` 已知、`bucket` 非空、`prefix` 是字符串）。
+ *
+ * 任何一条不成立 → 返回 `kind: 'not-artifact'` 或 `kind: 'inconsistent'`，
+ * 调用方**必须拒绝比较**，而不是"补一下元数据再放行"。
+ *
+ * @param {any} artifact
+ */
+export function assertArtifactSelfConsistent(artifact) {
+  if (artifact === null || typeof artifact !== 'object' || !Array.isArray(artifact.objects)) {
+    return { ok: false, kind: 'not-artifact', reason: '缺少 objects 数组（不是本工具产出的清单）' }
+  }
+  if (artifact.readOnly !== true) {
+    return { ok: false, kind: 'not-artifact', reason: '没有 readOnly 标记（不确定它是怎么来的）' }
+  }
+  const c = artifact.completeness ?? {}
+  if (artifact.complete !== true) return { ok: false, kind: 'incomplete', reason: 'complete 不是 true' }
+  if (c.complete !== true) return { ok: false, kind: 'inconsistent', reason: 'complete 与 completeness.complete 不一致' }
+  if (c.usableForProductionComparison !== true) {
+    return { ok: false, kind: 'inconsistent', reason: 'completeness.usableForProductionComparison 不是 true' }
+  }
+  const method = artifact.scope?.method
+  const expected = method === 'api-list'
+    ? { verification: 'tool-listed-all-pages', reason: 'listed-all-pages' }
+    : method === 'console-export'
+      ? { verification: 'tool-verified-count-match', reason: 'console-export-count-verified' }
+      : null
+  if (expected === null) {
+    return { ok: false, kind: 'inconsistent', reason: `scope.method 未知（${String(method)}）` }
+  }
+  if (c.verification !== expected.verification) {
+    return {
+      ok: false,
+      kind: 'inconsistent',
+      reason: `verification=${String(c.verification)} 与来源 ${method} 的规则不符（应为 ${expected.verification}）`,
+    }
+  }
+  if (c.reason !== expected.reason) {
+    return { ok: false, kind: 'inconsistent', reason: `reason=${String(c.reason)} 与 verification 不自洽` }
+  }
+  if (method === 'console-export') {
+    if (c.expectedCount !== artifact.objects.length || c.observedCount !== artifact.objects.length) {
+      return {
+        ok: false,
+        kind: 'inconsistent',
+        reason: `expectedCount/observedCount（${String(c.expectedCount)}/${String(c.observedCount)}）与 objects.length（${artifact.objects.length}）不一致`,
+      }
+    }
+    if (typeof c.expectSource !== 'string' || c.expectSource.trim() === '') {
+      return { ok: false, kind: 'inconsistent', reason: '控制台导出清单缺少 expectSource（数量从哪来的不可追溯）' }
+    }
+  }
+  if (typeof artifact.summary?.count !== 'number' || artifact.summary.count !== artifact.objects.length) {
+    return { ok: false, kind: 'inconsistent', reason: 'summary.count 与 objects.length 不一致' }
+  }
+  if (typeof artifact.scope?.bucket !== 'string' || artifact.scope.bucket.trim() === '') {
+    return { ok: false, kind: 'inconsistent', reason: 'scope.bucket 缺失' }
+  }
+  if (typeof artifact.scope?.prefix !== 'string') {
+    return { ok: false, kind: 'inconsistent', reason: 'scope.prefix 缺失' }
+  }
+  return { ok: true }
+}
+
+/**
+ * 对比两份清单**之前**的核对（业主 Stage 13C.1 §三 + 13C.3 §B/§C）。
+ *
+ * 顺序是刻意的：**先自洽 → 再完整性 → 再范围 → 最后身份**。
+ * 任何一步不过都直接拒绝，并且**不输出任何差异结论** ——
+ * 范围/身份不同的两份清单算出来的"消失/新增"是假事故，比没有结论危险得多。
+ *
+ * 不满足时返回 `{ok:false, kind, reason}`，`kind` 决定退出码：
+ *   `not-artifact` / `inconsistent` / `incomplete` → 6；
+ *   `identity-unknown` → 6（"无法证明是同一个存储"）；`scope` / `identity-mismatch` → 7。
  *
  * @param {any} previous 前一份清单产物
- * @param {any} current 当前清单产物
+ * @param {any} current 当前清单（至少含 complete/scope/storageIdentity）
  */
 export function assertComparable(previous, current) {
-  if (previous === null || typeof previous !== 'object' || !Array.isArray(previous.objects)) {
-    return { ok: false, kind: 'not-artifact', reason: '前一份清单不是本工具产出的产物（缺少 objects 数组）—— 拒绝对比。' }
+  const prevConsistent = assertArtifactSelfConsistent(previous)
+  if (!prevConsistent.ok) {
+    const kind = prevConsistent.kind === 'incomplete' ? 'incomplete' : prevConsistent.kind
+    return { ok: false, kind, reason: `前一份清单不可用于对账：${prevConsistent.reason}。` }
   }
-  if (previous.readOnly !== true) {
-    return { ok: false, kind: 'not-artifact', reason: '前一份清单没有 readOnly 标记 —— 不确定它是怎么来的，拒绝对比。' }
-  }
-  if (previous.complete !== true || current.complete !== true) {
-    const which = previous.complete === true ? '当前' : '前一份'
+  if (current.complete !== true) {
     return {
       ok: false,
       kind: 'incomplete',
       reason:
-        `${which}清单是**不完整的**（complete=false）—— 不完整清单不能用来判断"对象是否消失"；` +
-        '请先跑一次全量列举（不要用 --max）。',
+        '当前清单是**不完整的**（complete=false）—— 不完整清单不能用来判断"对象是否消失"；' +
+        '请先跑一次全量列举（不要用 --max / 补齐 --expect-count）。',
     }
   }
+
   const a = previous.scope ?? {}
   const b = current.scope ?? {}
   if (a.bucket !== b.bucket) {
@@ -315,6 +439,60 @@ export function assertComparable(previous, current) {
       reason: `两份清单的前缀不一致（"${a.prefix ?? ''}" vs "${b.prefix ?? ''}"）—— 集合范围不同，差异没有意义。`,
     }
   }
+  /*
+    存储身份（业主 Stage 13C.3 §B）：**桶名相同不等于同一个存储** ——
+    桶名只在账号内唯一，跨账号可以重名。所以这里要求身份能被证明：
+      · 两边都是 API 指纹 → 指纹相同；
+      · 一边 API、一边控制台 → API 那份必须带**同一个** `--storage-id`（操作者确认）；
+      · 两边都是控制台 → 两个 `--storage-id` 相同且非空；
+      · 任何一边 unknown → 拒绝（不许拿桶名当身份）。
+  */
+  const ia = previous.storageIdentity ?? { kind: 'unknown' }
+  const ib = current.storageIdentity ?? { kind: 'unknown' }
+  if (ia.kind === 'unknown' || ib.kind === 'unknown') {
+    return {
+      ok: false,
+      kind: 'identity-unknown',
+      reason:
+        '有一份清单的**存储身份未知**（控制台导出不会自带账号/端点信息）—— 无法证明两份清单来自同一个存储，拒绝对比。\n' +
+        '    要给控制台导出确认身份，请在两次运行时都加上 `--storage-id <标签>`（例如 `--storage-id cf-account-tsinglan`）。',
+    }
+  }
+  if (ia.kind === 'api-endpoint-fingerprint' && ib.kind === 'api-endpoint-fingerprint') {
+    if (ia.fingerprint !== ib.fingerprint) {
+      return {
+        ok: false,
+        kind: 'identity-mismatch',
+        reason: `两份清单的存储指纹不同（${ia.fingerprint} vs ${ib.fingerprint}）—— 不是同一个端点/账号。`,
+      }
+    }
+  } else {
+    // 至少一边是控制台导出：靠操作者声明的标签对齐
+    const da = ia.declaredId
+    const db = ib.declaredId
+    if (da === null || db === null) {
+      return {
+        ok: false,
+        kind: 'identity-unknown',
+        reason:
+          '控制台导出清单与实时清单要互相比较，必须两边都用 `--storage-id <标签>` 显式确认是同一个存储；' +
+          '现在至少一边没给。',
+      }
+    }
+    if (da !== db) {
+      return {
+        ok: false,
+        kind: 'identity-mismatch',
+        reason: `两份清单声明的存储身份不同（"${da}" vs "${db}"）—— 拒绝对比。`,
+      }
+    }
+  }
+
+  /*
+    endpoint 主机作为**最后一道**补充检查（身份对得上、但落盘的主机名不同，
+    说明有一份是在别的端点/代理上产出的）。放在身份之后，是为了让跨账号那种
+    最危险的情形报出"不是同一个存储"，而不是一句听起来无害的"主机不一致"。
+  */
   if (
     a.endpointHost !== null &&
     a.endpointHost !== undefined &&
