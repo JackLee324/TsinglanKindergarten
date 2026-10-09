@@ -159,6 +159,26 @@ try {
     }
   }
   check('静态资源可取且 MIME 正确', assets.length > 0 && bad.length === 0, bad.join(' / '))
+
+  /*
+    ── 样式真的编译出来了（不是"CSS 200 但里面没有工具类"）──────────────────
+    2026-10-08 的演练镜像正是这种情况：CSS 是 200 + text/css（上面那条全绿），
+    但文件里**一个工具类都没有**（Tailwind 的 PostCSS 插件没跑 —— Dockerfile
+    构建阶段漏拷 postcss.config.mjs），页面以裸 HTML 渲染、全部挤在左上角。
+    所以这里**打开 CSS 看内容**：主题变量必须已编译、工具类必须存在。
+  */
+  const cssAsset = assets.find((a) => a.endsWith('.css'))
+  if (cssAsset === undefined) {
+    check('样式已被编译（CSS 里有工具类）', false, '首页没有引用任何 .css')
+  } else {
+    const css = await (await get(cssAsset)).text()
+    const cssProblems = []
+    if (css.includes('@theme')) cssProblems.push('还留着未展开的 @theme（Tailwind 插件没跑）')
+    if (!css.includes(':root,:host{')) cssProblems.push('没有编译出的主题变量')
+    const missingUtilities = ['.min-h-screen{', '.flex{', '.items-center{', '.rounded-lg{'].filter((u) => !css.includes(u))
+    if (missingUtilities.length > 0) cssProblems.push(`缺工具类：${missingUtilities.join('、')}`)
+    check('样式已被编译（CSS 里有工具类）', cssProblems.length === 0, cssProblems.join('；'))
+  }
 } catch (e) {
   check('静态资源可取且 MIME 正确', false, String(e.message).slice(0, 120))
 }

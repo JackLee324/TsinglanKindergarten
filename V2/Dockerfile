@@ -27,7 +27,14 @@ RUN npm ci --no-audit --no-fund
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json package-lock.json nest-cli.json tsconfig*.json vite.config.mts ./
+# ⚠️ `postcss.config.mjs` 必须在这里 —— Tailwind v4 是**通过它**接进 Vite 的
+#    （`vite.config.mts` 里只有 `react()` 插件，没有 `@tailwindcss/vite`）。
+#    漏掉它的后果不是构建失败，而是**构建"成功"、页面却是裸 HTML**：
+#    Vite 只会把 `@import 'tailwindcss'` 原样内联（theme/preflight 两份源文件），
+#    `@theme` 与所有工具类都不会被展开 —— 首页/登录页挤在左上角。
+#    2026-10-08 的演练镜像就是这么出来的（`index-fJHUGZie.css` 里 `.flex` 一个都没有）。
+#    现在还有 `scripts/check-client-assets.mjs` 兜底：真漏了会直接让构建失败。
+COPY package.json package-lock.json nest-cli.json tsconfig*.json vite.config.mts postcss.config.mjs ./
 COPY scripts ./scripts
 COPY shared ./shared
 COPY server ./server

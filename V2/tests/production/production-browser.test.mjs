@@ -158,6 +158,79 @@ describe('生产环境：真实浏览器', () => {
     assert.equal(results.every((r) => r.status === 200), true, `有静态资源不是 200：${JSON.stringify(results)}`)
   })
 
+  /*
+    ③bis —— **样式真的生效**（不是"资源 200 但页面裸 HTML"）。
+
+    为什么要单独一条：2026-10-08 的演练镜像里，CSS 是 **200 + text/css**、JS 也是
+    200 + javascript，③ 全绿，但那份 CSS 里**一个工具类都没有**（Tailwind 的
+    PostCSS 插件没跑 —— Dockerfile 构建阶段漏拷 `postcss.config.mjs`），
+    登录页因此以裸 HTML 渲染、全部挤在左上角。③ 这种"取到了没"的检查
+    **结构上抓不到**这类故障，所以这里查两件更硬的事：
+      1) CSS **文件内容**里必须真的编译出了主题变量与工具类
+         （而不是只把 `@import 'tailwindcss'` 内联了一遍）；
+      2) 浏览器**算出来的** computed style 必须真的生效。
+  */
+  test('③bis 样式真的生效：CSS 里有工具类，且浏览器算出来的样式不是裸 HTML', async () => {
+    await browser.goto(`${BASE}/`)
+    await browser.waitFor(
+      `!!document.querySelector('[data-testid="header"]') || !!document.querySelector('[data-testid="login-page"]')`,
+      30000,
+      '外壳',
+    )
+
+    const cssUrl = await browser.session.eval(`(() => {
+      const link = document.querySelector('link[rel="stylesheet"]')
+      return link ? link.href : null
+    })()`)
+    assert.ok(cssUrl, '页面必须有外链样式表')
+    const css = await (await fetch(cssUrl)).text()
+    assert.equal(
+      css.includes('@theme'),
+      false,
+      `CSS 里还留着未展开的 @theme —— Tailwind 插件没跑（构建链缺 postcss 配置）：${cssUrl}`,
+    )
+    assert.equal(css.includes(':root,:host{'), true, 'CSS 里没有编译出的主题变量 —— 同上：Tailwind 没跑')
+    for (const utility of ['.min-h-screen{', '.flex{', '.items-center{', '.rounded-lg{']) {
+      assert.equal(css.includes(utility), true, `CSS 里缺少工具类 ${utility} —— 页面会以裸 HTML 样式渲染`)
+    }
+
+    const styled = await browser.session.eval(`(() => {
+      const login = document.querySelector('[data-testid="login-page"]')
+      if (login) {
+        const cs = getComputedStyle(login)
+        const input = document.querySelector('[data-testid="login-username"]')
+        const ics = getComputedStyle(input)
+        const btn = getComputedStyle(document.querySelector('[data-testid="login-submit"]'))
+        return { where: 'login', display: cs.display, align: cs.alignItems, justify: cs.justifyContent,
+                 inputW: Math.round(input.getBoundingClientRect().width),
+                 inputH: Math.round(input.getBoundingClientRect().height),
+                 inputRadius: ics.borderRadius, inputBorder: ics.borderTopWidth,
+                 btnBg: btn.backgroundColor, btnColor: btn.color }
+      }
+      const header = document.querySelector('[data-testid="header"]')
+      const cs = header ? getComputedStyle(header) : null
+      return { where: 'app', display: cs?.display ?? null, background: cs?.backgroundColor ?? null,
+               navLinks: [...document.querySelectorAll('a')].length,
+               height: header ? Math.round(header.getBoundingClientRect().height) : 0 }
+    })()`)
+
+    if (styled.where === 'login') {
+      assert.equal(styled.display, 'flex', `登录页容器应当是 flex 居中，实际 ${styled.display}`)
+      assert.equal(styled.align, 'center', '登录页容器应当垂直居中')
+      assert.equal(styled.justify, 'center', '登录页容器应当水平居中')
+      assert.equal(styled.inputW > 200, true, `输入框宽度只有 ${styled.inputW}px —— w-full 没生效`)
+      assert.equal(styled.inputH >= 32, true, `输入框高度只有 ${styled.inputH}px —— 尺寸没生效`)
+      assert.notEqual(styled.inputRadius, '0px', '输入框没有圆角 —— 工具类没生效')
+      assert.notEqual(parseFloat(styled.inputBorder), 0, '输入框没有边框 —— 工具类没生效')
+      assert.notEqual(styled.btnBg, 'rgba(0, 0, 0, 0)', '登录按钮没有背景色 —— 工具类没生效')
+      assert.match(styled.btnColor, /255, 255, 255/, `登录按钮文字应当是白色，实际 ${styled.btnColor}`)
+    } else {
+      assert.equal(styled.navLinks > 0, true, '已登录页面应当有导航链接')
+      assert.notEqual(styled.display, 'inline', '页头没有布局样式 —— 工具类没生效')
+      assert.equal(styled.height > 20, true, `页头高度只有 ${styled.height}px —— 布局没生效`)
+    }
+  })
+
   test('④ 登录后一格格点进目录（不输深层 URL）', async () => {
     await login()
     /*
