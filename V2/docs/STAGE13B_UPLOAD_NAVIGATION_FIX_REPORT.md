@@ -235,7 +235,7 @@ onClick={() => setUserChoice(!shouldBeOpen)}         // 箭头只改选择，不
 | 类型 | `npm run typecheck`（server + client） | PASS（0 错误） |
 | 静态 | `npm run lint` | PASS（0 问题） |
 | 单元 | `npm run test:unit` | **206 / 206 PASS** |
-| 集成 | `npm run test:integration` | **614 / 614 PASS**（连续两次全绿） |
+| 集成 | `npm run test:integration` | **614 / 614 PASS**（**连续三次**全绿，最后一次跑的正是本提交的冻结代码） |
 | 部署环境验收 | `PRODUCTION_BASE_URL=… node --test tests/production/browser.stage13b-rehearsal.test.mjs` | **12 / 12 PASS** |
 | 部署环境自检 | `node deploy/verify.mjs --base https://v2.localhost:8443 --cacert deploy/tls/fullchain.pem --http-port 10088` | **12 / 12 PASS** |
 | Safari | `npm run test:safari` / `SAFARI_VIEWPORT=mobile npm run test:safari` | 见 §7.1 |
