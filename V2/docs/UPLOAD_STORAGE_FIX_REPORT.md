@@ -188,10 +188,52 @@ https://s3.localhost:8443/qls-v2-files
 R2 的 endpoint 是公网域名、证书由受信任 CA 签发，**不存在**这一层问题。
 这是**本地演练环境自签证书**的特有现象。
 
-## 8.6 待决（需要业主选择）
+## 8.6 处置（业主已选 B：本地开发 CA）
 
 | 选项 | 做法 | 代价 |
 |---|---|---|
 | A（已可用） | 每个浏览器对存储 origin 接受一次证书警告 | 换 profile/机器要重做；地址栏仍显示"不安全" |
 | B（推荐） | 生成一个本地开发 CA，用它签发覆盖两个 host 的证书；把 CA 加入 macOS 信任（需业主在自己的终端执行一条 `sudo security add-trusted-cert …`，我不索取管理员口令） | 改动本机信任库（安全相关，须业主同意）；之后演练环境不再有证书警告 |
 | C | 演练里把对象存储改成**与应用同源**（nginx 路径前缀，SigV4 路径保持不变） | 用户零操作，但演练拓扑与生产不一致（生产是跨域 R2），且要动共享的 nginx 模板 |
+
+## 8.7 已实施：本地开发 CA（选项 B）
+
+新增 `deploy/rehearsal-tls.mjs`（可复现、无密钥入库）：用 openssl 生成
+**本地开发 CA**，并用它签发覆盖 `v2.localhost` / `s3.localhost` / `localhost` / `127.0.0.1`
+的叶子证书（397 天，`serverAuth`）。产物全在 `deploy/tls/`（gitignored）：
+
+| 文件 | 用途 |
+|---|---|
+| `ca.pem` | 开发 CA 证书 —— **要加入 macOS 信任库的就是它** |
+| `ca-key.pem`（0600） | CA 私钥，只留本机 |
+| `fullchain.pem` | 叶子证书 + CA 链（nginx 用） |
+| `privkey.pem`（0600） | 叶子私钥 |
+
+演练环境随之改为**信任这张 CA**（`docker-compose.rehearsal.yml` 里
+`NODE_EXTRA_CA_CERTS=/etc/v2-tls/ca.pem`），这样应用容器对存储的服务端调用也走同一条链。
+
+### 已验证（本次实际执行，**不带任何 TLS 豁免**）
+
+| 检查 | 结果 |
+|---|---|
+| 两个 SNI 返回的证书签发者 | `CN=QLS V2 Rehearsal Dev CA`（v2 与 s3 都是） |
+| `curl --cacert deploy/tls/ca.pem`（**不用 `-k`**）访问 `/login` | **HTTP 200**（链有效） |
+| 同上访问存储 origin | **HTTP 403**（私有桶对未签名请求的正常拒绝 ＝ 链有效且连通） |
+| 应用容器内 `HEAD https://s3.localhost:8443/qls-v2-files` | **403**（服务端也走同一条受信链） |
+| 完整上传链路（登录→建资源→签名→PUT→登记→列表→purge） | **全通过**，`PUT 200 / register 201 / 文件 1 个 / removedObjects=1` |
+| 部署级浏览器门禁 | **10/10**（含 ③ter、③quater） |
+| 部署巡检 `verify.mjs` | 12 项中 11 项通过；唯一"不符"是资源计数 352（349 + 用户自己测试时建的 3 条草稿，非本次验证产生，**未改动**） |
+| 样式修复回归 | CSS 28 472 B、`.flex{` 存在、`@theme` 残留 0 |
+
+### 业主还需要执行的一步（一次即可，需要管理员口令，我不索取）
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain \
+  "$(pwd)/deploy/tls/ca.pem"      # 在 V2/ 目录下执行
+```
+
+之后**重启 Chrome**（Chrome 在启动时读取系统信任库），两个 origin 都不再报警告，
+地址栏的"不安全"消失，跨域直传也不会再被 TLS 拦下 —— 上传即可正常完成。
+
+> 在业主完成这一步之前，浏览器里仍会看到"您的连接不是私密连接"（这次是**新 CA 未被信任**，
+> 与 §8.1 的自签叶子证书不同：装上 CA 后两个 origin 会**同时**消失告警）。

@@ -31,9 +31,11 @@ services:
     volumes:
       - ./.devdata/rehearsal-v1-files:/rehearsal-v1-files:ro
       # register 阶段服务端要自己去对象存储核对对象，走 STORAGE_ENDPOINT（公网名字 + HTTPS），
-      # 所以容器里必须信任这张自签证书
-      - ./deploy/tls/fullchain.pem:/etc/v2-tls/fullchain.pem:ro
+      # 所以容器里必须信任签发演练证书的那张**开发 CA**
+      # （deploy/rehearsal-tls.mjs 生成；原来是自签叶子证书，浏览器无法信任 → 见
+      #   docs/UPLOAD_STORAGE_FIX_REPORT.md §8）
+      - ./deploy/tls/ca.pem:/etc/v2-tls/ca.pem:ro
     environment:
-      NODE_EXTRA_CA_CERTS: /etc/v2-tls/fullchain.pem
+      NODE_EXTRA_CA_CERTS: /etc/v2-tls/ca.pem
     extra_hosts:
       - 's3.localhost:host-gateway'

@@ -411,7 +411,12 @@ describe('生产环境：真实浏览器', () => {
   })
 
   test('⑧ 全程 console / 网络 0 错误（allowlist 逐条登记）', async () => {
-    const allow = ['/api/auth/me'] // 未登录时探测会话，401 是正常的
+    const allow = [
+      '/api/auth/me', // 未登录时探测会话，401 是正常的
+      // ③quater 的连通性探针是**未签名**的 HEAD：私有桶必然回 403。
+      // 那 403 正是"链通了、桶也拒绝了"的证据，所以显式登记（少写一条就是红灯）。
+      '/qls-v2-files/__reachability-probe',
+    ]
     const found = browser.problemReport({ allow })
     assert.equal(
       found.length,
