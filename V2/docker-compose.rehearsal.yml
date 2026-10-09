@@ -5,11 +5,35 @@
 #      生产库只应存在于内部网络，proxy 是唯一入口。
 #   2. 把"V1 侧的文件"只读挂进应用容器 —— 生产里这些文件在 V1 的对象存储里（R2），
 #      演练里用宿主机上的一份占位副本（真实对象要 R2 凭据，本机没有）。
-#   3. （存储本身不在 compose 里，见 deploy/rehearsal-storage.mjs）
+#   3. 让**应用容器**也能解析对象存储的公网名字 `s3.localhost`，并信任演练的自签证书。
+#   （存储本身不在 compose 里，见 deploy/rehearsal-storage.mjs）
+#
+# 关于第 3 条 —— 不修就会"上传图片失败"：
+#   上传是三步：① 服务端**只做签名**发一个 presigned URL（不联网，成功）；
+#   ② 浏览器 PUT 字节到那个地址（浏览器能解析 s3.localhost，成功，字节真的写进存储了）；
+#   ③ 服务端**自己去对象存储核对**对象在不在（HeadObject）→ 这一步要用
+#      `STORAGE_ENDPOINT`，也就是 `https://s3.localhost:8443`。
+#   容器里的 DNS **解析不了** `s3.localhost`（它不是 compose 网络里的名字），
+#   于是第 ③ 步失败 → 接口 503 STORAGE_UNAVAILABLE → 资源的 fileCount 永远是 0
+#   （浏览器上就是"上传图片失败"）。栈里其它环节全是好的，所以这种故障最容易被
+#   误判成"前端坏了"或"存储坏了"。
+#
+#   修法：把 `s3.localhost` 指到宿主网关 → 命中宿主机发布的 8443 → 代理 → SeaweedFS。
+#   ⚠️ 必须连着**这个名字 + 这个端口**访问：预签名 URL 的 SigV4 签名覆盖 `host:port`，
+#   换成直连 SeaweedFS（host.docker.internal:18443）或改端口都会 403 SignatureDoesNotMatch。
+#   证书用自签的那张，`NODE_EXTRA_CA_CERTS` 只是**增加信任**，不关闭校验。
 services:
   db:
     ports:
       - '5433:5432'
+
   app:
     volumes:
       - ./.devdata/rehearsal-v1-files:/rehearsal-v1-files:ro
+      # register 阶段服务端要自己去对象存储核对对象，走 STORAGE_ENDPOINT（公网名字 + HTTPS），
+      # 所以容器里必须信任这张自签证书
+      - ./deploy/tls/fullchain.pem:/etc/v2-tls/fullchain.pem:ro
+    environment:
+      NODE_EXTRA_CA_CERTS: /etc/v2-tls/fullchain.pem
+    extra_hosts:
+      - 's3.localhost:host-gateway'

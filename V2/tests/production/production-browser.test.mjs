@@ -231,6 +231,38 @@ describe('生产环境：真实浏览器', () => {
     }
   })
 
+  /*
+    ③ter —— **服务端自己能不能访问对象存储**。
+
+    为什么必须有这一条：上传是三步 —— ① 服务端只做签名发 presigned URL；
+    ② 浏览器 PUT 字节到那个地址；③ 服务端**自己**去对象存储核对对象（HeadObject）。
+    2026-10-09 演练环境出过一次：①② 全绿（浏览器 PUT 甚至返回 200、字节真的写进存储了），
+    第 ③ 步却 503 STORAGE_UNAVAILABLE —— 因为容器内解析不了 STORAGE_ENDPOINT 的域名，
+    在用户那里看到的只是"上传图片失败"。③ 那种"资源取到了没"的检查抓不到它，
+    所以这里直接查那个端点（它就是第 ③ 步那次 HeadBucket，服务端发起、只读）。
+  */
+  test('③ter 服务端能自己访问对象存储（上传登记的前提）', async () => {
+    const probe = async () =>
+      JSON.parse(
+        await browser.session.eval(
+          `fetch('/api/health/storage',{credentials:'same-origin'}).then(async r=>JSON.stringify({code:r.status,body:await r.json().catch(()=>({}))}))`,
+        ),
+      )
+    let res = await probe()
+    if (res.code === 401) {
+      // 会话可能已过期：重新登录一次再探（这里刻意只重试一次，不掩盖真实故障）
+      await login()
+      res = await probe()
+    }
+    assert.equal(res.code, 200, `探针本身应当 200，实际 ${res.code}：${JSON.stringify(res.body).slice(0, 200)}`)
+    assert.equal(res.body.configured, true, `对象存储没配好：${res.body.detail ?? ''}`)
+    assert.equal(
+      res.body.reachable,
+      true,
+      `服务端访问不了对象存储（上传第三步 register 会失败）：${res.body.detail ?? JSON.stringify(res.body)}`,
+    )
+  })
+
   test('④ 登录后一格格点进目录（不输深层 URL）', async () => {
     await login()
     /*

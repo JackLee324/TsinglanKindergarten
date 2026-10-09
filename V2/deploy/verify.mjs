@@ -66,6 +66,12 @@ const check = (name, ok, detail = '') => {
   results.push({ name, ok, detail })
   console.log(`${ok ? '✅' : '❌'} ${name}${detail === '' ? '' : `  ${detail}`}`)
 }
+/** 没条件验的项**不装作通过**：单独列出来，汇总里显示"跳过"。 */
+const skipped = []
+const skip = (name, why) => {
+  skipped.push({ name, why })
+  console.log(`⏭ 未验证 ${name}${why === '' ? '' : `  ${why}`}`)
+}
 
 async function get(path, init = {}) {
   return fetch(`${BASE}${path}`, { redirect: 'manual', ...init })
@@ -183,6 +189,59 @@ try {
   check('静态资源可取且 MIME 正确', false, String(e.message).slice(0, 120))
 }
 
+// ── 6bis. 服务端自己能不能访问对象存储（上传第三步 register 的前提）──────────
+/*
+  为什么必须有这一项：上传是三步 —— ① 服务端只做签名发 presigned URL；
+  ② 浏览器 PUT 字节到那个地址；③ 服务端**自己**去对象存储核对对象（HeadObject）。
+  第 ①② 步全绿并不代表能上传：2026-10-09 演练环境就出现过"浏览器 PUT 成功、
+  登记却 503 STORAGE_UNAVAILABLE"，因为容器内解析不了 STORAGE_ENDPOINT 的域名
+  （`s3.localhost` 只在宿主机/浏览器侧可解析），表现为用户眼里的"上传图片失败"。
+  `/api/health/storage` 做的正是第 ③ 步那次 HeadBucket（服务端发起），
+  所以它能一眼看出这类故障。它需要登录（权限 `audit.view`），因此凭据是可选的：
+  给了就验，没给就**明确标注未验证**，绝不默认通过。
+*/
+{
+  const adminUser = arg('admin-user') ?? process.env.VERIFY_ADMIN_USER ?? ''
+  const adminPassword = arg('admin-password') ?? process.env.VERIFY_ADMIN_PASSWORD ?? ''
+  const name = '服务端可访问对象存储（上传登记的前提）'
+  if (adminUser === '' || adminPassword === '') {
+    skip(name, '需要 --admin-user/--admin-password（或 VERIFY_ADMIN_USER/PASSWORD）')
+  } else {
+    try {
+      const jar = new Map()
+      const eat = (res) => {
+        for (const raw of res.headers.getSetCookie?.() ?? []) {
+          const [pair] = raw.split(';')
+          const i = pair.indexOf('=')
+          jar.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim())
+        }
+      }
+      const loginRes = await get('/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: adminUser, password: adminPassword }),
+      })
+      eat(loginRes)
+      if (loginRes.status !== 200 && loginRes.status !== 201) {
+        check(name, false, `登录失败 HTTP ${loginRes.status}（检查凭据/限流）`)
+      } else {
+        const health = await get('/api/health/storage', {
+          headers: { cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') },
+        })
+        const body = await health.json().catch(() => ({}))
+        check(
+          name,
+          health.status === 200 && body.reachable === true,
+          `provider=${body.provider ?? '?'} configured=${body.configured ?? '?'} reachable=${body.reachable ?? '?'}` +
+            (body.reachable === true ? '' : `  ${body.detail ?? `HTTP ${health.status}`}`),
+        )
+      }
+    } catch (e) {
+      check(name, false, String(e.message).slice(0, 160))
+    }
+  }
+}
+
 // ── 8/9. 数据库：迁移与计数 ────────────────────────────────────────────────
 if (!has('skip-db')) {
   try {
@@ -240,5 +299,13 @@ if (!has('skip-rate-limit')) {
 
 const failed = results.filter((r) => !r.ok)
 console.log()
-console.log(failed.length === 0 ? `✅ 全部 ${results.length} 项通过` : `❌ ${failed.length}/${results.length} 项未通过`)
+if (skipped.length > 0) {
+  console.log(`⏭ 未验证 ${skipped.length} 项（不算通过，也不判失败）：`)
+  for (const s of skipped) console.log(`   · ${s.name} —— ${s.why}`)
+}
+console.log(
+  failed.length === 0
+    ? `✅ 通过 ${results.length} 项${skipped.length > 0 ? `（另有 ${skipped.length} 项未验证）` : ''}`
+    : `❌ ${failed.length}/${results.length} 项未通过`,
+)
 process.exit(failed.length === 0 ? 0 : 1)
