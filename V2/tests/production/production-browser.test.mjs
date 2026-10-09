@@ -34,6 +34,11 @@ const BASE = (process.env.PRODUCTION_BASE_URL ?? '').replace(/\/+$/, '')
 const INSECURE_TLS = process.env.PRODUCTION_INSECURE_TLS === '1' // 仅本地演练：自签证书
 const ADMIN_USER = process.env.PRODUCTION_ADMIN_USER ?? ''
 const ADMIN_PASSWORD = process.env.PRODUCTION_ADMIN_PASSWORD ?? ''
+/**
+ * 对象存储的 origin（浏览器直传 PUT 的目标）。跨域直传**不经过应用**，
+ * 所以它必须单独验：这一项就是"上传到一半失败"的那条路。
+ */
+const STORAGE_ORIGIN = (process.env.PRODUCTION_STORAGE_ORIGIN ?? '').replace(/\/+$/, '')
 
 const WORK = mkdtempSync(join(tmpdir(), 'v2-prod-'))
 const DOWNLOAD_DIR = join(WORK, 'downloads')
@@ -260,6 +265,52 @@ describe('生产环境：真实浏览器', () => {
       res.body.reachable,
       true,
       `服务端访问不了对象存储（上传第三步 register 会失败）：${res.body.detail ?? JSON.stringify(res.body)}`,
+    )
+  })
+
+  /*
+    ③quater —— **浏览器能不能连上对象存储 origin**（跨域直传 PUT 的前提）。
+
+    为什么必须有这一条：2026-10-09 真实踩到过 —— 应用 origin 的证书被用户点过"继续前往"，
+    存储 origin 的自签证书**没有**。于是上传第 ② 步（浏览器把字节 PUT 到存储）被 TLS 挡下，
+    fetch 直接抛 `Failed to fetch`，界面上只显示"网络中断，上传没有完成"，
+    而服务端一切正常（连日志都没有）。这类"跨域且不经过应用"的失败，
+    ③/③bis/③ter 全都看不见。
+
+    ⚠️ 已知局限（必须说清）：本门禁在演练环境通常用 `PRODUCTION_INSECURE_TLS=1` 启动，
+    那一项会**同时**放过证书不受信任的情况 —— 所以这条检查能发现 DNS/代理/CORS 类问题，
+    但**只有不带该参数运行时**才能证明"用户的普通浏览器也能连上"。
+    要那样跑，得先让演练证书被系统信任（见 docs/UPLOAD_STORAGE_FIX_REPORT.md §8）。
+    没给 `PRODUCTION_STORAGE_ORIGIN` 时**跳过**，不假装通过。
+  */
+  test('③quater 浏览器能连上对象存储 origin（跨域直传的前提）', async (t) => {
+    if (STORAGE_ORIGIN === '') {
+      t.skip('未设置 PRODUCTION_STORAGE_ORIGIN —— 跳过（未验证）')
+      return
+    }
+    await browser.goto(`${BASE}/`)
+    await browser.waitFor(
+      `!!document.querySelector('[data-testid="header"]') || !!document.querySelector('[data-testid="login-page"]')`,
+      30000,
+      '外壳',
+    )
+    // `mode:'no-cors'` → 不依赖存储的 CORS 头，也**不写入任何东西**（HEAD 探针）。
+    // 能拿到 opaque 响应就说明 TCP+TLS(含证书校验) 这一层是通的；被拦时 fetch 会抛错。
+    const probe = await browser.session.eval(`(async () => {
+      try {
+        await fetch('${STORAGE_ORIGIN}/qls-v2-files/__reachability-probe', { method: 'HEAD', mode: 'no-cors' })
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, error: String(e && e.message ? e.message : e) }
+      }
+    })()`)
+    assert.equal(
+      probe.ok,
+      true,
+      `浏览器连不上对象存储 origin ${STORAGE_ORIGIN}：${probe.error ?? ''}\n` +
+        '  · 若这是演练环境：浏览器需要先信任该地址的证书（自签证书要对**每个 origin** 各接受一次），' +
+        '在标签页打开它并点"继续前往"；\n' +
+        '  · 生产环境：检查该 origin 的证书是否有效、DNS/网络是否可达。',
     )
   })
 
