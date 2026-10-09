@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronRight } from 'lucide-react'
-import { PERMISSIONS, PERMISSION_CODES, type PermissionCode } from '@shared/permissions'
+import { PERMISSIONS, PERMISSION_CODES, isGrantable, type PermissionCode } from '@shared/permissions'
 import { useDirectory } from '../../directory/DirectoryProvider'
 import type { DirectoryNode, PermissionGrant } from '../../api/types'
 import { cn } from '../ui/cn'
@@ -125,8 +125,14 @@ export function PermissionEditor({
   }
 
   /** 全局权限（用户管理 / 审计）不带目录范围 —— 界面上单独一栏，免得被误当成"还要选目录"。 */
-  const directoryPermissions = PERMISSION_CODES.filter((p) => PERMISSIONS[p].scope === 'directory')
-  const globalPermissions = PERMISSION_CODES.filter((p) => PERMISSIONS[p].scope === 'global')
+  // 不可授予的权限（目前只有「管理教师」）不渲染：它是超级管理员身份自带的，
+  // 出现在勾选框里会让人以为"给了老师管理权"，而服务端按身份判定，根本不会生效。
+  const directoryPermissions = PERMISSION_CODES.filter(
+    (p) => PERMISSIONS[p].scope === 'directory' && isGrantable(p),
+  )
+  const globalPermissions = PERMISSION_CODES.filter(
+    (p) => PERMISSIONS[p].scope === 'global' && isGrantable(p),
+  )
 
   return (
     <div className="space-y-4" data-testid="permission-editor">

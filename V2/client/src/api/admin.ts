@@ -34,12 +34,22 @@ export const adminApi = {
     username: string
     password: string
     role: UserRole
+    /** 建好后是否立即启用 —— 由后端在同一事务里落库（Stage 13 §5）。 */
+    active?: boolean
     permissions?: PermissionGrant[]
   }) => api.post<AdminUserDetail>('/api/users', input),
 
   updateUser: (
     id: string,
-    input: { name?: string; nameEn?: string | null; role?: UserRole; active?: boolean; password?: string },
+    input: {
+      name?: string
+      nameEn?: string | null
+      /** 改用户名：唯一性由 lower(username) 唯一索引保证，服务端给可读的 409。 */
+      username?: string
+      role?: UserRole
+      active?: boolean
+      password?: string
+    },
   ) => api.patch<{ revokedSessions: number }>(`/api/users/${id}`, input),
 
   userPermissions: (id: string) =>

@@ -54,6 +54,11 @@ const REAL_V1_URL =
 
   B 段用夹具，那里有"口令已知"的账号（v1teacher），用来证明**老口令本身**还能用。
 */
+/*
+  真实 V1 库里唯一的 super_admin 账号（从快照/库里核对过）。迁移**不会**自动提升它 ——
+  必须由操作者用 `--admin-usernames` 点名，这就是下面那一步做的事。
+*/
+const REAL_ADMIN_USERNAME = 'TsinglanAdmin'
 const REAL_TEACHER_USERNAME = 'prek-head01'
 const REAL_TEACHER_NEW_PASSWORD = 'Stage9Migrated!2026'
 const REAL_TEACHER = { username: REAL_TEACHER_USERNAME, password: REAL_TEACHER_NEW_PASSWORD }
@@ -126,7 +131,15 @@ describe('A. 真实 V1 数据迁过来的样子', () => {
     const out = await runProjectScriptCaptured(
       'scripts/import-v1.mjs',
       { NODE_ENV: 'test', V2_ALLOW_DEV_SECRETS: '1' },
-      ['--source', REAL_V1_URL, '--target', TEST_DB_URL, '--v1-storage', 'none', '--allow-partial'],
+      [
+        '--source', REAL_V1_URL, '--target', TEST_DB_URL, '--v1-storage', 'none', '--allow-partial',
+        /*
+          管理员必须**显式点名**（业主 Stage 13 §4：不得凭 V1 岗位名自动提升身份）。
+          这里把真实 V1 库里的 super_admin 账号指定为超级管理员 —— 这正是生产里
+          操作者要做的那一步；同时顺带验证 `--admin-usernames` 这条路径真的可用。
+        */
+        '--admin-usernames', REAL_ADMIN_USERNAME,
+      ],
     )
     assert.match(out, /迁移完成/)
 
@@ -270,7 +283,12 @@ describe('B. 真实文件的迁移：预览 → 下载 → SHA256 一致', () =>
     fixtureImport = await runProjectScriptCaptured(
       'scripts/import-v1.mjs',
       { NODE_ENV: 'test', V2_ALLOW_DEV_SECRETS: '1', STORAGE_PROVIDER: 'local', STORAGE_LOCAL_DIR: IMPORT_STORAGE },
-      ['--source', fixture.url, '--target', TEST_DB_URL, '--v1-storage', `local:${fixture.storageDir}`, '--allow-partial'],
+      [
+        '--source', fixture.url, '--target', TEST_DB_URL,
+        '--v1-storage', `local:${fixture.storageDir}`, '--allow-partial',
+        // 夹具里的园长（V1 的 principal）不再是"自动的管理员"，要显式点名。
+        '--admin-usernames', KNOWN.adminUsername,
+      ],
     )
     assert.match(fixtureImport, /迁移完成/)
 

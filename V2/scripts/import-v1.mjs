@@ -163,8 +163,22 @@ export const PERMISSION_MAP = {
   'permission.revoke': 'user.manage',
 }
 
-/** V1 角色 → V2 身份的管理员集合（可用 --admin-roles 覆盖）。 */
-export const DEFAULT_ADMIN_ROLES = ['super_admin', 'principal']
+/**
+ * V1 岗位名 → V2 管理员的集合。**默认为空：迁移不会自动把任何人提升为管理员。**
+ *
+ * 规则变更记录（业主 Stage 13 §4，2026-10-09）：
+ *   原先默认是 `['super_admin', 'principal']`，也就是 V1 里叫"园长"的账号会被**自动**
+ *   提升成 V2 的超级管理员。业主复核后明确禁止这种做法：**不得仅凭 V1 的旧角色名称
+ *   自动提升账号身份** —— 岗位名是历史数据，不是今天的授权决定；
+ *   而"谁是超级管理员"必须由人**指名道姓**地确认。
+ *
+ * 因此现在有两条**显式**路径（都要操作者主动写出来）：
+ *   · `--admin-usernames a,b`（推荐）：直接点名**账号**，这是业主想要的粒度；
+ *   · `--admin-roles super_admin,principal`：按 V1 岗位名批量指定（粗一档，仍要显式）。
+ * 都不给 → 迁移结果里没有任何管理员，随后用 `scripts/bootstrap-admin.mjs`
+ * 以显式凭据初始化第一个超级管理员（那才是"第一个管理员"的正规入口）。
+ */
+export const DEFAULT_ADMIN_ROLES = []
 
 /**
  * 「这个账号在 V1 里没有口令」的占位值。
@@ -553,6 +567,14 @@ async function main() {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
+  /*
+    按**账号**指定管理员（推荐路径，业主 Stage 13 §4）。
+    大小写不敏感：用户名在 V2 里是 `lower(username)` 唯一的。
+  */
+  const adminUsernames = String(arg('admin-usernames') ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
   const v1Storage = String(arg('v1-storage') ?? 'none')
   const sourceLabel = canonicalSourceLabel(sourceUrl)
 
@@ -716,7 +738,13 @@ async function main() {
       const usernameTaken = []
       const userMap = new Map() // v1 id → v2 id（实际就是同一个 uuid）
       for (const t of v1.teachers) {
-        const role = (t.roles ?? []).some((r) => adminRoles.includes(r)) ? 'ADMIN' : 'TEACHER'
+        /*
+          身份判定：优先看**账号**（--admin-usernames，点名），再看岗位名（--admin-roles，显式指定）。
+          两者都没命中 → TEACHER。**没有任何"默认管理员"** —— 见 DEFAULT_ADMIN_ROLES 的说明。
+        */
+        const byUsername =
+          typeof t.username === 'string' && adminUsernames.includes(t.username.trim().toLowerCase())
+        const role = byUsername || (t.roles ?? []).some((r) => adminRoles.includes(r)) ? 'ADMIN' : 'TEACHER'
         const status = USER_STATUS_MAP[t.status]
         if (status === undefined) {
           problems.push({ level: 'fatal', entity: 'user', id: t.id, why: `V1 状态「${t.status}」没有对应值` })
@@ -775,8 +803,20 @@ async function main() {
           roleSuggestions.push({ name: t.name, username: t.username, v1Roles: (t.roles ?? []).join('/') })
         }
       }
-      if (!adminConversions.some((u) => u.role === 'ADMIN')) {
-        throw new Error('迁移结果里一名管理员都没有 —— V2 需要至少一名管理员，停止导入。')
+      /*
+        **不再**因为"没有管理员"就中止整批导入。
+        为什么改：现在"第一个超级管理员"的正规入口是 `scripts/bootstrap-admin.mjs`
+        （显式凭据、只在没有 ADMIN 时创建），而它要求导入先跑完。
+        所以这里把"没有任何管理员"当成**必须被看见的提示**，写进报告与终端，
+        而不是一个让人卡死在中间的硬错误。
+      */
+      const migratedAdmins = adminConversions.filter((u) => u.role === 'ADMIN')
+      if (migratedAdmins.length === 0) {
+        console.log(
+          '⚠ 本次迁移**没有**提升任何账号为管理员（默认不按 V1 岗位名自动提升）。\n' +
+            '   请用 `INITIAL_ADMIN_USERNAME=… INITIAL_ADMIN_PASSWORD=… node scripts/bootstrap-admin.mjs`\n' +
+            '   初始化第一个超级管理员，或在界面上指名调整身份。',
+        )
       }
 
       // ── 资源 ────────────────────────────────────────────────────────────
@@ -1277,6 +1317,25 @@ async function writeReports(result, { sourceLabel, targetUrl, verify }) {
   for (const p of result.problems.filter((p) => p.level === 'review')) {
     lines.push(`  - ${p.entity} ${p.id}：${p.why}`)
   }
+  lines.push('', '## 身份迁移：**没有自动提升的管理员**', '')
+  lines.push(
+    '按业主规则，迁移**不会**依据 V1 的岗位名自动把账号变成管理员。',
+    '若本次确实提升了账号，那一定是操作者用 `--admin-usernames` / `--admin-roles` 显式指定的：',
+    '',
+  )
+  // 注意作用域：这里在 writeReports(result, …) 里，必须走参数，而不是 apply() 的局部变量。
+  const adminsInReport = (result.adminConversions ?? []).filter((u) => u.role === 'ADMIN')
+  if (adminsInReport.length === 0) {
+    lines.push(
+      '- **本次一名管理员都没有**。请在导入完成后用显式凭据初始化第一个超级管理员：',
+      '  `INITIAL_ADMIN_USERNAME=… INITIAL_ADMIN_PASSWORD=… node scripts/bootstrap-admin.mjs`',
+      '',
+    )
+  } else {
+    for (const a of adminsInReport) lines.push(`- ${a.name}（${a.username}）← V1 岗位 ${(a.v1Roles ?? []).join('/')}`)
+    lines.push('')
+  }
+
   lines.push('', '## 角色 → 建议授予（管理员照着点即可）', '')
   lines.push('| 老师 | 用户名 | V1 角色 |', '|---|---|---|')
   for (const s of result.roleSuggestions) lines.push(`| ${s.name} | ${s.username} | ${s.v1Roles} |`)

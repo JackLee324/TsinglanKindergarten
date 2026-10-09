@@ -132,7 +132,7 @@ describe('谁能审核', () => {
   })
 })
 
-describe('自审保护（业主 §8 / §26）', () => {
+describe('自审保护（业主 §8 / §26；管理员例外见 Stage 13 §3）', () => {
   test('自己上传、自己审核 → 403，并且说清楚是"不能自审"', async () => {
     // 这位老师**同时**持有审核与发布权限 —— 也就是业主说的
     // "如果以后某个 TEACHER 具有 review permission"那种情况。
@@ -166,7 +166,14 @@ describe('自审保护（业主 §8 / §26）', () => {
     assert.equal(detail.data.status, 'PENDING_REVIEW')
   })
 
-  test('管理员也不能审自己上传的资源（防自审不看角色）', async () => {
+  test('管理员**可以**审自己上传的资源（业主 Stage 13 §3：规则变更）', async () => {
+    /*
+      规则变更：Stage 7 §8 / §26 当时要求"管理员也不能自审"。
+      业主复核后改为：**超级管理员必须能审核并发布自己上传的待审资源** ——
+      否则单管理员站点会出现"资源永远卡在待审"的死角，而那条旧规则并不增加安全性
+      （管理员本来就有全平台权限，放行的唯一入口仍是 can()）。
+      普通教师的自审保护**没有**被取消，上面的用例仍然断言 403。
+    */
     const created = await admin.post('/api/resources', {
       directoryId: ids.resources,
       title: '管理员自己的资源',
@@ -180,9 +187,47 @@ describe('自审保护（业主 §8 / §26）', () => {
     const submitted = await admin.post(`/api/resources/${created.data.id}/submit`)
     assert.equal(submitted.status, 201, JSON.stringify(submitted.data))
 
+    // 审核前：能力位必须已经告诉界面"这条我能审"（前端据此显示按钮）
+    const before = await admin.get(`/api/resources/${created.data.id}`)
+    assert.equal(before.data.capabilities.canApprove, true, '管理员自审的能力位应当是 true')
+    assert.equal(before.data.capabilities.canReject, true)
+    assert.equal(before.data.capabilities.reviewDeniedReason ?? null, null)
+
     const res = await admin.post(`/api/resources/${created.data.id}/review`, { action: 'approve' })
-    assert.equal(res.status, 403, `管理员自审也必须被拒：${JSON.stringify(res.data)}`)
-    assert.match(JSON.stringify(res.data), /自己上传/)
+    assert.equal(res.status, 201, `管理员自审应当成功：${JSON.stringify(res.data)}`)
+
+    // 状态真的走到 PUBLISHED，且时间线/审计都留下了这条记录
+    const after = await admin.get(`/api/resources/${created.data.id}`)
+    assert.equal(after.data.status, 'PUBLISHED')
+    const history = await admin.get(`/api/resources/${created.data.id}/review-history`)
+    const events = history.data.items ?? []
+    assert.ok(
+      events.some((r) => r.action === 'review.approve'),
+      `审核时间线里应当有 approve：${JSON.stringify(history.data).slice(0, 240)}`,
+    )
+    // 操作者必须是**自己**（自审也要如实记账，不能因为"是管理员"就省略）
+    const approved = events.find((r) => r.action === 'review.approve')
+    assert.equal(approved.actorId, before.data.uploaderId, '审核人就是上传者本人（这就是自审）')
+  })
+
+  test('管理员自审也走状态机：重复审核不能产生第二次成功转换', async () => {
+    const created = await admin.post('/api/resources', {
+      directoryId: ids.resources,
+      title: '管理员自审幂等探针',
+    })
+    resources.push(created.data.id)
+    await uploadFile(admin, created.data.id, {
+      bytes: pdfBytes('admin2'),
+      fileName: 'b.pdf',
+      mimeType: 'application/pdf',
+    })
+    await admin.post(`/api/resources/${created.data.id}/submit`)
+
+    const first = await admin.post(`/api/resources/${created.data.id}/review`, { action: 'approve' })
+    assert.equal(first.status, 201, JSON.stringify(first.data))
+    // 已经是 PUBLISHED，再审一次必须被状态机拒绝（不是"再来一次也成功"）
+    const second = await admin.post(`/api/resources/${created.data.id}/review`, { action: 'approve' })
+    assert.ok(second.status >= 400, `重复审核应当被拒，实际 ${second.status}`)
   })
 
   test('别人的资源，同一个审核员审得了（自审保护没有过度扩大）', async () => {

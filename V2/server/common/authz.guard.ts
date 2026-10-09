@@ -15,6 +15,7 @@ import {
   DIRECTORY_SOURCE,
   PUBLIC_ROUTE,
   REQUIRE_PERMISSION,
+  REQUIRE_SUPERADMIN,
   type DirectorySource,
 } from '../common/decorators'
 import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from '../config'
@@ -118,6 +119,26 @@ export class AuthzGuard implements CanActivate {
         })
         throw new ForbiddenByAuthz(permission, decision.reason)
       }
+    }
+
+    // 账号管理这类接口：权限码之外再加一层**身份**门槛（业主 Stage 13 §4）。
+    // 判定本体在 AuthorizationService（角色字面量在全仓库只允许出现在那个文件），
+    // 这里只负责"声明了就查、不通过就拒"，并把拒绝原因写进审计。
+    const requireSuperAdmin =
+      this.reflector.get<boolean>(REQUIRE_SUPERADMIN, handler) === true ||
+      this.reflector.get<boolean>(REQUIRE_SUPERADMIN, cls) === true
+    if (requireSuperAdmin && !this.authz.isSuperAdmin(user)) {
+      await this.audit.write({
+        actorId: user.id,
+        actorName: user.name,
+        action: 'authz.denied',
+        targetType: 'system',
+        targetId: `${req.method} ${req.path}`,
+        result: 'denied',
+        detail: { reason: 'superadmin-required', note: '账号管理只有超级管理员可以操作' },
+        ip: clientIp(req),
+      })
+      this.authz.assertSuperAdmin(user) // 统一抛出 403（文案与错误码都在那一个地方）
     }
 
     return true

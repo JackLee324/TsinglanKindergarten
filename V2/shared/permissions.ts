@@ -151,11 +151,31 @@ export function normalizeUserRole(value: unknown): UserRole {
 }
 
 /**
+ * **不可授予**的权限：它是身份自带的，不是一个能发给某个账号的能力（业主 Stage 13 §4）。
+ *
+ * 目前只有 `user.manage`：账号管理的门槛是**身份**（超级管理员），
+ * 服务端的判定在 `AuthorizationService.assertSuperAdmin()`，与这份授权表无关。
+ *
+ * WHY 必须显式列出来，而不是"界面上不显示就行"：
+ *   · 只有一个真相 —— 界面、服务端校验、测试都读这一个常量；
+ *   · 否则"某个老师被授予了管理教师"会看起来像真的（其实是空授权），
+ *     日后有人顺手在守卫里加一句"有 user.manage 也放行"，提权通道就又开了。
+ */
+export const NON_GRANTABLE_PERMISSIONS: readonly PermissionCode[] = ['user.manage']
+
+/** 这个权限能不能出现在勾选框里 / 能不能被写入 `user_permissions`。 */
+export function isGrantable(permission: PermissionCode): boolean {
+  return !NON_GRANTABLE_PERMISSIONS.includes(permission)
+}
+
+/**
  * 管理员界面的勾选框清单 —— **顺序即业主给定的顺序**。
  *
  * WHY 单独一个函数而不是直接遍历 PERMISSION_CODES：
  * 界面的阅读顺序是产品决策（资源类 → 审核类 → 管理类），
  * 而权限码的字母序会把「查看审计」排到最前面，那是给机器看的顺序。
+ *
+ * 不可授予的权限（见 `NON_GRANTABLE_PERMISSIONS`）**不在这里**。
  */
 export function permissionChecklist(): readonly PermissionCode[] {
   return [
@@ -169,9 +189,8 @@ export function permissionChecklist(): readonly PermissionCode[] {
     'resource.publish',
     'directory.manage',
     'directory.create_folder',
-    'user.manage',
     'audit.view',
-  ]
+  ].filter((code) => isGrantable(code as PermissionCode)) as PermissionCode[]
 }
 
 /** 「自己拥有」类权限：对别人的资源一律拒绝，即使目录范围覆盖。 */

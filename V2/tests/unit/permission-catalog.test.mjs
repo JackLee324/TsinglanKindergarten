@@ -8,14 +8,20 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { permissions } from '../helpers/modules.mjs'
-const { PERMISSION_CODES, PERMISSIONS, permissionChecklist, USER_ROLES } = permissions
+const { PERMISSION_CODES, PERMISSIONS, permissionChecklist, isGrantable, USER_ROLES } = permissions
 
 describe('权限目录（业主最终确认的 12 项）', () => {
   test('恰好 12 项', () => {
     assert.equal(PERMISSION_CODES.length, 12)
   })
 
-  test('逐条与业主清单一致（顺序也要对）', () => {
+  test('勾选框清单与业主清单一致（顺序也要对）**减去不可授予的那一项**', () => {
+    /*
+      权限码本身仍是 12 项（上一条断言），但"可以发给某个账号的"只有 11 项：
+      `user.manage` 是**身份自带**的能力（业主 Stage 13 §4），
+      账号管理的门槛是超级管理员身份，不再是一个可授予的权限 ——
+      它既不进勾选框，服务端也会拒绝把它写进 user_permissions。
+    */
     assert.deepEqual([...permissionChecklist()], [
       'resource.view',
       'resource.create',
@@ -27,9 +33,11 @@ describe('权限目录（业主最终确认的 12 项）', () => {
       'resource.publish',
       'directory.manage',
       'directory.create_folder',
-      'user.manage',
       'audit.view',
     ])
+    assert.equal(isGrantable('user.manage'), false, '「管理教师」不可授予')
+    assert.equal(PERMISSION_CODES.includes('user.manage'), true, '权限码本身仍在目录里（12 项不变）')
+    for (const code of permissionChecklist()) assert.equal(isGrantable(code), true)
   })
 
   test('每一项都有中文标签（管理员看到的是中文，不是权限码）', () => {

@@ -270,7 +270,8 @@ V1 有 8 种角色（super_admin / principal / curriculum_director / prek_head /
 k_head / k_assistant / prek_assistant / pe_specialist），V2 只有两个身份。
 
 ```
---admin-roles  super_admin,principal      （默认；不是 ADMIN 的都成为 TEACHER）
+--admin-usernames a,b                  （推荐：**点名账号**成为管理员）
+--admin-roles  super_admin,principal      （可选：按 V1 岗位名批量指定；**默认为空**）
 ```
 
 * 原角色数组完整写进 `legacy.roles`，报告里逐人列出。

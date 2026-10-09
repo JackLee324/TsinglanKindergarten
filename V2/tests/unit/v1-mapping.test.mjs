@@ -130,8 +130,14 @@ describe('权限码映射（只用于 V1 的显式授权）', () => {
     }
   })
 
-  test('默认的管理员角色就是 V1 的两个最高角色', () => {
-    assert.deepEqual(DEFAULT_ADMIN_ROLES, ['super_admin', 'principal'])
+  test('默认**不**把任何 V1 岗位名当成管理员（业主 Stage 13 §4）', () => {
+    /*
+      规则变更：原先默认是 ['super_admin','principal']，也就是 V1 的"园长"会被自动
+      提升成 V2 超级管理员。业主明确禁止"仅凭 V1 旧角色名称自动提升账号身份" ——
+      岗位名是历史数据，不是今天的授权决定。现在必须由人显式指定：
+        · --admin-usernames（点名账号，推荐）或 --admin-roles（按岗位名，粗一档）。
+    */
+    assert.deepEqual(DEFAULT_ADMIN_ROLES, [])
   })
 })
 

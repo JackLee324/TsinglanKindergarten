@@ -274,9 +274,18 @@ describe('A. 合成夹具：规则逐条生效', () => {
   test('角色只产出 ADMIN / TEACHER，原角色进 legacy', async () => {
     const rows = await withSql((sql) => sql`SELECT username, role, status FROM users ORDER BY username`)
     for (const r of rows) assert.ok(['ADMIN', 'TEACHER'].includes(r.role), `身份只能是这两种：${r.role}`)
-    // 夹具里有两个 principal：园长（能登录）与系统初始化（没有用户名）。
-    // 身份只看 V1 的角色，所以两个都是 ADMIN —— 但后者是停用的，登录不进去。
-    assert.equal(rows.filter((r) => r.role === 'ADMIN').length, 2, '两个 principal 都是管理员')
+
+    /*
+      规则变更（业主 Stage 13 §4）：迁移**不再**依据 V1 的岗位名自动提升管理员。
+      夹具里有两个 principal（园长 / 系统初始化），旧默认会把它们都变成 ADMIN；
+      现在必须由人显式指定 —— 所以这里断言"一个自动提升的管理员都没有"。
+      第一个超级管理员的正规入口是 `scripts/bootstrap-admin.mjs`（显式凭据）。
+    */
+    assert.equal(
+      rows.filter((r) => r.role === 'ADMIN').length,
+      0,
+      '默认不提升任何账号为管理员（不再看 V1 岗位名）',
+    )
 
     const [admin] = await withSql((sql) => sql`
       SELECT legacy FROM v1_migration_map WHERE entity = 'user' AND v1_id = ${FIXTURE_IDS.admin}`)
@@ -288,7 +297,9 @@ describe('A. 合成夹具：规则逐条生效', () => {
       SELECT username, status, role FROM users WHERE id = ${FIXTURE_IDS.noUsername}`)
     assert.equal(row.status, 'inactive')
     assert.equal(row.username, `v1-no-username-${FIXTURE_IDS.noUsername.slice(0, 8)}`)
-    assert.equal(row.role, 'ADMIN', '它在 V1 里是 principal，身份映射照旧')
+    // 它在 V1 里是 principal，但迁移不再按岗位名自动提管理员 —— 一律 TEACHER，
+    // 由人显式指定（--admin-usernames 或 bootstrap-admin）。
+    assert.equal(row.role, 'TEACHER', '不按 V1 岗位名自动提升身份')
   })
 
   test('没有口令的账号：占位值任何口令都进不去', async () => {

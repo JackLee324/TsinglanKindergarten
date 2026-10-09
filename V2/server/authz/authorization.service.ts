@@ -199,11 +199,23 @@ export class AuthorizationService {
       return { allowed: false, reason: 'not-owner', permission, directoryId: resource.directoryId }
     }
 
-    // 防自审：**管理员也不例外**。
-    // 业主的规则是"防止权限扩大后形成自审"，所以这里不看角色、也不看 admin 绕过 ——
-    // 只要上传者就是本人，就不允许对自己这条资源做审核类动作。
-    // （管理员仍然可以审别人的资源，这一点由上面的 can() 保证。）
-    if (options.forbidSelf === true && resource.uploaderId !== null && resource.uploaderId === user.id) {
+    // 防自审：**普通教师不能审自己上传的**；管理员（= 本项目里的超级管理员）可以。
+    //
+    // 规则变更记录（业主 Stage 13 §3，2026-10-09）：
+    //   原先这里对**所有**角色一视同仁（注释还写着"管理员也不例外"，依据 Stage 7 §8 / §26）。
+    //   业主复核后明确：超级管理员必须能审核并发布自己上传的待审资源 —— 否则单管理员站点
+    //   里会出现"资源永远卡在待审"的死角，且那条规则并不增加任何安全性（管理员本来就有
+    //   全平台权限，绕过点仍是 can() 里唯一那一处）。
+    //
+    // 实现上只用 `scopeDecision.reason === 'admin'` 这个**已有**的信号，
+    // 不在这里再写一次角色比较 —— `'ADMIN'` 这个字面量在全仓库只允许出现在本文件，
+    // 而"管理员能做什么"的判定入口仍然只有 can()。
+    if (
+      options.forbidSelf === true &&
+      resource.uploaderId !== null &&
+      resource.uploaderId === user.id &&
+      scopeDecision.reason !== 'admin'
+    ) {
       return { allowed: false, reason: 'self-review', permission, directoryId: resource.directoryId }
     }
     return scopeDecision
@@ -479,7 +491,7 @@ export class AuthorizationService {
   }
 
   /**
-   * 是否平台管理员。
+   * 是否平台管理员（= 本项目里的**超级管理员**）。
    *
    * 它是 public 的，但**只允许 AuthorizationService 自己使用** ——
    * 静态测试保证 `ADMIN_ROLE` 在 server/ 下只出现在这个文件里，
@@ -487,6 +499,42 @@ export class AuthorizationService {
    */
   isAdmin(user: AuthUser): boolean {
     return user.role === ADMIN_ROLE
+  }
+
+  /**
+   * 这个账号是不是**超级管理员**（业主 Stage 13 §4 的用词）。
+   *
+   * 设计边界（必须写清楚，否则后人会在这里悄悄加第三种身份）：
+   *   本项目**只有 ADMIN 与 TEACHER 两种业务身份**，`ADMIN` 在语义上就是超级管理员。
+   *   没有单独的 "super_admin" / "管理员 vs 普通管理员" 之分 —— 业主明确要求
+   *   **不要为了修一个越权问题就新增第三种角色**。
+   *   于是"只有超级管理员能管账号"这条规则，在代码里就是"只有 ADMIN 能管账号"。
+   *
+   * 为什么这个方法必须存在（而不是让各 service 自己写角色判断）：
+   *   · 角色字面量只允许出现在本文件（`tests/unit/route-declarations.test.mjs` 会扫全仓库）；
+   *   · 账号管理如果只靠 `user.manage` 这个**可授予**的权限来保护，
+   *     那么一个被误配了 `user.manage` 的老师就能建管理员、改别人身份（越权）。
+   *     所以账号管理的门槛是**身份**，而且这个判定只有一处。
+   */
+  isSuperAdmin(user: AuthUser): boolean {
+    return this.isAdmin(user)
+  }
+
+  /**
+   * 账号管理（列表/创建/编辑/停用/改口令/改权限）的**服务端硬门槛**。
+   *
+   * 与 `can()` 的关系：`can()` 回答"能不能做这个权限码对应的事"，
+   * 而"管理账号"这件事**不允许**由权限码授予 —— 它是身份自带的。
+   * 所以两者是叠加关系：控制器先过 `user.manage` 声明，再过这里，
+   * 而 service 层也会再调一次（即使有人绕过控制器直接调 service，也拒绝）。
+   */
+  assertSuperAdmin(user: AuthUser): void {
+    if (!this.isSuperAdmin(user)) {
+      throw AppError.forbidden(
+        '账号管理只有超级管理员可以操作。',
+        'SUPERADMIN_REQUIRED',
+      )
+    }
   }
 
   /** 权限的生效范围类型（directory | global）。 */

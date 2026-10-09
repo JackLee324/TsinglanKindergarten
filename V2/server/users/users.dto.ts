@@ -91,6 +91,17 @@ export class CreateUserDto {
   @IsIn(USER_ROLES as unknown as string[])
   role!: string
 
+  /**
+   * 建好后是否立即启用。**由后端在同一个事务里落库**（业主 Stage 13 §5）。
+   *
+   * WHY 必须有这个字段：界面原先的做法是"先建、再按用户名搜一次、再发第二个请求停用" ——
+   * 两步不是原子的：第二步失败就会留下一个**意外启用**的账号；
+   * 而且"按用户名搜一条"还可能命中别的账号（模糊搜索）。默认 true。
+   */
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(500)
@@ -105,6 +116,16 @@ export class UpdateUserDto {
   @MinLength(1)
   @MaxLength(64)
   name?: string
+
+  /**
+   * 改用户名（业主 Stage 13 §5）。唯一性由 `users_username_key`（lower(username) 唯一索引）
+   * 在数据库层保证，服务层再给一次可读的 409 —— 并发下也不会出现两个同名账号。
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(3, { message: '用户名至少 3 个字符' })
+  @MaxLength(64)
+  username?: string
 
   @IsOptional()
   @IsString()

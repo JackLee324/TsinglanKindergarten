@@ -67,13 +67,21 @@ before(async () => {
   await rootAdmin.login('sec_root', 'SecRootPass!1')
 
   probeUsernames.push('sec_admin2')
-  const created = await rootAdmin.post('/api/users', {
+  /*
+    第二位管理员走**正规两步**（业主 Stage 13 §4/§5）：
+      ① 创建接口只能建 TEACHER（往里塞 role=ADMIN 会被 400 明确拒绝）；
+      ② 身份调整是单独的动作：用编辑接口把教师提升为 ADMIN（只有超级管理员能做，会写审计并撤销会话）。
+    这条路径本身就是生产里新增管理员的做法。
+  */
+  const createdTeacher = await rootAdmin.post('/api/users', {
     name: '第二位管理员',
     username: 'sec_admin2',
     password: 'SecAdmin2Pass!1',
-    role: 'ADMIN',
+    role: 'TEACHER',
   })
-  assert.equal(created.status, 201, JSON.stringify(created.data))
+  assert.equal(createdTeacher.status, 201, JSON.stringify(createdTeacher.data))
+  const promoted = await rootAdmin.patch(`/api/users/${createdTeacher.data.id}`, { role: 'ADMIN' })
+  assert.equal(promoted.status, 200, `提升为管理员应当成功：${JSON.stringify(promoted.data)}`)
   secondAdmin = client()
   await secondAdmin.login('sec_admin2', 'SecAdmin2Pass!1')
 

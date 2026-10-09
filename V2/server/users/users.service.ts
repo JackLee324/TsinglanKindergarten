@@ -10,6 +10,8 @@ import { AuthorizationService } from '../authz/authorization.service'
 import {
   PERMISSIONS,
   PERMISSION_CODES,
+  TEACHER_ROLE,
+  isGrantable,
   isPermissionCode,
   isUserRole,
   type PermissionCode,
@@ -20,6 +22,21 @@ import { computeTotalPages, DEFAULT_PAGE_SIZE } from '../../shared/resource-quer
 /** LIKE 通配符转义（与资源搜索同一套做法：`%` 与 `_` 在用户输入里只是普通字符）。 */
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`)
+}
+
+/**
+ * `users_username_key`（`lower(username)` 唯一索引）被违反时的错误码。
+ *
+ * 为什么要有它：服务层已经先查一次重名，但**并发下那句 SELECT 挡不住** ——
+ * 两个请求可以同时查到"没有重名"。真正的保证是数据库那条唯一索引，
+ * 所以这里必须把 23505 翻译成可读的 409，而不是漏成 500。
+ */
+const UNIQUE_VIOLATION = '23505'
+function isUniqueViolation(error: unknown, constraint?: string): boolean {
+  const code = (error as { code?: string } | null)?.code
+  if (code !== UNIQUE_VIOLATION) return false
+  if (constraint === undefined) return true
+  return String((error as { constraint_name?: string }).constraint_name ?? '').includes(constraint)
 }
 
 export { DEFAULT_PAGE_SIZE }
@@ -64,7 +81,7 @@ export class UsersService {
    *   · **权限摘要**：业主 §29 要求"查看 3 个目录 / 上传 1 个目录"这种可读的说法，
    *     而不是把内部权限码摆出来。这里按权限聚合目录数，标签来自共享定义。
    */
-  async list(options: {
+  async list(actor: AuthUser, options: {
     q?: string | null
     role?: string | null
     status?: string | null
@@ -77,6 +94,7 @@ export class UsersService {
     pageSize: number
     totalPages: number
   }> {
+    this.authz.assertSuperAdmin(actor)
     const pattern = options.q && options.q.trim() !== '' ? `%${escapeLike(options.q.trim())}%` : null
     const role = options.role ?? null
     const status = options.status ?? null
@@ -198,7 +216,8 @@ export class UsersService {
     return out
   }
 
-  async getById(id: string): Promise<Record<string, unknown>> {
+  async getById(actor: AuthUser, id: string): Promise<Record<string, unknown>> {
+    this.authz.assertSuperAdmin(actor)
     const rows = await this.sql<UserListRow[]>`
       SELECT id, username, name, name_en, role, status, created_at, updated_at
       FROM users WHERE id = ${id}
@@ -212,13 +231,22 @@ export class UsersService {
       nameEn: r.name_en,
       role: r.role,
       status: r.status,
-      permissions: await this.getPermissions(r.id),
+      permissions: await this.getPermissionsRaw(r.id),
       createdAt: r.created_at.toISOString(),
       updatedAt: r.updated_at.toISOString(),
     }
   }
 
   async getPermissions(
+    actor: AuthUser,
+    userId: string,
+  ): Promise<{ permission: PermissionCode; directoryId: string | null; label: string }[]> {
+    this.authz.assertSuperAdmin(actor)
+    return this.getPermissionsRaw(userId)
+  }
+
+  /** 不做身份校验的读取（仅供本类内部：getById 已经先校验过一次）。 */
+  private async getPermissionsRaw(
     userId: string,
   ): Promise<{ permission: PermissionCode; directoryId: string | null; label: string }[]> {
     const rows = await this.sql<{ permission: string; directory_id: string | null }[]>`
@@ -240,9 +268,28 @@ export class UsersService {
     username: string
     password: string
     role: string
+    active?: boolean
     permissions?: PermissionGrantDto[]
-  }): Promise<{ id: string }> {
+  }): Promise<{ id: string; username: string; active: boolean }> {
+    // 门槛一：只有超级管理员能建账号（权限码之外的身份门槛，见 AuthorizationService）。
+    this.authz.assertSuperAdmin(actor)
     if (!isUserRole(input.role)) throw AppError.forbidden('未知的身份', 'VALIDATION_FAILED')
+
+    /*
+      门槛二：**这个接口只创建教师账号**（业主 Stage 13 §5）。
+      要新增管理员是一个需要被单独看见的动作，不应该混在"新增教师"里顺手完成；
+      因此这里直接拒绝，而不是"悄悄降级成 TEACHER"——后者会让人以为建出了管理员。
+      第一个管理员由 `scripts/bootstrap-admin.mjs` 用显式凭据创建；
+      之后再要加管理员，用编辑接口改身份（同样只有超级管理员能做，且会写审计 + 撤销会话）。
+    */
+    if (input.role !== TEACHER_ROLE) {
+      throw AppError.badRequest(
+        '新增接口只能创建教师账号。要新增管理员，请先用本接口创建教师，再在编辑里调整身份（需要超级管理员）。',
+        'ROLE_NOT_CREATABLE',
+      )
+    }
+
+    const active = input.active ?? true
 
     const dup = await this.sql<{ id: string }[]>`
       SELECT id FROM users WHERE lower(username) = lower(${input.username})
@@ -254,10 +301,13 @@ export class UsersService {
     const grants = await this.normalizeGrants(input.permissions ?? [])
 
     const created = await this.sql.begin(async (tx) => {
+      // `status` 与账号、初始授权**在同一个事务里**写入 —— 于是"创建时选了停用"
+      // 不再需要"再发第二个请求去停用"（那一步会留下意外启用的账号）。
       const inserted = await tx<{ id: string }[]>`
-        INSERT INTO users (username, name, name_en, password_hash, role)
+        INSERT INTO users (username, name, name_en, password_hash, role, status)
         VALUES (${input.username}, ${input.name}, ${input.nameEn ?? null},
-                ${hashPassword(input.password)}, ${input.role})
+                ${hashPassword(input.password)}, ${input.role},
+                ${active ? 'active' : 'inactive'})
         RETURNING id
       `
       const userId = inserted[0].id
@@ -268,6 +318,12 @@ export class UsersService {
         `
       }
       return { id: userId }
+    }).catch((error: unknown) => {
+      // 并发下两个人同时建同一个用户名：数据库唯一索引会先拦住一个，这里翻译成 409。
+      if (isUniqueViolation(error)) {
+        throw AppError.conflict(`用户名「${input.username}」已存在`, 'CONFLICT')
+      }
+      throw error
     })
 
     await this.audit.write({
@@ -277,23 +333,53 @@ export class UsersService {
       targetType: 'user',
       targetId: created.id,
       result: 'success',
-      detail: { username: input.username, role: input.role, permissionCount: grants.length },
+      detail: {
+        username: input.username,
+        role: input.role,
+        active,
+        permissionCount: grants.length,
+      },
     })
-    return created
+    return { id: created.id, username: input.username, active }
   }
 
   async update(actor: AuthUser, id: string, input: {
     name?: string
     nameEn?: string | null
+    username?: string
     role?: string
     active?: boolean
     password?: string
   }): Promise<{ revokedSessions: number }> {
-    const existing = await this.sql<{ id: string; name: string; role: string; status: string }[]>`
-      SELECT id, name, role, status FROM users WHERE id = ${id}
+    // 门槛：只有超级管理员能改账号（含改身份 —— 这是最容易变成提权的那条路）。
+    this.authz.assertSuperAdmin(actor)
+    const existing = await this.sql<
+      { id: string; name: string; role: string; status: string; username: string }[]
+    >`
+      SELECT id, name, role, status, username FROM users WHERE id = ${id}
     `
     if (existing.length === 0) throw AppError.notFound('账号不存在')
     const before = existing[0]
+
+    /*
+      改用户名（业主 Stage 13 §5）。
+      唯一性：先查一次给可读的 409；**真正的保证**是 lower(username) 唯一索引
+      （并发下那句 SELECT 会同时通过，唯一索引不会）。审计单独记一条 `user.username_change`，
+      并且与身份/状态/口令一样**撤销该账号全部会话**：用户名是登录凭据的一半，
+      改名之后必须重新登录一次，避免"改完还在用旧会话"的混乱。
+    */
+    let nextUsername: string | null = null
+    if (input.username !== undefined) {
+      const trimmed = input.username.trim()
+      if (trimmed === '') throw AppError.badRequest('用户名不能为空', 'VALIDATION_FAILED')
+      if (trimmed !== before.username) {
+        const dup = await this.sql<{ id: string }[]>`
+          SELECT id FROM users WHERE lower(username) = lower(${trimmed}) AND id <> ${id}
+        `
+        if (dup.length > 0) throw AppError.conflict(`用户名「${trimmed}」已存在`, 'CONFLICT')
+        nextUsername = trimmed
+      }
+    }
 
     if (input.role !== undefined && !isUserRole(input.role)) {
       throw AppError.forbidden('未知的身份', 'VALIDATION_FAILED')
@@ -335,6 +421,7 @@ export class UsersService {
       values.push(value)
       sets.push(`${column} = $${values.length}`)
     }
+    if (nextUsername !== null) push('username', nextUsername)
     if (input.name !== undefined) push('name', input.name)
     if (input.nameEn !== undefined) push('name_en', input.nameEn)
     if (input.role !== undefined) push('role', input.role)
@@ -344,14 +431,24 @@ export class UsersService {
     let revoked = 0
     if (sets.length > 0) {
       values.push(id)
-      await this.sql.unsafe(
-        `UPDATE users SET ${sets.join(', ')}, updated_at = now() WHERE id = $${values.length}`,
-        values as never[],
-      )
+      try {
+        await this.sql.unsafe(
+          `UPDATE users SET ${sets.join(', ')}, updated_at = now() WHERE id = $${values.length}`,
+          values as never[],
+        )
+      } catch (error: unknown) {
+        if (isUniqueViolation(error)) {
+          throw AppError.conflict('该用户名已被占用', 'CONFLICT')
+        }
+        throw error
+      }
 
       // 身份、状态、口令任一变化 → 撤销该账号全部会话（即时生效，不需要版本号）。
       const mustRevoke =
-        input.role !== undefined || input.active !== undefined || input.password !== undefined
+        nextUsername !== null ||
+        input.role !== undefined ||
+        input.active !== undefined ||
+        input.password !== undefined
       if (mustRevoke) revoked = await this.sessions.revokeAllForUser(id)
 
       /*
@@ -367,7 +464,7 @@ export class UsersService {
         before: { role: before.role, status: before.status, name: before.name },
       }
       const records: {
-        action: 'user.update' | 'user.disable' | 'user.password_change'
+        action: 'user.update' | 'user.disable' | 'user.password_change' | 'user.username_change'
         detail: Record<string, unknown>
       }[] = []
 
@@ -379,11 +476,20 @@ export class UsersService {
           detail: { ...commonDetail, passwordSet: true },
         })
       }
+      if (nextUsername !== null) {
+        records.push({
+          action: 'user.username_change',
+          detail: { ...commonDetail, before: { ...commonDetail.before, username: before.username }, username: nextUsername },
+        })
+      }
       if (input.active === false) {
         records.push({ action: 'user.disable', detail: commonDetail })
       }
       const otherChanges = Object.keys(input).filter(
-        (k) => k !== 'password' && !(k === 'active' && input.active === false),
+        (k) =>
+          k !== 'password' &&
+          k !== 'username' &&
+          !(k === 'active' && input.active === false),
       )
       if (otherChanges.length > 0 || records.length === 0) {
         records.push({ action: 'user.update', detail: commonDetail })
@@ -419,8 +525,27 @@ export class UsersService {
     userId: string,
     input: PermissionGrantDto[],
   ): Promise<{ grants: number; revokedSessions: number }> {
+    // 门槛：只有超级管理员能改任何人的权限（否则"给自己加权限"就是一条提权路）。
+    this.authz.assertSuperAdmin(actor)
     const exists = await this.sql<{ id: string }[]>`SELECT id FROM users WHERE id = ${userId}`
     if (exists.length === 0) throw AppError.notFound('账号不存在')
+
+    /*
+      `user.manage` 是**身份自带**的能力（超级管理员本来就有），不是一个可以授予老师的权限。
+      之前它可以被授予 —— 于是一个被误配了它的老师就能建管理员、改别人身份。
+      现在账号管理的门槛是身份，所以这份授权既没有意义、又会给人"他获得了管理权"的错觉，
+      甚至成为日后有人"顺手在守卫里再加一条 user.manage 就放行"的后门。
+      所以：**直接拒绝**，并说清正确的做法。
+    */
+    const notGrantable = input.find(
+      (item) => isPermissionCode(item.permission) && !isGrantable(item.permission),
+    )
+    if (notGrantable !== undefined) {
+      throw AppError.badRequest(
+        '「管理教师」是超级管理员身份自带的能力，不能单独授予账号。要新增管理员请调整该账号的身份。',
+        'SUPERADMIN_IS_ROLE_DERIVED',
+      )
+    }
 
     const grants = await this.normalizeGrants(input)
 

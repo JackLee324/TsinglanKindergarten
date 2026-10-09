@@ -348,21 +348,22 @@ function CreateTeacherDialog({
     setBusy(true)
     setError(null)
     try {
+      /*
+        启用状态**一次落库**（业主 Stage 13 §5）。
+        原先这里是"先建、再按用户名搜一次、再发第二个请求停用" —— 两步不是原子的：
+        第二步失败就留下一个**意外启用**的账号；而"按用户名搜一条"是模糊搜索，
+        还可能命中别人。现在 active 随创建请求一起提交，后端在同一个事务里写库。
+      */
       await adminApi.createUser({
         name: name.trim(),
         username: username.trim(),
         password,
         // 身份固定为教师：界面上没有"选身份"这一步（业主 §1：只有 ADMIN 与 TEACHER，
-        // 而新建的永远是老师）。
+        // 而新建的永远是老师；新增管理员是另一个需要被单独看见的动作）。
         role: 'TEACHER',
+        active,
         permissions: grants,
       })
-      if (!active) {
-        // 新增时就停用：先建再停用（接口分开，语义清楚）
-        const created = await adminApi.users({ q: username.trim(), pageSize: 1 })
-        const id = created.items[0]?.id
-        if (id) await adminApi.updateUser(id, { active: false })
-      }
       await onCreated(name.trim())
     } catch (e) {
       setError(humanMessage(e, '创建失败'))
@@ -459,7 +460,7 @@ function CreateTeacherDialog({
   )
 }
 
-/** 编辑：姓名、启停、重置密码。**没有**"改成管理员"这种开关给自己用。 */
+/** 编辑：姓名、用户名、启停、重置密码。**没有**"改成管理员"这种开关给自己用。 */
 function EditUserDialog({
   user,
   onClose,
@@ -470,6 +471,7 @@ function EditUserDialog({
   readonly onSaved: (message: string) => void | Promise<void>
 }) {
   const [name, setName] = useState(user.name)
+  const [username, setUsername] = useState(user.username)
   const [active, setActive] = useState(user.status === 'active')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -479,10 +481,13 @@ function EditUserDialog({
     setBusy(true)
     setError(null)
     try {
-      const input: { name?: string; active?: boolean; password?: string } = {
+      const input: { name?: string; username?: string; active?: boolean; password?: string } = {
         name: name.trim(),
         active,
       }
+      // 用户名只在真的改过时才提交：避免"没动它"也触发一次唯一性检查与会话撤销。
+      const nextUsername = username.trim()
+      if (nextUsername !== user.username) input.username = nextUsername
       if (password !== '') input.password = password
       const res = await adminApi.updateUser(user.id, input)
       await onSaved(
@@ -503,6 +508,18 @@ function EditUserDialog({
         <div>
           <Label htmlFor="edit-name">姓名</Label>
           <Input id="edit-name" value={name} onChange={(e) => setName(e.target.value)} data-testid="edit-user-name" />
+        </div>
+        <div>
+          <Label htmlFor="edit-username">用户名（登录名）</Label>
+          <Input
+            id="edit-username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            data-testid="edit-user-username"
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            用户名不能与其他人重复（不区分大小写）。改名后该账号需要重新登录。
+          </p>
         </div>
         <label className="flex items-center gap-2 text-sm">
           <input

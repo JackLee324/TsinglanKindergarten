@@ -243,7 +243,12 @@ describe('新增教师（§3）', () => {
     assert.equal([400, 403].includes(res.status), true, JSON.stringify(res.data))
   })
 
-  test('只有 user.manage 的人能建账号：普通教师 403', async () => {
+  test('只有**超级管理员**能建账号：普通教师 403（即使被误配了 user.manage 也一样）', async () => {
+    /*
+      规则变更（业主 Stage 13 §4）：门槛从"持有 user.manage 权限"改成"是超级管理员身份"。
+      被误配 user.manage 的老师同样要被拒 —— 那正是提权通道（详见
+      tests/integration/account-privileges.test.mjs 里主动制造误配的用例）。
+    */
     const res = await teacher.post('/api/users', {
       name: '越权',
       username: 'nope01',

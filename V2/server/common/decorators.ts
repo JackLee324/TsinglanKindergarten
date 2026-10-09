@@ -6,6 +6,21 @@ import type { AuthUser } from './auth-user'
 export const REQUIRE_PERMISSION = 'v2:require-permission'
 export const PUBLIC_ROUTE = 'v2:public-route'
 export const AUTHENTICATED_ONLY = 'v2:authenticated-only'
+export const REQUIRE_SUPERADMIN = 'v2:require-superadmin'
+
+/**
+ * 声明这个接口**只有超级管理员**可以调用。
+ *
+ * 为什么需要它（业主 Stage 13 §4）：账号管理原先只靠 `user.manage` 这个**可授予**的权限保护，
+ * 于是一旦某个老师被误配了 `user.manage`，他就能直接调 API 建管理员、
+ * 把别人（或自己）升级成管理员 —— 前端藏按钮挡不住这条路。
+ * 账号管理的门槛必须是**身份**，而且必须由服务端判、且判在唯一那一处
+ * （`AuthorizationService.assertSuperAdmin`；角色字面量在全仓库只允许出现在那里）。
+ *
+ * 用法：与 `@RequirePermission('user.manage')` 叠加 —— 前者说明"这是账号管理动作"，
+ * 后者把门槛提到身份级。两层都在服务端，都不依赖界面。
+ */
+export const RequireSuperAdmin = () => SetMetadata(REQUIRE_SUPERADMIN, true)
 
 /**
  * 声明这个接口需要的权限。

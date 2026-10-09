@@ -81,7 +81,9 @@ describe('创建教师账号', () => {
       username: 'scope_bad',
       password: 'ScopeBad!123',
       role: 'TEACHER',
-      permissions: [{ permission: 'user.manage', directoryId: prekVirtue }],
+      // 用 audit.view 而不是 user.manage：后者现在根本不可授予（见 Stage 13 §4），
+      // 用它测"全平台权限不能带目录范围"就测不到原本要测的那条校验了。
+      permissions: [{ permission: 'audit.view', directoryId: prekVirtue }],
     })
     assert.ok([400, 403].includes(res.status), `实际 ${res.status}`)
   })
@@ -97,7 +99,7 @@ describe('创建教师账号', () => {
     assert.ok([400, 403].includes(res.status), `实际 ${res.status}`)
   })
 
-  test('没有 user.manage 的教师不能建账号 → 403', async () => {
+  test('普通教师不能建账号 → 403（门槛是超级管理员身份，不是 user.manage）', async () => {
     await createTeacher('plain_teacher', 'PlainPass!123', [
       { permission: 'resource.view', directoryId: prekVirtue },
     ])
