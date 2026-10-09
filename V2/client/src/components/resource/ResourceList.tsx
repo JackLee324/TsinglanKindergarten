@@ -3,7 +3,7 @@ import { Search } from 'lucide-react'
 import { resourcesApi } from '../../api/resources'
 import { ApiError } from '../../api/http'
 import type { ResourceListItem } from '../../api/types'
-import { useDirectory } from '../../directory/DirectoryProvider'
+import { useDirectoryLabel } from '../../directory/label'
 import { ResourceCard } from './ResourceCard'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
@@ -27,7 +27,7 @@ export function ResourceList({
   readonly directoryId: string
   readonly pageSize?: number
 }) {
-  const { resolve, roots } = useDirectory()
+  const labelOf = useDirectoryLabel()
   const [items, setItems] = useState<readonly ResourceListItem[]>([])
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
@@ -69,20 +69,6 @@ export function ResourceList({
     }
     // reloadToken 让"重试"有一个明确的触发点（见下面的错误块）。
   }, [directoryId, page, pageSize, appliedQuery, reloadToken])
-
-  /** slug 路径 → 中文位置（在已加载的目录树里查，不额外发请求）。 */
-  const labelOf = (path: string): string => {
-    const segments = path.split('/')
-    const names: string[] = []
-    let prefix = ''
-    for (const slug of segments) {
-      prefix = prefix === '' ? slug : `${prefix}/${slug}`
-      const target = resolve(prefix.split('/'))
-      names.push(target.node?.name ?? slug)
-    }
-    void roots
-    return names.join(' / ')
-  }
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault()

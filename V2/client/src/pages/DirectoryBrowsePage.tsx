@@ -11,6 +11,7 @@ import { Breadcrumb } from '../components/Breadcrumb'
 import { Spinner } from '../components/ui/Spinner'
 import { EmptyState } from '../components/ui/EmptyState'
 import { ResourceList } from '../components/resource/ResourceList'
+import { MyUnpublishedResources } from '../components/resource/MyUnpublishedResources'
 import { CreateFolderDialog } from '../components/directory/CreateFolderDialog'
 
 /**
@@ -159,7 +160,15 @@ export function DirectoryBrowsePage() {
         资源列表只认 `directoryId`，不再用 program + subject + folderType 推导。
       */}
       {target.node !== null && target.node.allowFiles && (
-        <ResourceList directoryId={target.node.id} />
+        <>
+          {/*
+            先给上传者自己看：刚上传的草稿默认不是 PUBLISHED，公开列表里不会有它。
+            这块只列**我自己**在这个目录下的未发布内容（服务端按 uploader 过滤），
+            所以"上传完找不到"的问题在这里解决，而不是把草稿公开出去。
+          */}
+          <MyUnpublishedResources directoryId={target.node.id} />
+          <ResourceList directoryId={target.node.id} />
+        </>
       )}
 
       {/*

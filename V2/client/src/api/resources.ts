@@ -11,6 +11,12 @@ export interface ResourceListQuery {
   readonly directoryId?: string | null
   readonly includeSubtree?: boolean
   readonly status?: ResourceStatus | null
+  /**
+   * 只看**自己上传**的（服务端按 `uploader_id` 强制过滤，不是前端过滤）。
+   * 目录页用它来列"我的未发布资源" —— 自己的草稿/待审核可见，
+   * 但别人的未发布内容不会因此暴露。
+   */
+  readonly onlyMine?: boolean
   readonly q?: string | null
   readonly sort?: ResourceSortKey
   readonly page?: number
@@ -22,6 +28,7 @@ function toQueryString(query: ResourceListQuery): string {
   if (query.directoryId != null && query.directoryId !== '') params.set('directoryId', query.directoryId)
   if (query.includeSubtree === true) params.set('includeSubtree', 'true')
   if (query.status != null) params.set('status', query.status)
+  if (query.onlyMine === true) params.set('onlyMine', 'true')
   if (query.q != null && query.q !== '') params.set('q', query.q)
   if (query.sort != null) params.set('sort', query.sort)
   if (query.page != null) params.set('page', String(query.page))

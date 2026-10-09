@@ -41,9 +41,12 @@ export function FilePreviewDialog({
     | { kind: 'error'; message: string }
   >({ kind: 'loading' })
   const [downloading, setDownloading] = useState(false)
+  /** 点「重新加载」时 +1：重新申请一个**新的**签名地址（旧的可能已过期）。 */
+  const [reloadToken, setReloadToken] = useState(0)
 
   useEffect(() => {
     let cancelled = false
+    setState({ kind: 'loading' })
     filesApi
       .preview(resourceId, file.id)
       .then(async (res) => {
@@ -54,7 +57,22 @@ export function FilePreviewDialog({
         }
         if (res.viewer === 'text') {
           // 纯文本：自己读回来渲染成文本节点，永远不当作 HTML。
-          const text = await fetch(res.url).then((r) => r.text())
+          //
+          // ⚠️ 必须先看 `response.ok`：签名地址可能已过期、对象可能已经不在存储里，
+          // 那些情况下响应体是一段 XML/HTML 错误页 —— 直接 `.text()` 会把它
+          // **当成文件内容渲染出来**，看起来像"预览成功了，只是内容很怪"。
+          // 这类"假成功"比报错更糟，所以这里显式判断状态码。
+          const response = await fetch(res.url)
+          if (!response.ok) {
+            if (!cancelled) {
+              setState({
+                kind: 'error',
+                message: `无法读取文件内容（存储返回 ${response.status}）。文件可能已被移除，或预览地址已过期 —— 可以点「重新加载」。`,
+              })
+            }
+            return
+          }
+          const text = await response.text()
           if (!cancelled) setState({ kind: 'text', content: text })
           return
         }
@@ -66,13 +84,23 @@ export function FilePreviewDialog({
     return () => {
       cancelled = true
     }
-  }, [resourceId, file.id])
+  }, [resourceId, file.id, reloadToken])
 
+  /**
+   * 下载。
+   *
+   * 原先这里是 `try { … } finally { … }`：申请签名地址失败时异常会**逃出去**
+   * （调用方是 `void download()`），于是用户什么提示都没有，控制台里多一条
+   * 未处理的 Promise rejection。现在把失败变成一句人话。
+   */
   async function download() {
     setDownloading(true)
+    setState((prev) => (prev.kind === 'error' ? { kind: 'loading' } : prev))
     try {
       const { url } = await filesApi.download(resourceId, file.id)
       window.location.assign(url)
+    } catch (e) {
+      setState({ kind: 'error', message: humanMessage(e, '下载失败') })
     } finally {
       setDownloading(false)
     }
@@ -99,9 +127,21 @@ export function FilePreviewDialog({
           )}
 
           {state.kind === 'error' && (
-            <p className="p-6 text-center text-sm text-destructive" data-testid="file-preview-error">
-              {state.message}
-            </p>
+            <div className="p-6 text-center">
+              <p className="text-sm text-destructive" data-testid="file-preview-error">
+                {state.message}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => setReloadToken((n) => n + 1)}
+                data-testid="file-preview-retry"
+              >
+                重新加载
+              </Button>
+            </div>
           )}
 
           {state.kind === 'text' && (
@@ -115,12 +155,20 @@ export function FilePreviewDialog({
 
           {state.kind === 'url' && state.preview.viewer === 'pdf' && (
             // 浏览器自带的 PDF 阅读器 —— 不引入任何 PDF SDK。
-            <iframe
-              title={file.fileName}
-              src={state.preview.url}
-              className="h-[60vh] w-full bg-white"
-              data-testid="file-preview-pdf"
-            />
+            // `<iframe>` 的加载失败**不会**冒泡成 JS 异常，所以无法像 <img> 那样捕获；
+            // 因此给用户一个明确的手动出口：「打不开？重新加载 / 下载」。
+            <div>
+              <iframe
+                title={file.fileName}
+                src={state.preview.url}
+                className="h-[60vh] w-full bg-white"
+                data-testid="file-preview-pdf"
+              />
+              <p className="border-t border-border bg-white/60 px-3 py-2 text-xs text-muted-foreground">
+                如果这里一直空白，说明浏览器没能取到文件（地址可能已过期）。
+                点下面的「重新加载」重新申请地址，或直接「下载」。
+              </p>
+            </div>
           )}
 
           {state.kind === 'url' && state.preview.viewer === 'image' && (
@@ -130,6 +178,14 @@ export function FilePreviewDialog({
                 alt={file.fileName}
                 className="max-h-[56vh] max-w-full rounded object-contain"
                 data-testid="file-preview-image"
+                onError={() => {
+                  // 图片解码/加载失败是可捕获的：给明确错误，不要停在空白/加载中。
+                  setState({
+                    kind: 'error',
+                    message:
+                      '图片没能加载出来。文件可能已被移除，或预览地址已过期 —— 可以点「重新加载」。',
+                  })
+                }}
               />
             </div>
           )}
@@ -140,6 +196,16 @@ export function FilePreviewDialog({
             预览地址是短时有效的授权地址，不会公开文件位置。
           </p>
           <div className="flex gap-2">
+            {state.kind === 'url' && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setReloadToken((n) => n + 1)}
+                data-testid="file-preview-reload"
+              >
+                重新加载
+              </Button>
+            )}
             <Button type="button" variant="outline" onClick={onClose} data-testid="file-preview-close">
               <X className="size-4" /> 关闭
             </Button>

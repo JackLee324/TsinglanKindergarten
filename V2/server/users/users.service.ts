@@ -386,6 +386,26 @@ export class UsersService {
     }
 
     /*
+      超级管理员**唯一化**（业主 Stage 13B §2）。
+
+      规则：系统里至多只能有一名有效超级管理员，而且**不能**通过普通的账号编辑
+      把别人升成管理员 —— 那会让"谁是超级管理员"变成一个随手可改的状态。
+      需要交接时走专门的、可审计的机制：`scripts/transfer-superadmin.mjs`
+      （它在一个事务里降下旧的、升上新的，并写审计 + 撤销双方会话）。
+
+      普通编辑只允许**降级**（把管理员改成教师），这正是把历史遗留的多个管理员
+      收敛到一个的动作；降级仍然受"最后一名管理员"保护。
+    */
+    const promotingToAdmin =
+      input.role !== undefined && this.authz.isAdminRole(input.role) && input.role !== before.role
+    if (promotingToAdmin) {
+      throw AppError.badRequest(
+        '超级管理员只能有一名，不能通过编辑账号直接新增。需要交接时请使用专用的交接流程（scripts/transfer-superadmin.mjs）。',
+        'SUPERADMIN_TRANSFER_REQUIRED',
+      )
+    }
+
+    /*
      * ── 两条护栏（业主 §7 / §18 / §27）────────────────────────────────────────
      *
      * 1. **不能把自己改成别的身份。** 自己降级是把自己锁在系统外最快的方式，

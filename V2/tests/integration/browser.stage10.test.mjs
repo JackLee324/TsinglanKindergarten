@@ -1265,13 +1265,16 @@ describe('⑰ 空状态：三种情况都要给对的话', () => {
     assert.equal(await browser.exists('[data-testid="resource-list-error"]'), false)
   })
 
-  test('只有未发布的资源：浏览页对谁都显示空（未发布只在自己的「我的资源」里）', async () => {
+  test('只有未发布的资源：公开列表为空，但**本人**能在目录页看到自己的草稿', async () => {
     /*
-      这里要说清一条**设计**（阶段 7 §17）：目录浏览页只列**已发布**的资源；
-      草稿、待审核、已退回、已撤回都只出现在上传者自己的「我的资源」里。
-      所以"这个目录里只有我的草稿"对浏览页来说就是**空** —— 对本人也一样。
-      第一版用例写成了"本人看得到自己的草稿"，那是把「我的资源」的行为
-      错安到浏览页上；两种页面各司其职，这里分别断言。
+      规则更新（业主 Stage 13B §4）：公开的「资源」区域仍然只列**已发布**；
+      但"上传完回到目录却找不到自己刚传的东西"是个真实问题，所以目录页新增了一块
+      **只给本人看**的「我的未发布资源」（服务端按 uploader_id 过滤，见 onlyMine）。
+      于是现在的正确行为是：
+        · 公开列表（「资源」）：仍然空 —— 未发布的东西不对外；
+        · 本人：在「我的未发布资源」里看得到，并且带状态标签（草稿）；
+        · 别人：公开列表空，而且**看不到那块未发布区域**（那是别人的东西）。
+      三件事分别断言，不能只断言"页面看起来是空的"。
     */
     await login(TEACHER_A.username, TEACHER_A.password)
     await clickThrough([
@@ -1283,10 +1286,23 @@ describe('⑰ 空状态：三种情况都要给对的话', () => {
     })
     assert.equal((await resourceRow(ids.onlyDraft)).status, 'DRAFT')
 
-    // 浏览页：空状态
+    // 公开列表：空状态（未发布不对外）
     await browser.goto(`${TEST_BASE}/directory/education/pre-k/virtue/outline`)
     await browser.waitFor('!!document.querySelector(\'[data-testid="resource-list-empty"]\')', 20000, '浏览页空状态')
     assert.match(String(await browser.text('[data-testid="resource-list-empty"]')), /暂无资源/)
+
+    // 本人：目录页里那块「我的未发布资源」看得到它（这就是 Stage 13B 修的问题）
+    await browser.waitFor(
+      '!!document.querySelector(\'[data-testid="my-unpublished-section"]\')',
+      20000,
+      '本人的未发布区域',
+    )
+    const mine = await browser.session.eval(`(() => ({
+      titles: [...document.querySelectorAll('[data-testid="my-unpublished-card"] [data-testid="resource-card-title"]')].map((e) => e.innerText.trim()),
+      statuses: [...document.querySelectorAll('[data-testid="my-unpublished-card"] [data-testid="resource-card-status"]')].map((e) => e.innerText.trim()),
+    }))()`)
+    assert.deepEqual(mine.titles, ['只有我能看到的草稿'], `本人的未发布区域内容：${JSON.stringify(mine)}`)
+    assert.deepEqual(mine.statuses, ['草稿'], `要显示状态标签：${JSON.stringify(mine)}`)
 
     // 本人：在「我的资源 → 草稿」里看得到
     await browser.goto(`${TEST_BASE}/my-resources`)
@@ -1304,11 +1320,16 @@ describe('⑰ 空状态：三种情况都要给对的话', () => {
       '本人看得到自己的草稿',
     )
 
-    // 别人：浏览页同样看不到（不是报错，是空状态）
+    // 别人：浏览页同样看不到（不是报错，是空状态），而且**没有**那块未发布区域
     await logout()
     await login(TEACHER_B.username, TEACHER_B.password)
     await browser.goto(`${TEST_BASE}/directory/education/pre-k/virtue/outline`)
     await browser.waitFor('!!document.querySelector(\'[data-testid="resource-list-empty"]\')', 20000, '别人也是空状态')
+    assert.equal(
+      await browser.exists('[data-testid="my-unpublished-section"]'),
+      false,
+      '别人的草稿不能出现在我的目录页上（哪怕是一句提示）',
+    )
     assert.equal(
       (await resourceRow(ids.onlyDraft)).status,
       'DRAFT',

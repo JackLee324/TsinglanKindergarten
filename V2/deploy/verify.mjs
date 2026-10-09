@@ -113,7 +113,14 @@ try {
     `HTTP ${res.status} → ${location || '(无 Location)'}`,
   )
 } catch (e) {
-  check('HTTP 跳 HTTPS', false, `${String(e.message).slice(0, 80)}（--http-port 默认 80，演练是 10080）`)
+  // ⚠️ 演练的 HTTP 端口是 **10088**（`docker-compose.rehearsal.yml` 里 proxy 的
+  //    `10088:80` 映射）。这条提示以前写的是 10080 —— 照着抄会得到一次看起来像
+  //    产品故障的 `fetch failed`，所以端口一律以 compose 文件为准。
+  check(
+    'HTTP 跳 HTTPS',
+    false,
+    `${String(e.message).slice(0, 80)}（--http-port 默认 80；本机演练见 docker-compose.rehearsal.yml 的 proxy 端口映射）`,
+  )
 }
 
 let homeStatus = 0

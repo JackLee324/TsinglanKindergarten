@@ -31,6 +31,12 @@ export class ResourcesController {
       includeSubtree: query.includeSubtree === true,
       status: (query.status as ResourceStatus | undefined) ?? null,
       q: query.q ?? null,
+      // ⚠️ 必须透传：DTO 里有 `onlyMine`，但控制器原先没往下传 —— 于是
+      // `GET /api/resources?onlyMine=true` 会**静默退化成"看这个目录里我可见的全部"**，
+      // 目录页那块"我的未发布资源"就会列到别人的待审核内容。
+      // 这类"参数在 DTO 里有、却没接上"的缺口不会报错，只会让结果范围悄悄变大。
+      onlyMine: query.onlyMine === true,
+      recycled: false,
       page: query.page ?? 1,
       pageSize: query.pageSize ?? 20,
     }

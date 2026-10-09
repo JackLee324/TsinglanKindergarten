@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   ChevronDown,
@@ -215,8 +215,17 @@ function NavItem({
 /**
  * 一个目录节点。
  *
- * 默认**收起**（与 V1 一致），避免 69 个节点一上来全展开。
- * 展开状态由用户的当前路径驱动：进入深层节点时，祖先链自动展开。
+ * 展开状态有**两个来源**，优先级必须写清楚（业主 Stage 13B §3）：
+ *
+ *   1. **用户的明确选择**（点过箭头）—— 最高优先级，点收起就真的收起，
+ *      即使这个节点正是当前所在的分支。旧实现是 `open || (depth === 0 && active)`，
+ *      根节点只要处于活动路径就被 `active` 强行撑开，点箭头看起来"没反应"。
+ *   2. **自动展开**（没点过箭头时）—— 当前路径所在的祖先链自动展开，
+ *      这样直接打开深层 URL 也能看到自己在哪。
+ *
+ * 两者用 `userChoice: boolean | null` 区分：`null` = 用户没表过态 → 按自动规则。
+ * 当**活动状态发生变化**（用户导航了）时把 `userChoice` 清回 `null`，
+ * 让新位置的祖先链重新自动展开 —— 否则"在某处收起过"会一路跟着到别的分支。
  */
 function SidebarNode({
   node,
@@ -229,11 +238,16 @@ function SidebarNode({
 }) {
   const active = isWithinPath(currentPath, node.path)
   const hasChildren = node.children.length > 0
-  const [open, setOpen] = useState(depth === 0 ? active : false)
+  /** null = 用户没点过这个节点；true/false = 用户明确要展开/收起。 */
+  const [userChoice, setUserChoice] = useState<boolean | null>(null)
   const url = directoryUrl(node.path)
 
-  // 进入深层节点时把它所在的祖先链展开（首次渲染后由用户交互改变）。
-  const shouldBeOpen = open || (depth === 0 && active)
+  // 活动状态变化 → 丢弃上一次的"用户选择"，让自动展开重新生效。
+  useEffect(() => {
+    setUserChoice(null)
+  }, [active])
+
+  const shouldBeOpen = userChoice ?? active
 
   return (
     <>
@@ -245,7 +259,7 @@ function SidebarNode({
             aria-expanded={shouldBeOpen}
             data-testid="sidebar-toggle"
             data-nav-toggle={url}
-            onClick={() => setOpen((v) => !v)}
+            onClick={() => setUserChoice(!shouldBeOpen)}
             className="ml-1 rounded p-1 text-white/70 hover:bg-white/10 hover:text-white"
           >
             {shouldBeOpen ? (

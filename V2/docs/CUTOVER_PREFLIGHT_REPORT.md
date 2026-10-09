@@ -251,6 +251,21 @@ V1 存储里的两个 smoke 对象保持原样、不动；V2 采用独立 Bucket
 **不建议在切换窗口里做**；切换完成后单独排期升级并跑全量回归。
 这里记录的是「**已定位 + 已判定不可达 + 有明确下一步**」，**不是「已修复」**。
 
+## 10.5 Stage 13B 更新：超级管理员唯一化（**只有 `TsinglanAdmin`**）
+
+业主在 Stage 13B §2 明确：**生产里只有 `TsinglanAdmin` 可以是有效 `ADMIN`**，
+业务身份仍然只有 `ADMIN` / `TEACHER` 两种。据此落实为：
+
+| 项 | 内容 |
+|---|---|
+| 迁移身份 | 用 `--admin-usernames TsinglanAdmin` **显式点名**；`DEFAULT_ADMIN_ROLES` 为**空**，不再按 V1 岗位名自动提升 |
+| 其他 V1 管理员岗位 | `qlsadmin`（principal）→ **TEACHER**；无用户名的`系统初始化` → 按迁移规则**停用**教师 |
+| 服务端唯一性 | `POST /api/users` 只建教师；`PATCH /api/users/:id` **拒绝**升管理员（`SUPERADMIN_TRANSFER_REQUIRED`）；`bootstrap-admin.mjs` 只在没有管理员时创建；换人只能走 `scripts/transfer-superadmin.mjs`（同一事务一降一升 + 两条审计 + 撤销双方会话） |
+| 数据处置 | **不删账号、不删审计**；只改身份 |
+| 矩阵 | `docs/PRODUCTION_PERMISSION_MATRIX.md` 已更新：全表只有 `TsinglanAdmin` 一行是 `ADMIN` |
+
+> 本阶段**没有执行正式迁移**（仍为 BLOCKED）。以上是代码与文档层面的准备 + 在本地演练环境上的验证。
+
 ## 11. §9/§10/§11（BLOCKED / NOT RUN）
 
 预发布演练、正式切换、V1 退役**全部依赖 Zeabur 访问**，因此：

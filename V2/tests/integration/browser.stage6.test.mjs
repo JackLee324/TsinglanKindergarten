@@ -43,10 +43,18 @@ const PDF_BYTES = Buffer.concat([
   Buffer.from('1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'.repeat(60)),
   Buffer.from('%%EOF\n'),
 ])
-const PNG_BYTES = Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  Buffer.from('png payload for preview test\n'.repeat(30)),
-])
+/**
+ * 真的 PNG（2×2）。
+ *
+ * ⚠️ 以前这里是"PNG 签名 + 一段文本"的**假图**：旧断言只数 `<img>` 元素在不在，
+ * 所以坏图也能过。Stage 13B 让界面在图片加载失败时**如实报错**（不再停在空白），
+ * 于是这张假图立刻暴露了出来 —— 那条断言本来就在验一个假成功。
+ * 现在夹具是真图，断言也升级成"真的解码出来了"（`naturalWidth > 0`）。
+ */
+const PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR42mP8z8Dwn4GBgYGRAQoAAB0hAwH8g0m6AAAAAElFTkSuQmCC',
+  'base64',
+)
 const DOCX_BYTES = Buffer.concat([
   Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]),
   Buffer.from('docx payload\n'.repeat(30)),
@@ -267,20 +275,35 @@ describe('上传资源：完整用户路径（§23）', () => {
     assert.equal(await browser.text('[data-testid="file-name"]'), '美德课程教案.pdf')
   })
 
-  test('刚上传的是草稿：目录浏览里**看不到**它，但「我的资源」里有（阶段 7 §17）', async () => {
-    // ⚠️ 阶段 7 改过这里的期望：目录浏览默认只显示已发布。
-    // 刚上传的草稿属于"还没上线"，所以只能出现在「我的资源」——
-    // 这也正是业主 §17 的原话："自己的非发布资源只在 我的资源 看到"。
+  test('刚上传的是草稿：公开列表里没有它，但目录页的「我的未发布资源」和「我的资源」里都有', async () => {
+    // ⚠️ 阶段 7 改过这里的期望：公开列表默认只显示已发布。
+    // ⚠️ Stage 13B §4 又补了一半（业主的真实报障："上传完回到目录，看不到东西"）：
+    //    上传者**自己**在同一个目录页上能看到它（在「我的未发布资源」那一块里），
+    //    但它仍然不进公开列表 —— "看不到"要改成"在哪儿能看到"，不是"藏起来"。
     await openVirtueResources()
     await browser.waitFor(
       '!!document.querySelector(\'[data-testid="resource-list-section"]\')',
       20000,
       '目录页资源区就绪',
     )
+    // ① 公开列表里没有它
     assert.equal(
-      await browser.exists(`[data-resource-id="${resourceId}"]`),
+      await browser.exists(`[data-testid="resource-list"] [data-resource-id="${resourceId}"]`),
       false,
-      '草稿不该出现在目录浏览里',
+      '未发布的资源不该出现在公开列表里',
+    )
+    // ② 但它确实在**这个目录页**上、在我自己那一块里
+    await browser.waitFor(
+      `!!document.querySelector('[data-testid="my-unpublished-section"] [data-resource-id="${resourceId}"]')`,
+      20000,
+      '草稿出现在「我的未发布资源」里',
+    )
+    assert.equal(
+      await browser.text(
+        `[data-testid="my-unpublished-section"] [data-resource-id="${resourceId}"] [data-testid="resource-card-status"]`,
+      ),
+      '草稿',
+      '那一块里的状态徽章要如实写「草稿」',
     )
 
     await browser.goto(`${TEST_BASE}/my-resources`)
@@ -340,6 +363,17 @@ describe('图片预览（§24）', () => {
     )
     const src = await browser.attr('[data-testid="file-preview-image"]', 'src')
     assert.equal(typeof src === 'string' && src.length > 0, true)
+    // 加强：不只是"有一个 <img>"，而是它**真的解码显示出来了**。
+    // 只检查元素存在的话，"坏图 / 假图 / 地址过期"这三种都会静默通过。
+    const loaded = await browser.session.eval(
+      `(() => { const img = document.querySelector('[data-testid="file-preview-image"]'); return !!img && img.complete && img.naturalWidth > 0 })()`,
+    )
+    assert.equal(loaded, true, '图片必须真的解码出来（naturalWidth > 0）')
+    assert.equal(
+      await browser.exists('[data-testid="file-preview-error"]'),
+      false,
+      '正常图片不该出现错误提示',
+    )
     await browser.click('[data-testid="file-preview-close"]')
   })
 })

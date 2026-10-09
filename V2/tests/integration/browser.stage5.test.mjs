@@ -34,15 +34,20 @@ const PAGE_SIZE = 12
 const PUBLISHED_COUNT = 15
 
 /**
- * 浏览页里能看到的就是 **15 条已发布**。
+ * **公开列表**里能看到的就是 15 条已发布。
  *
  * ⚠️ 阶段 7 改过一次：阶段 5/6 时浏览页会带上"我自己那份还没发布的草稿"，
  * 因为可见性规则是"已发布 ∪ 自己上传的"。业主 Stage 7 §17 明确要求
- * **目录浏览默认只显示已发布**，自己那份未发布的资源只在「我的资源」里管理。
+ * **公开列表默认只显示已发布**。
  *
- * 于是"这条资源上线了吗"在界面上只有一个不会误解的答案：
- * 目录里看到 = 已发布；草稿/待审/已退回/已撤回只出现在「我的资源」。
- * 下面还有一条用例专门钉住"自己的草稿也不在浏览页里"。
+ * ⚠️ Stage 13B §4 又补了一半（业主的真实报障："上传完回到目录，看不到东西"）：
+ * 公开列表仍然只有已发布，但上传者自己在**同一个目录页**上会多看到一块
+ * 「我的未发布资源」（`data-testid="my-unpublished-section"`，服务端按 uploader 过滤）。
+ * 于是"这条资源上线了吗"的答案依旧不会误解：
+ *   · 公开列表里看到 = 已发布；
+ *   · 「我的未发布资源」里看到 = 只有我自己看得到、还没上线；
+ *   · 别人的未发布资源在任何地方都看不到（这才是权限边界）。
+ * 下面几条用例分别钉住这三件事。
  */
 const VISIBLE_IN_BROWSE = PUBLISHED_COUNT
 
@@ -200,19 +205,34 @@ describe('目录浏览页：资源卡片', () => {
   test('每张卡片的状态徽章与它的真实状态一致（草稿不能伪装成已发布）', async () => {
     // 浏览页每页 12 条，而可见的是 16 条 —— 所以这里只看**本页**，
     // 总数由页码文案那条用例负责（第一版在这里断言 16，红在"页"与"全集"混用）。
-    const statuses = await browser.allAttrs('[data-testid="resource-card"]', 'data-resource-status')
+    // 选择器限定在公开列表 `resource-list` 里：页面上还有 Stage 13B 新增的
+    // 「我的未发布资源」那一块，它也渲染 `resource-card`，但不属于"本页 12 条"。
+    const statuses = await browser.allAttrs(
+      '[data-testid="resource-list"] [data-testid="resource-card"]',
+      'data-resource-status',
+    )
     assert.equal(statuses.length, PAGE_SIZE)
-    const badges = await browser.allTexts('[data-testid="resource-card-status"]')
+    const badges = await browser.allTexts('[data-testid="resource-list"] [data-testid="resource-card-status"]')
     assert.equal(badges.length, statuses.length, '每张卡片都要有状态徽章')
     const label = { PUBLISHED: '已发布', DRAFT: '草稿' }
     for (let i = 0; i < statuses.length; i += 1) {
       assert.equal(label[statuses[i]], badges[i], `状态 ${statuses[i]} 的徽章文案应是「${label[statuses[i]]}」`)
     }
-    // 阶段 7 §17：浏览页**只有**已发布。所以每一张卡片的徽章都必须是「已发布」。
+    // 阶段 7 §17：公开列表**只有**已发布。所以每一张卡片的徽章都必须是「已发布」。
     assert.deepEqual(
       [...new Set(statuses)],
       ['PUBLISHED'],
-      `浏览页只该出现已发布，实际：${statuses.join('、')}`,
+      `公开列表只该出现已发布，实际：${statuses.join('、')}`,
+    )
+
+    // Stage 13B §4：我自己那条草稿必须在页面上看得到 —— 但只在它自己的那一块里，
+    // 而且徽章要如实写「草稿」（既不能藏起来，也不能伪装成已发布）。
+    const ownDraft = '[data-testid="my-unpublished-card"][data-resource-status="DRAFT"]'
+    assert.equal(await browser.count(ownDraft), 1, '自己那条草稿应当出现在「我的未发布资源」里')
+    assert.equal(
+      await browser.text(`${ownDraft} [data-testid="resource-card-status"]`),
+      '草稿',
+      '那一块里的徽章要如实写「草稿」',
     )
   })
 
@@ -222,17 +242,42 @@ describe('目录浏览页：资源卡片', () => {
     assert.deepEqual(labels, [], `不该出现这些按钮：${labels.join('、')}`)
   })
 
-  test('未发布的资源一律不在浏览页（别人的和自己的都不在，业主 §17）', async () => {
+  test('公开列表只列已发布；自己的草稿只在「我的未发布资源」里（业主 §17 + Stage 13B §4）', async () => {
     await openDirectory(BROWSE_URL)
     // 目录下 15 条已发布 + 1 条自己的草稿 + 1 条别人的草稿。
     const total = await browser.text('[data-testid="resource-total"]')
-    assert.equal(total, `共 ${VISIBLE_IN_BROWSE} 条`, '未发布的资源不该被列出来')
-    const titles = await browser.allTexts('[data-testid="resource-card-title"]')
-    assert.equal(titles.some((t) => /别人的草稿/.test(t ?? '')), false, '别人的草稿泄露了')
+    assert.equal(total, `共 ${VISIBLE_IN_BROWSE} 条`, '公开列表的总数只算已发布')
+    const published = await browser.allTexts(
+      '[data-testid="resource-list"] [data-testid="resource-card-title"]',
+    )
+    assert.equal(published.some((t) => /别人的草稿/.test(t ?? '')), false, '别人的草稿泄露了')
     assert.equal(
-      titles.some((t) => /我的草稿/.test(t ?? '')),
+      published.some((t) => /我的草稿/.test(t ?? '')),
       false,
-      '自己的草稿也不该出现在目录浏览里 —— 它在「我的资源」',
+      '自己的草稿不该混进公开列表 —— 它有自己的位置（下一段就断言它到底在哪）',
+    )
+
+    // Stage 13B §4（业主点名的缺陷）：上传之后**必须**在对应目录里看得到，
+    // 否则老师会以为上传失败了。规则是"只给我自己看"，不是"藏起来"。
+    const mine = await browser.allTexts(
+      '[data-testid="my-unpublished-card"] [data-testid="resource-card-title"]',
+    )
+    assert.equal(
+      mine.some((t) => /我的草稿/.test(t ?? '')),
+      true,
+      `自己的草稿应当出现在「我的未发布资源」里，实际：${JSON.stringify(mine)}`,
+    )
+    assert.equal(
+      mine.some((t) => /别人的草稿/.test(t ?? '')),
+      false,
+      '别人的草稿不能出现在我那一块里（服务端按 uploader 过滤，不是前端过滤）',
+    )
+    // 整个页面上都找不到别人的草稿（包括那一块）
+    const allTitles = await browser.allTexts('[data-testid="resource-card-title"]')
+    assert.equal(
+      allTitles.some((t) => /别人的草稿/.test(t ?? '')),
+      false,
+      `别人的草稿在页面上任何地方都不该出现：${JSON.stringify(allTitles)}`,
     )
     // 自己的草稿确实存在，只是在别处可见（证明不是"数据没造出来"）
     await browser.goto(`${TEST_BASE}/my-resources`)
@@ -270,9 +315,16 @@ describe('搜索', () => {
       15000,
       '搜索命中 1 条',
     )
-    const titles = await browser.allTexts('[data-testid="resource-card-title"]')
+    // 只看公开列表里的命中结果：「我的未发布资源」那一块**不参与搜索**
+    // （它说的是"你在这个目录下还没上线的东西"，与关键词无关，位置也在搜索框上方）。
+    const titles = await browser.allTexts(
+      '[data-testid="resource-list"] [data-testid="resource-card-title"]',
+    )
+    assert.equal(titles.length, 1, `搜索命中应当只剩 1 条，实际 ${titles.length}`)
     assert.equal(/07/.test(titles[0] ?? ''), true, `命中的应是 07，实际「${titles[0]}」`)
-    const location = await browser.text('[data-testid="resource-card-location"]')
+    const location = await browser.text(
+      '[data-testid="resource-list"] [data-testid="resource-card-location"]',
+    )
     assert.equal(location, '教育教学 / Pre-K / 美德 / 教学资源')
   })
 

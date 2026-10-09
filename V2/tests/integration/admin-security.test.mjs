@@ -68,20 +68,17 @@ before(async () => {
 
   probeUsernames.push('sec_admin2')
   /*
-    第二位管理员走**正规两步**（业主 Stage 13 §4/§5）：
-      ① 创建接口只能建 TEACHER（往里塞 role=ADMIN 会被 400 明确拒绝）；
-      ② 身份调整是单独的动作：用编辑接口把教师提升为 ADMIN（只有超级管理员能做，会写审计并撤销会话）。
-    这条路径本身就是生产里新增管理员的做法。
+    第二位管理员：**接口新增管理员的路已经封掉了**（业主 Stage 13B §2：
+    超级管理员只能有一名，`PATCH /api/users/:id` 想把教师升成 ADMIN 会 400
+    `SUPERADMIN_TRANSFER_REQUIRED`；换人只能走 `scripts/transfer-superadmin.mjs`）。
+
+    但"系统里同时存在两个管理员"这件事仍然真的会发生 —— 生产上就是历史遗留
+    （迁过来时一共有三名，收敛之后只剩 `TsinglanAdmin` 一名）。
+    「最后一名管理员」这道护栏要管的正是这种状态，所以这里**用夹具直接写入一行
+    ADMIN**（`createAdmin`，模拟历史数据），而不是走已经封掉的接口。
+    "接口不能新增管理员"这件事由下面 `超级管理员唯一化` 那组用例单独钉住。
   */
-  const createdTeacher = await rootAdmin.post('/api/users', {
-    name: '第二位管理员',
-    username: 'sec_admin2',
-    password: 'SecAdmin2Pass!1',
-    role: 'TEACHER',
-  })
-  assert.equal(createdTeacher.status, 201, JSON.stringify(createdTeacher.data))
-  const promoted = await rootAdmin.patch(`/api/users/${createdTeacher.data.id}`, { role: 'ADMIN' })
-  assert.equal(promoted.status, 200, `提升为管理员应当成功：${JSON.stringify(promoted.data)}`)
+  await createAdmin('sec_admin2', 'SecAdmin2Pass!1')
   secondAdmin = client()
   await secondAdmin.login('sec_admin2', 'SecAdmin2Pass!1')
 
@@ -169,6 +166,28 @@ describe('最后一个管理员（§7 / §18 / §27）', () => {
     const res = await secondAdmin.patch(`/api/users/${me.data.user.id}`, { name: '第二位管理员（改名）' })
     assert.equal(res.status, 200, JSON.stringify(res.data))
     await secondAdmin.patch(`/api/users/${me.data.user.id}`, { name: '第二位管理员' })
+  })
+})
+
+describe('超级管理员唯一化（业主 Stage 13B §2）', () => {
+  test('账号编辑**不能**把教师升成管理员：换人只能走交接流程', async () => {
+    const created = await rootAdmin.post('/api/users', {
+      name: '想升管理员的人',
+      username: 'sec_want_admin',
+      password: 'SecWantAdmin!1',
+      role: 'TEACHER',
+    })
+    assert.equal(created.status, 201, JSON.stringify(created.data))
+    probeUsernames.push('sec_want_admin')
+
+    const promoted = await rootAdmin.patch(`/api/users/${created.data.id}`, { role: 'ADMIN' })
+    assert.equal(promoted.status, 400, `必须明确拒绝：${JSON.stringify(promoted.data)}`)
+    assert.equal(promoted.data.code, 'SUPERADMIN_TRANSFER_REQUIRED')
+    assert.match(promoted.data.message, /超级管理员只能有一名/)
+
+    // 被拒之后不能留下任何改变
+    const list = await rootAdmin.get('/api/users?q=sec_want_admin')
+    assert.equal(list.data.items[0].role, 'TEACHER', '被拒的升级不能留下任何变化')
   })
 })
 

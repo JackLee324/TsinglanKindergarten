@@ -117,9 +117,25 @@ export function FileList({
               data-previewable={String(file.previewable)}
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground" data-testid="file-name">
+                {/*
+                  文件名本身可点（业主 Stage 13B §5.1）：
+                  能在线预览的 → 打开预览；只有下载能力的（Office / ZIP）→ 直接下载，
+                  绝不给一个"点了没反应"或者空白预览的入口。
+                  用真正的 <button>，所以键盘（Tab + Enter）也能操作。
+                */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (file.previewable) setPreviewing(file)
+                    else void download(file)
+                  }}
+                  title={file.previewable ? '点击预览' : '此类型不支持在线预览，点击下载'}
+                  className="block max-w-full truncate text-left text-sm font-medium text-foreground underline-offset-2 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  data-testid="file-name"
+                  data-file-name={file.fileName}
+                >
                   {file.fileName}
-                </p>
+                </button>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {file.sizeLabel} · 上传于 {file.createdAt.slice(0, 10)}
                 </p>

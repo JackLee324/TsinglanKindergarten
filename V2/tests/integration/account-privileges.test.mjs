@@ -31,6 +31,8 @@ import {
   createTeacher,
   directoryIdByPath,
   resetDatabase,
+  runProjectScriptCaptured,
+  runProjectScriptFailure,
   startServer,
   stopServer,
   withSql,
@@ -298,5 +300,103 @@ describe('③ 修改教师账号：用户名、审计与会话', () => {
     const me = await admin.get('/api/auth/me')
     const res = await admin.patch(`/api/users/${me.data.user.id}`, { role: 'TEACHER' })
     assert.equal(res.status, 400, JSON.stringify(res.data))
+  })
+})
+
+
+describe('④ 超级管理员唯一化（业主 Stage 13B §2）', () => {
+  test('编辑接口**不能**把别人升成管理员（不留第二条超管通道）', async () => {
+    const target = await admin.post('/api/users', {
+      name: '想升管理员',
+      username: 'ap7_promote_me',
+      password: 'Ap7Promote!2026',
+      role: 'TEACHER',
+    })
+    assert.equal(target.status, 201, JSON.stringify(target.data))
+
+    const promoted = await admin.patch(`/api/users/${target.data.id}`, { role: 'ADMIN' })
+    assert.equal(promoted.status, 400, `应当明确拒绝：${JSON.stringify(promoted.data)}`)
+    assert.match(JSON.stringify(promoted.data), /超级管理员只能有一名|交接/)
+
+    // 身份没变，而且系统里仍然**恰好一名**管理员
+    const state = await withSql(async (sql) => {
+      const rows = await sql`SELECT role FROM users WHERE id = ${target.data.id}`
+      const admins = await sql`SELECT username FROM users WHERE role = 'ADMIN' ORDER BY username`
+      return { role: rows[0].role, admins: admins.map((a) => a.username) }
+    })
+    assert.equal(state.role, 'TEACHER', '被拒的升级不能留下任何变化')
+    assert.deepEqual(state.admins, ['ap_admin'], `只能有一名管理员：${JSON.stringify(state.admins)}`)
+  })
+
+  test('交接脚本：缺确认字符串时拒绝执行（防止手误换人）', async () => {
+    const { code, out } = await runProjectScriptFailure('scripts/transfer-superadmin.mjs', {
+      TRANSFER_FROM_USERNAME: 'ap_admin',
+      TRANSFER_TO_USERNAME: 'ap7_promote_me',
+    })
+    assert.notEqual(code, 0, '缺确认必须失败')
+    assert.match(out, /TRANSFER-CONFIRM|确认/, `要说清缺什么：${out.slice(0, 200)}`)
+
+    // 而且**真的没换人**：拒绝执行不能留下半截状态
+    const admins = await withSql(async (sql) => {
+      const rows = await sql`SELECT username FROM users WHERE role = 'ADMIN' ORDER BY username`
+      return rows.map((r) => r.username)
+    })
+    assert.deepEqual(admins, ['ap_admin'], `被拒的交接不能动数据：${JSON.stringify(admins)}`)
+  })
+
+  test('交接脚本：一降一升在同一事务，交接后仍**恰好一名**有效管理员，并写两条审计', async () => {
+    const before = await withSql(async (sql) => {
+      const rows = await sql`SELECT username FROM users WHERE role = 'ADMIN' AND status = 'active'`
+      return rows.map((r) => r.username)
+    })
+    assert.deepEqual(before, ['ap_admin'], '前置：只有一名有效管理员')
+
+    const out = await runProjectScriptCaptured('scripts/transfer-superadmin.mjs', {
+      TRANSFER_FROM_USERNAME: 'ap_admin',
+      TRANSFER_TO_USERNAME: 'ap7_promote_me',
+      TRANSFER_CONFIRM: 'TRANSFER-SUPERADMIN',
+    })
+    assert.match(out, /超级管理员交接完成/, `脚本应当报成功：${out.slice(0, 300)}`)
+    assert.match(out, /当前唯一有效管理员：ap7_promote_me/)
+
+    const after = await withSql(async (sql) => {
+      const admins = await sql`SELECT username FROM users WHERE role = 'ADMIN' ORDER BY username`
+      const activeAdmins = await sql`SELECT username FROM users WHERE role = 'ADMIN' AND status = 'active'`
+      const audits = await sql`
+        SELECT action FROM audit_logs
+        WHERE action IN ('user.role_transfer_out', 'user.role_transfer_in') ORDER BY action`
+      const outgoing = await sql`SELECT role FROM users WHERE username = 'ap_admin'`
+      return {
+        admins: admins.map((a) => a.username),
+        activeAdmins: activeAdmins.map((a) => a.username),
+        audits: audits.map((a) => a.action),
+        outgoingRole: outgoing[0].role,
+      }
+    })
+    assert.deepEqual(after.activeAdmins, ['ap7_promote_me'], `接手人必须是唯一有效管理员：${JSON.stringify(after)}`)
+    assert.equal(after.admins.length, 1, '系统里只能有一个 ADMIN 行')
+    assert.equal(after.outgoingRole, 'TEACHER', '交出的那一方必须降级')
+    assert.deepEqual(after.audits, ['user.role_transfer_in', 'user.role_transfer_out'], '两条审计都要有')
+  })
+
+  test('交接之后：新超级管理员能管账号，旧的不能', async () => {
+    const newAdmin = client()
+    const loginNew = await newAdmin.login('ap7_promote_me', 'Ap7Promote!2026')
+    assert.ok([200, 201].includes(loginNew.status), `新管理员应当能登录：${JSON.stringify(loginNew.data)}`)
+    const list = await newAdmin.get('/api/users')
+    assert.equal(list.status, 200, '新超级管理员能列账号')
+
+    const oldAdmin = client()
+    await oldAdmin.login('ap_admin', 'ApAdminPass!2026')
+    const denied = await oldAdmin.get('/api/users')
+    assert.equal(denied.status, 403, '交出身份之后不能再管账号')
+
+    // 把身份还回去，避免影响同文件后面的用例（走同一个交接流程）
+    const back = await runProjectScriptCaptured('scripts/transfer-superadmin.mjs', {
+      TRANSFER_FROM_USERNAME: 'ap7_promote_me',
+      TRANSFER_TO_USERNAME: 'ap_admin',
+      TRANSFER_CONFIRM: 'TRANSFER-SUPERADMIN',
+    })
+    assert.match(back, /当前唯一有效管理员：ap_admin/, `还回去也要成功：${back.slice(0, 200)}`)
   })
 })
