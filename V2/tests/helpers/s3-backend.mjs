@@ -27,12 +27,20 @@ const WEED = join(ROOT, '.devtools', 'seaweedfs', 'weed')
 export const S3_TEST_ACCESS_KEY = 'v2testaccesskey'
 export const S3_TEST_SECRET_KEY = 'v2testsecretkey'
 
-/** 专用端口：避开开发 3300 / 测试 3311 / 手工探针 3320 / Vite 3400。 */
+/**
+ * 专用端口：避开开发 3300 / 测试 3311 / 手工探针 3320 / Vite 3400。
+ *
+ * ⚠️ `s3` 用的是 18444，**不是** 18443 —— 18443 是 `deploy/rehearsal-storage.mjs`
+ * （线上演练栈的存储后端）的端口。两者**不能共用**：演练栈的 weed 还在跑时，
+ * 测试自己的网关会 bind 失败，而请求会被**演练栈那个实例**接走，
+ * 于是签名凭据对不上、报 “The access key ID you provided does not exist in our records.”
+ * —— 看起来像签名写错了，其实是打到了别人的服务上（实测踩过：9 个 S3 用例全红）。
+ */
 const PORTS = {
   master: 19433,
   volume: 18090,
   filer: 18998,
-  s3: 18443,
+  s3: 18444,
 }
 
 export const S3_TEST_ENDPOINT = `http://127.0.0.1:${PORTS.s3}`
@@ -71,24 +79,42 @@ export function s3TestClient(overrides = {}) {
 async function assertPortsFree() {
   const busy = []
   for (const [name, port] of Object.entries(PORTS)) {
-    const free = await isPortFree(port)
+    const free = await isPortFreeEverywhere(port)
     if (!free) busy.push(`${name}(${port})`)
   }
   if (busy.length > 0) {
     throw new Error(
       `S3 测试后端要用的端口被占用：${busy.join('、')}。\n` +
-        '  几乎总是上一次的 weed 没退干净。先执行：pkill -9 -f "weed server"',
+        '  常见原因：上一次的 weed 没退干净（pkill -9 -f "weed server"），\n' +
+        '  或者线上演练栈的存储后端还在跑（deploy/rehearsal-storage.mjs）。\n' +
+        '  两者**不能同时**跑同一套端口 —— 否则请求会打到别人的实例上，\n' +
+        '  表现为凭据对不上的 403，而不是端口冲突。',
     )
   }
 }
 
-function isPortFree(port) {
+/**
+ * 端口占用检测必须**同时**探 IPv4 和 IPv6。
+ *
+ * 只 `listen('127.0.0.1')` 是不够的：别的进程若绑的是 IPv6 通配 `*:port`
+ * （SeaweedFS 就是这样），IPv4 这一侧仍然能 bind 成功 —— 检测就说"空闲"，
+ * 而实际请求可能落到那个已经是别人的实例上。这一条正是上面那次 9 连红的成因，
+ * 所以两个地址族都要探。
+ */
+function isPortFree(host, port) {
   return new Promise((resolve) => {
     const server = createServer()
     server.once('error', () => resolve(false))
     server.once('listening', () => server.close(() => resolve(true)))
-    server.listen(port, '127.0.0.1')
+    server.listen(port, host)
   })
+}
+
+async function isPortFreeEverywhere(port) {
+  for (const host of ['127.0.0.1', '::1', '0.0.0.0', '::']) {
+    if (!(await isPortFree(host, port))) return false
+  }
+  return true
 }
 
 export async function startS3Backend({ bucket = `v2test-${randomUUID().slice(0, 8)}` } = {}) {

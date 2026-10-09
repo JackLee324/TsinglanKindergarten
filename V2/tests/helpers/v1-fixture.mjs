@@ -227,6 +227,7 @@ export const FIXTURE_IDS = {
   dirVirtue: '11111111-0000-4000-8000-000000000003',
   dirVirtueOutline: '11111111-0000-4000-8000-000000000004',
   dirVirtueResources: '11111111-0000-4000-8000-000000000005',
+  dirVirtueLesson: '11111111-0000-4000-8000-000000000009',
   dirGrowth: '11111111-0000-4000-8000-000000000006',
   dirL1: '11111111-0000-4000-8000-000000000007',
   dirCustom: '11111111-0000-4000-8000-000000000008',
@@ -292,6 +293,14 @@ export async function buildV1Fixture() {
       [FIXTURE_IDS.dirVirtue, FIXTURE_IDS.dirPreK, 'prek:virtue', '美德', 'Virtue', 'subject'],
       [FIXTURE_IDS.dirVirtueOutline, FIXTURE_IDS.dirVirtue, 'prek:virtue_outline', '课程大纲', 'Curriculum Outline', 'folder'],
       [FIXTURE_IDS.dirVirtueResources, FIXTURE_IDS.dirVirtue, 'prek:virtue_resource', '教学资源', 'Teaching Resources', 'folder'],
+      /*
+        教学详案（weekly_plans → `_lesson`）也必须存在。
+        生产 V1 的 69 个目录里每个科目下都挂着完整的资料夹，资源靠
+        `program + subject + folder_type` 精确落到叶节点；夹具里少一个，
+        weekly_plans 的资源就**没有落点**（落位器不许回退到科目层），
+        导入会正确地停下来报 UNRESOLVED_DIRECTORY。
+      */
+      [FIXTURE_IDS.dirVirtueLesson, FIXTURE_IDS.dirVirtue, 'prek:virtue_lesson', '教学详案', 'Lesson Plans', 'folder'],
       [FIXTURE_IDS.dirGrowth, null, 'root:growth', '教师成长', 'Teacher Growth', 'root'],
       [FIXTURE_IDS.dirL1, FIXTURE_IDS.dirGrowth, 'growth:l1', 'L1 基础规范', 'L1 Foundations', 'growth_level'],
       [FIXTURE_IDS.dirCustom, FIXTURE_IDS.dirEdu, 'custom:activity', '活动', 'Activities', 'folder'],
@@ -318,25 +327,30 @@ export async function buildV1Fixture() {
     }
 
     // ── 资源 ──
+    /*
+      ⚠️ 资源的 `directory_id` 一律指向**科目层**节点，`folder_type` 才决定叶资料夹 ——
+      这是生产 V1 的真实形态（347 条资源全部挂在 `prek:virtue` 这类科目节点上，
+      而 V2 的目录页只在 allowFiles=true 的叶资料夹列资源，所以**不能照搬 directory_id**）。
+    */
     const resources = [
       // 有真实文件 + 一套 V1 独有的分类字段（legacy 要留住它们）
-      [FIXTURE_IDS.resPublished, '美德课程纲要', FIXTURE_IDS.dirVirtueOutline, 'curriculum_outline',
+      [FIXTURE_IDS.resPublished, '美德课程纲要', FIXTURE_IDS.dirVirtue, 'curriculum_outline',
         'published', FIXTURE_IDS.admin, 'S1', 3, '主题一', REAL_FILE.bucket, REAL_FILE.path, REAL_FILE.name,
         REAL_FILE.content.byteLength],
       // 完整时间线：提交 → 退回 → 再提交 → 通过
-      [FIXTURE_IDS.resTimeline, '美德周计划 W3', FIXTURE_IDS.dirVirtueResources, 'weekly_plans',
+      [FIXTURE_IDS.resTimeline, '美德周计划 W3', FIXTURE_IDS.dirVirtue, 'weekly_plans',
         'published', FIXTURE_IDS.teacher, 'S1', 3, null, null, null, null, null],
       // 草稿 + 软删除（回收站）
-      [FIXTURE_IDS.resDraft, '还没写完的教案', FIXTURE_IDS.dirVirtueResources, 'weekly_plans',
+      [FIXTURE_IDS.resDraft, '还没写完的教案', FIXTURE_IDS.dirVirtue, 'weekly_plans',
         'draft', FIXTURE_IDS.teacher, 'S2', 7, null, null, null, null, null],
       // 退回但 V1 没写原因（要标出来，不许编）
-      [FIXTURE_IDS.resRejectNoComment, '被退回的课件', FIXTURE_IDS.dirVirtueResources, 'courseware',
+      [FIXTURE_IDS.resRejectNoComment, '被退回的课件', FIXTURE_IDS.dirVirtue, 'courseware',
         'rejected', FIXTURE_IDS.teacher, 'S1', 4, null, null, null, null, null],
       // 有版本行的资源
-      [FIXTURE_IDS.resVersioned, '多版本的美德课件', FIXTURE_IDS.dirVirtueOutline, 'courseware',
+      [FIXTURE_IDS.resVersioned, '多版本的美德课件', FIXTURE_IDS.dirVirtue, 'courseware',
         'published', FIXTURE_IDS.admin, null, null, null, null, null, null, null],
       // 声称有文件但源里没有 → MISSING_FILE（不许造文件）
-      [FIXTURE_IDS.resMissingFile, '文件丢了的教案', FIXTURE_IDS.dirVirtueResources, 'weekly_plans',
+      [FIXTURE_IDS.resMissingFile, '文件丢了的教案', FIXTURE_IDS.dirVirtue, 'weekly_plans',
         'published', FIXTURE_IDS.teacher, null, null, null, REAL_FILE.bucket, 'uploads/gone.pdf', 'gone.pdf', 123],
     ]
     for (const [id, title, dir, folderType, status, uploader, semester, week, theme,
@@ -345,7 +359,7 @@ export async function buildV1Fixture() {
         INSERT INTO resources (id, title, program, subject, folder_type, directory_id, semester,
           week_number, theme, status, uploader_id, file_bucket_id, file_path, file_name, file_size,
           reviewer_id, reviewed_at, _created_at, _updated_at)
-        VALUES (${id}, ${title}, 'prek', 'prek:virtue', ${folderType}, ${dir}, ${semester},
+        VALUES (${id}, ${title}, 'prek', 'virtue', ${folderType}, ${dir}, ${semester},
           ${week}, ${theme}, ${status}, ${uploader}, ${bucket}, ${path}, ${fileName}, ${size},
           ${status === 'published' ? FIXTURE_IDS.admin : null},
           ${status === 'published' ? T.approve : null}, ${T.base}, ${T.base})`
@@ -404,9 +418,15 @@ export async function insertUnassignedResource() {
   const sql = postgres(FIXTURE_URL, { max: 1, onnotice: () => {} })
   try {
     await sql`
+      /*
+        这条代表"无法确定目录归属"。注意**不能**只用 directory_id = NULL 来表达：
+        生产 V1 里 directory_id 为 NULL 的资源照样能靠元组落位（76b60eb6 就是），
+        真正的"落不下去"是 **folder_type 在 V1 自己的分类表里没有对应资料夹**
+        （research_archive 就是这种），落位器会拒绝猜、整批停下并写出未归属清单。
+      */
       INSERT INTO resources (id, title, program, subject, folder_type, directory_id, status, uploader_id)
-      VALUES (${FIXTURE_IDS.resUnassigned}, '不知道放哪的资源', 'prek', 'prek:virtue',
-              'courseware', NULL, 'draft', ${FIXTURE_IDS.teacher})`
+      VALUES (${FIXTURE_IDS.resUnassigned}, '不知道放哪的资源', 'prek', 'virtue',
+              'research_archive', NULL, 'draft', ${FIXTURE_IDS.teacher})`
   } finally {
     await sql.end({ timeout: 5 })
   }

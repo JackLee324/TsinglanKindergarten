@@ -6,7 +6,7 @@
  * `docs/PRODUCTION_RESOURCE_DIRECTORY_RESOLUTION.md`。
  *
  * 业主 Stage 12B §6/§7/§8 要的就是这个：不是"大概能落位"，而是
- * 349 条逐条可解释：`resource_id → 旧元组 → V2 directory code → V2 路径 → 为什么`。
+ * 每条逐条可解释：`resource_id → 旧元组 → V2 directory code → V2 路径 → 为什么`。
  *
  * 它**离线跑**（只读那份 ndjson 快照），不连生产库、不写任何库。
  *
@@ -127,7 +127,7 @@ L.push(`| 目录节点数 | ${directories.length} |`)
 L.push('')
 L.push(
   resolved === resources.length && unresolved === 0 && fallbackToSection === 0
-    ? '**Gate：PASS**（349/349 精确落位，0 fallback，0 unresolved）'
+    ? `**Gate：PASS**（${resolved}/${resources.length} 精确落位，${fallbackToSection} fallback，${unresolved} unresolved）`
     : '**Gate：FAIL** —— 见下面的未解决清单',
 )
 L.push('')

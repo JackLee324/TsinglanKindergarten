@@ -15,7 +15,7 @@
 | **subject-level fallback** | **0**（必须为 0） |
 | 目录节点数 | 69 |
 
-**Gate：PASS**（349/349 精确落位，0 fallback，0 unresolved）
+**Gate：PASS**（347/347 精确落位，0 fallback，0 unresolved）
 
 ## 每个目标目录的资源数
 

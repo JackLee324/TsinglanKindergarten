@@ -178,13 +178,17 @@ describe('A. 合成夹具：规则逐条生效', () => {
       WHERE entity = 'resource' AND v1_id = ${FIXTURE_IDS.resPublished}`)
     assert.equal(row.legacy.folderType, 'curriculum_outline')
     assert.equal(row.legacy.program, 'prek')
-    assert.equal(row.legacy.subject, 'prek:virtue')
+    // V1 的 subject 是**纯科目名**（生产快照实测：prek/english、prek/virtue 这种），
+    // legacy 里必须原样保留它，不能写成转换后的 code。
+    assert.equal(row.legacy.subject, 'virtue')
     assert.equal(row.legacy.semester, 'S1')
     assert.equal(row.legacy.weekNumber, 3)
     assert.equal(row.legacy.theme, '主题一')
     assert.equal(row.legacy.v1Status, 'published')
     // 落点与依据也要留痕：任何一条资源都能回答"现在在哪、凭什么在那儿"
-    assert.equal(row.legacy.placedIn, 'folder:outline')
+    // 落点写的是**那个资料夹的 code**（同级还有 placementBasis 记着判定依据），
+    // 加上 V2 侧的 directory_id，任何一条资源都能回答"现在在哪、凭什么在那儿"
+    assert.equal(row.legacy.placedIn, 'folder:prek:virtue_outline')
     assert.match(row.legacy.placementBasis, /folder_type/)
     // V2 的业务表里**没有**这些列 —— 这是设计，不是遗漏。
     const columns = await withSql((sql) => sql`
@@ -433,7 +437,8 @@ describe('B. 拒绝路径：宁可停下，不许猜', () => {
         '--unassigned', unassignedPath,
       ])
       assert.notEqual(code, 0, `必须失败，实际：\n${out}`)
-      assert.match(out, /无目录归属|目录归属/)
+      // 输出要说清"为什么落不下去、还不许猜"，并指出清单写在哪
+      assert.match(out, /目录无法唯一确定|UNRESOLVED_DIRECTORY|无目录归属/)
       assert.equal(existsSync(unassignedPath), true, '要留下清单让人去决定')
       assert.match(readFileSync(unassignedPath, 'utf8'), /不知道放哪的资源/)
 
@@ -442,7 +447,7 @@ describe('B. 拒绝路径：宁可停下，不许猜', () => {
         SELECT count(*)::int AS n FROM resources WHERE id = ${FIXTURE_IDS.resUnassigned}`)
       assert.equal(row.n, 0)
       // 它必须出现在清单里（人去决定），而不是被跳过之后无人知晓
-      assert.match(readFileSync(unassignedPath, 'utf8'), /没有目录归属|找不到对应节点/)
+      assert.match(readFileSync(unassignedPath, 'utf8'), /无法确定目录归属|没有目录归属/)
     } finally {
       await deleteUnassignedResource()
     }

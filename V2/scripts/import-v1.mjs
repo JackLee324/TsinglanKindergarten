@@ -781,7 +781,15 @@ async function main() {
 
       // ── 资源 ────────────────────────────────────────────────────────────
       const fileCandidates = []
-      const unassigned = []
+      /*
+        ⚠️ 这里必须是 `resolutionFailures` 这**同一个**数组，不能另起一个空的。
+
+        原先写的是 `const unassigned = []`，而落位失败时往 `resolutionFailures` 里 push ——
+        两个数组互不相干。后果正是最要命的那种：导入因为"资源落不下去"整批中止时，
+        交给运营的**未归属清单里写着"（本机三个 V1 库里都没有这种资源。）"**，
+        报告里也永远写"资源无目录归属：0"。**最需要这份清单的时刻，它恰好是空的。**
+      */
+      const unassigned = resolutionFailures
       const versionCount = new Map(v1.versionCounts.map((r) => [r.resource_id, r.n]))
       const publishedAtByResource = new Map()
 
