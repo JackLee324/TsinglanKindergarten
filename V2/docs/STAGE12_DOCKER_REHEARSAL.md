@@ -21,7 +21,7 @@ Internet → HTTPS → Nginx（TLS / 安全头 / 429 限流 / XFF 覆盖）→ V
 
 | 生产 | 演练（本机） |
 |---|---|
-| Zeabur 边缘 TLS + 正式域名 | Nginx 容器 + 自签证书（`v2.localhost:8443`，SAN 含 `s3.localhost`） |
+| Zeabur 边缘 TLS + 正式域名 | Nginx 容器 + **本地开发 CA 签发**的证书（`v2.localhost:8443`，SAN 含 `s3.localhost`）；CA 由 `deploy/rehearsal-tls.mjs` 生成、由业主加入 macOS 信任库 |
 | Zeabur Postgres | compose 里的 `postgres:16-alpine` |
 | Cloudflare R2 | 宿主机上的 SeaweedFS S3 网关（项目测试一直在用的那个） |
 | — | `deploy/rehearsal-*.mjs` 两个小工具只在演练里用 |
@@ -125,21 +125,31 @@ node scripts/load-v1-snapshot.mjs
 # 1) 起演练用的外部存储 + V1 桥（两个后台进程）
 node deploy/rehearsal-storage.mjs &
 node deploy/rehearsal-v1-bridge.mjs &
+# 1.5) 演练证书：生成开发 CA 与站点证书（**首次或换机器时一次**）
+node deploy/rehearsal-tls.mjs
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$PWD/deploy/tls/ca.pem"
+#      ⚠️ 必须做这一步：上传的字节是浏览器**跨域直传**到 s3.localhost 的，
+#         那个 origin 的证书要**各自**被信任；不被信任时跨域子请求不弹警告页、
+#         只让 fetch 抛错，界面显示成"网络中断"（2026-10-09 实际踩到，见
+#         docs/UPLOAD_STORAGE_FIX_REPORT.md §8）
 # 2) 构建 + 起栈
 docker compose --env-file .env.deploy -f docker-compose.yml -f docker-compose.rehearsal.yml up -d --build
 # 3) 迁移 + 导入（导入**在应用容器里**跑）
 docker compose --env-file .env.deploy exec -T app node scripts/migrate.mjs up
 set -a; . ./.env.deploy; set +a
-NODE_EXTRA_CA_CERTS=$PWD/deploy/tls/fullchain.pem node scripts/import-v1.mjs \
+NODE_EXTRA_CA_CERTS=$PWD/deploy/tls/ca.pem node scripts/import-v1.mjs \
   --source postgresql://…/qls_v1_prod_rehearsal \
   --target "postgresql://qls:$POSTGRES_PASSWORD@127.0.0.1:5433/qls_prod" \
   --v1-storage local:$PWD/.devdata/rehearsal-v1-files --report .migration/rehearsal-import.md
 # 4) 自检 + 真实浏览器
-node deploy/verify.mjs --base https://v2.localhost:8443 --cacert deploy/tls/fullchain.pem \
+node deploy/verify.mjs --base https://v2.localhost:8443 --cacert deploy/tls/ca.pem \
   --http-port 10088 --expected resources=349,users=24,directories=69,resource_files=2
-PRODUCTION_BASE_URL=https://v2.localhost:8443 PRODUCTION_INSECURE_TLS=1 \
+#    ⚠️ 开发 CA 装好之后**不要**再设 PRODUCTION_INSECURE_TLS ——
+#       那个参数会跳过证书校验，等于把"用户普通浏览器能不能连通存储"这一层遮住
+PRODUCTION_BASE_URL=https://v2.localhost:8443 \
+  PRODUCTION_STORAGE_ORIGIN=https://s3.localhost:8443 \
   PRODUCTION_ADMIN_USER=TsinglanAdmin PRODUCTION_ADMIN_PASSWORD=… \
-  NODE_EXTRA_CA_CERTS=$PWD/deploy/tls/fullchain.pem \
+  NODE_EXTRA_CA_CERTS=$PWD/deploy/tls/ca.pem \
   node --test tests/production/production-browser.test.mjs
 ```
 

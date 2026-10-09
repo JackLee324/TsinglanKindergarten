@@ -237,3 +237,26 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 > 在业主完成这一步之前，浏览器里仍会看到"您的连接不是私密连接"（这次是**新 CA 未被信任**，
 > 与 §8.1 的自签叶子证书不同：装上 CA 后两个 origin 会**同时**消失告警）。
+
+## 8.8 业主装好 CA 之后的**无豁免**复验（全部 PASS）
+
+业主执行 `security add-trusted-cert` 之后，本轮用**不带任何证书参数**的浏览器复验：
+
+| 检查 | 结果 |
+|---|---|
+| 系统信任库 | `QLS V2 Rehearsal Dev CA` 已在 `/Library/Keychains/System.keychain`（`find-certificate` 命中） |
+| 链校验 | `openssl verify -CAfile deploy/tls/ca.pem deploy/tls/fullchain.pem` → **OK** |
+| 应用 origin 打开 | **无证书警告页**（`title="清澜山幼儿园教师资源平台"`，页面直接渲染） |
+| 页面跨域连存储 origin | **成功**（此前是 `Failed to fetch`） |
+| 真实 UI 上传（登录→目录页→对话框→提交） | **成功**，跳转 `/resources/<id>`，无"网络中断" |
+| 文件登记 / 预览 | **1 个文件（78 B）/ 预览 HTTP 200** |
+| 全程控制台与网络 | 无未处理异常、无失败请求（allowlist 内只有探针那条预期 403） |
+| 探针资源清理 | `purge` HTTP 201 |
+| **部署级浏览器门禁（不设 `PRODUCTION_INSECURE_TLS`）** | **10 / 10 PASS** |
+| 样式修复回归 | CSS 28 472 B、`.flex{` 在、`@theme` 残留 0 |
+
+截图：`.devdata/login-render-evidence/trusted-upload-after.png`（详情页显示"文件 共 1 个"，
+`trusted-upload.png 78 B`，可预览/下载）。
+
+> 结论：演练环境的证书层从"自签、浏览器无法信任"变为"开发 CA 签发、系统已信任"，
+> 于是**上传的跨域直传这一层也真正在浏览器里跑通并被门禁覆盖**（此前门禁因跳过证书校验而看不见它）。
