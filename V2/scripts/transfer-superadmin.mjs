@@ -7,10 +7,19 @@
  *
  * 那"换人"怎么办？—— 走这个脚本。它是唯一被允许改变"谁是超级管理员"的入口：
  *
+ *   DATABASE_URL=postgresql://用户@主机:5432/库名 \
  *   TRANSFER_FROM_USERNAME=TsinglanAdmin \
  *   TRANSFER_TO_USERNAME=<新管理员的用户名> \
  *   TRANSFER_CONFIRM=TRANSFER-SUPERADMIN \
  *   node scripts/transfer-superadmin.mjs
+ *
+ * 三条硬规则（业主 Stage 13C §4 加固）：
+ *   · **没有 `DATABASE_URL` 就立刻退出**，不做任何数据库操作 —— 运维脚本不接受
+ *     任何默认库。以前这里默认回退到本机开发库，容易让操作者误以为
+ *     自己正在操作目标环境（最高权限的动作不该靠"看起来像")；
+ *   · 连库**之前**打印**脱敏**目标（`user@host:port/dbname`，不含口令）并标明
+ *     本机 / 非本机；口令永不回显、永不进日志；
+ *   · 仍要求 `TRANSFER_CONFIRM=TRANSFER-SUPERADMIN` 字面量。
  *
  * 它在**一个事务**里做四件事：
  *   1. 锁定并核对前置状态：`FROM` 当前必须是有效管理员，`TO` 必须存在且是有效教师；
@@ -31,14 +40,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import postgres from 'postgres'
+import { announceDatabaseTarget, resolveDatabaseTarget } from './lib/db-target.mjs'
 
 const require = createRequire(import.meta.url)
 const { ADMIN_ROLE } = require('../dist/shared/permissions.js')
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 void ROOT
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? 'postgresql://qlsadmin:qlsdev_local_only@127.0.0.1:55432/qls_v2_dev'
 const from = (process.env.TRANSFER_FROM_USERNAME ?? '').trim()
 const to = (process.env.TRANSFER_TO_USERNAME ?? '').trim()
 const confirm = process.env.TRANSFER_CONFIRM ?? ''
@@ -47,6 +55,16 @@ const CONFIRM_TOKEN = 'TRANSFER-SUPERADMIN'
 function fail(message, code = 2) {
   console.error(`✖ ${message}`)
   process.exit(code)
+}
+
+/*
+  ⚠️ 目标解析放在**最前面**：只要没给 `DATABASE_URL` 就立刻退出，
+  绝不回退到任何默认库（业主 Stage 13C §4）。这条检查在 `postgres(...)` 之前，
+  所以"缺变量"时**一个连接都不会建立**，更不会改到任何数据。
+*/
+const target = resolveDatabaseTarget(process.env)
+if (!target.ok) {
+  fail(target.reason)
 }
 
 if (from === '' || to === '') {
@@ -64,7 +82,11 @@ if (from.toLowerCase() === to.toLowerCase()) {
   fail('交接双方是同一个人 —— 没有要交接的东西。')
 }
 
-const sql = postgres(DATABASE_URL, { max: 1, onnotice: () => {} })
+console.log(`超级管理员交接：${from} → ${to}`)
+announceDatabaseTarget(target)
+console.log('  确认字符串：已提供（TRANSFER-CONFIRM）')
+
+const sql = postgres(target.url, { max: 1, onnotice: () => {} })
 let code = 0
 try {
   const result = await sql.begin(async (tx) => {
@@ -130,7 +152,9 @@ try {
     console.log('  审计：user.role_transfer_out / user.role_transfer_in 各一条')
   }
 } catch (error) {
+  // 只打印 message：连接串（可能含口令）不在这里回显 —— 目标已经脱敏打印过了。
   console.error(`✖ 交接失败：${error.message}`)
+  console.error(`  （目标：${target.redacted}；如需核查请对照上面那一行脱敏目标）`)
   code = 1
 } finally {
   await sql.end({ timeout: 3 })

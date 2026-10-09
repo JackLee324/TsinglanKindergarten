@@ -12,7 +12,9 @@
 两条测试资源排除              : PASS（含从表，引用完整）
 目录映射（对最终产物重跑）      : PASS（347/347，0 fallback）
 端到端导入（真实流水线演练）    : PASS（347/24/69/0/621，0 孤儿）
-账号与权限                   : BLOCKED（管理员身份 + 开放目录待业主确认）
+超级管理员身份                : PASS（唯一账号 `TsinglanAdmin`，业主 Stage 13B §2 已确认）
+教师目录授权                 : BLOCKED（24 个迁移账号 0 条授权；开放目录必须由业务给出）
+生产账号登录                 : NOT RUN（须在正式环境用真实账号验证一次）
 文件迁移                     : PASS（范围核实：产出 0 个业务文件）
 安全（Cookie/HTTPS/限流/CSRF…）: NOT RUN（必须在真实部署上验证）
 ZEABUR 部署                  : BLOCKED（本机无 Zeabur 访问能力）
@@ -184,13 +186,20 @@ sha256 `b1a2e0e8b3fec3c1b2c24ade483f97aff7810e81bea41786fcdd395c511b708e`（1 41
 > 注意：迁移**刻意不发权限**（`user_permissions = 0`），与 §7 的设计一致 —— 上线当天必须由
 > 管理员按矩阵确认后初始化；在此之前老师能登录但看不到内容。
 
-## 7. §6 账号与权限（BLOCKED）
+## 7. §6 账号与权限（身份 PASS / 授权 BLOCKED / 登录 NOT RUN）
 
-`docs/PRODUCTION_PERMISSION_MATRIX.md` 已生成：24 个账号，逐条列出 V1 角色、建议身份、
-开放目录、当前权限（**0 条**）、状态、证据来源。
+`docs/PRODUCTION_PERMISSION_MATRIX.md` 已生成并**在 Stage 13C 同步**：24 个账号，
+逐条列出 V1 角色、建议身份、开放目录、当前权限（**0 条**）、状态、证据来源。
 
-**BLOCKED 的三项**：① 谁是管理员（V1 角色名不自动等于 V2 身份，每条必须人工确认）；
-② 每位教师开放哪些目录（无法从数据推断）；③ 口令兼容的**真实登录验证**（须在生产环境用真实账号跑一次）。
+| 子项 | 状态 | 说明 |
+|---|---|---|
+| 谁是超级管理员 | **PASS** | 业主 Stage 13B §2 已确认：唯一账号 `TsinglanAdmin`。服务端强制唯一（`POST /api/users` 只建教师；`PATCH` 升管理员 → 400 `SUPERADMIN_TRANSFER_REQUIRED`；换人只走 `scripts/transfer-superadmin.mjs`）。**这一项不再需要"逐条确认"**。 |
+| 每位教师开放哪些目录 | **BLOCKED** | 24 个账号当前 **0 条**授权。V1 导出里 `subject_permissions` / `account_scopes` / `account_permission_overrides` **都是 0 行** —— 没有任何可推导的数据，必须由业务给出。**不得**给所有教师开放所有目录，**不得**按 V1 角色名直接换算成"全班型全科目可见"。 |
+| 生产账号登录 | **NOT RUN** | V1 哈希（`scrypt$16384$8$1…`）与 V2 校验逻辑兼容，但必须在**正式环境**用**真实账号**各登录一次才算通过；在演练库登录成功不算。 |
+
+决策材料（只读生成，不写库）：`node scripts/propose-directory-grants.mjs`
+（从已校验的迁移文件里读 24 个账号 + 69 个目录，产出决策清单，业主填写后再由管理员在
+`/admin/permissions` 上初始化）。**确认唯一管理员 ≠ 完成教师权限初始化。**
 
 ## 8. §7 文件迁移（PASS：范围核实为 0 业务对象）
 
@@ -274,13 +283,30 @@ V1 存储里的两个 smoke 对象保持原样、不动；V2 采用独立 Bucket
 
 **特别声明**：在备份、恢复演练与 V2 正式验收完成之前，**不得**删除 V1 数据库资源 —— 本轮没有删除任何东西。
 
-## 12. 下一步（解除阻断后立即执行，顺序固定）
+## 12. 下一步（Stage 13C 的顺序，业主指定）
 
-1. 业主提供 Zeabur 访问（三选一，见 §2）或按给定参数在控制台部署 V2；
-2. 重跑 `npm test / typecheck / lint / build` 全量，取本轮 SHA 的结果；
-3. 创建独立 V2 PostgreSQL → 备份 V1 库并**实际演练恢复**；
-4. 用 `v2-cutover-20261008.ndjson`（sha256 `b01c1fec…`，先跑 `--check`）导入 V2 库，
-   核对 **347 / 24 / 69 / 0 / 621** 与 dangling = 0；
-5. 初始化权限（按矩阵逐条确认后执行）；
-6. 对正式域名跑浏览器 E2E（桌面 + 移动）；
-7. 全部通过后才切换域名与退役 V1；任何一项不过 → 停在安全边界并报告。
+0. **文档与脚本收尾**（本轮已做）：矩阵/预检报告状态同步、`transfer-superadmin.mjs`
+   要求显式 `DATABASE_URL` 并打印脱敏目标、只读的 R2 清单工具与授权决策清单工具。
+1. **账号处理方式与教师开放目录**：业主在决策清单上填写 → 管理员在 `/admin/permissions` 初始化；
+   全程保持 `TsinglanAdmin` 为唯一超级管理员。
+2. **取得 R2 对象清单**：用只读凭证或控制台导出对象清单（`scripts/r2-inventory.mjs`），
+   明确文件迁移范围。**未核实以前，不删除、不覆盖任何生产对象。**
+3. **解除 Zeabur 阻断**：建立**独立 V2 PostgreSQL** → 对 V1 库做备份并**实际演练恢复** →
+   在隔离环境完成导入（核对 **347 / 24 / 69 / 0 / 621**，dangling = 0）与部署验证。
+4. **最后才是**正式域名切换、V1 退役与生产浏览器验收（桌面 + 移动，真实账号）。
+   任何一项不过 → 停在安全边界并报告；**目前不重新部署、不删除 V1**。
+
+### 12.1 Stage 13C 门禁（每一项都要"实际执行 + 证据"才算通过）
+
+| # | 门禁 | 命令 / 动作 | 状态 |
+|---|---|---|---|
+| G1 | 迁移文件完整性 | `node scripts/prepare-v2-cutover-snapshot.mjs --check` | PASS（Stage 12C） |
+| G2 | 迁移来源隔离（不得用演练库） | 见 `docs/PRODUCTION_PERMISSION_MATRIX.md` §4 | PASS（文档规则 + 计数器对照） |
+| G3 | 超级管理员唯一 | `scripts/transfer-superadmin.mjs` 加固 + `account-privileges.test.mjs` | PASS（Stage 13C 本轮） |
+| G4 | 教师目录授权决策 | `node scripts/propose-directory-grants.mjs` → 业主填写 → 界面初始化 | **BLOCKED**（等业务） |
+| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out …`（只读；需业主给只读凭证或控制台导出） | **BLOCKED**（无凭证） |
+| G6 | 独立 V2 PostgreSQL | Zeabur 控制台建库 | **BLOCKED**（无访问） |
+| G7 | V1 备份 + 恢复演练 | 备份 → 在**另一个**库恢复 → 行数核对 | **NOT RUN** |
+| G8 | Zeabur 预发布部署 + 真实浏览器验收 | `deploy/verify.mjs` + `tests/production/*`（桌面 + 移动） | **NOT RUN** |
+| G9 | 回滚步骤（可执行、经验证） | `docs/DISASTER_RECOVERY.md` + 演练记录 | **NOT RUN** |
+| G10 | 正式切换 + V1 退役 | 维护窗口，前置条件全部 PASS | **NOT RUN（禁止先做）** |

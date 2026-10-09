@@ -328,6 +328,42 @@ describe('④ 超级管理员唯一化（业主 Stage 13B §2）', () => {
     assert.deepEqual(state.admins, ['ap_admin'], `只能有一名管理员：${JSON.stringify(state.admins)}`)
   })
 
+  test('交接脚本：**没有 DATABASE_URL 就立刻退出**，一个连接都不建（业主 Stage 13C §4）', async () => {
+    // 以前这里是 `process.env.DATABASE_URL ?? '本机开发库'` —— 对最高权限的
+    // 运维动作来说，"默认回退"会让操作者以为自己在操作目标环境。
+    // 现在**空值也当作没给**（'' 与缺失同样拒绝），并且拒绝发生在连库之前。
+    const before = await withSql(async (sql) => {
+      const rows = await sql`SELECT username, role FROM users ORDER BY username`
+      return rows.map((r) => `${r.username}:${r.role}`)
+    })
+
+    for (const label of ['缺失', '空白']) {
+      const { code, out } = await runProjectScriptFailure('scripts/transfer-superadmin.mjs', {
+        DATABASE_URL: '', // 空白值；"缺失"这条由单元测试覆盖解析层
+        TRANSFER_FROM_USERNAME: 'ap_admin',
+        TRANSFER_TO_USERNAME: 'ap7_promote_me',
+        TRANSFER_CONFIRM: 'TRANSFER-SUPERADMIN',
+      })
+      assert.notEqual(code, 0, `${label}：必须非零退出`)
+      assert.match(out, /没有设置 DATABASE_URL/, `${label}：要说清缺什么：${out.slice(0, 200)}`)
+      assert.match(out, /不接受任何默认库/, `${label}：要说明"不猜默认库"：${out.slice(0, 200)}`)
+      // 拒绝信息里可以出现**占位模板**（`postgresql://用户@主机:5432/库名`，给人照做用），
+      // 但不许出现"带口令的连接串"（`user:password@` 形状）—— 那才是泄漏。
+      assert.equal(
+        /:\/\/[^\s@/]+:[^\s@/]+@/.test(out),
+        false,
+        `${label}：拒绝信息里不该出现带口令的连接串：${out.slice(0, 300)}`,
+      )
+    }
+
+    // 数据**一个字都没变**（连库都没连）
+    const after = await withSql(async (sql) => {
+      const rows = await sql`SELECT username, role FROM users ORDER BY username`
+      return rows.map((r) => `${r.username}:${r.role}`)
+    })
+    assert.deepEqual(after, before, '被拒的执行不能动任何数据')
+  })
+
   test('交接脚本：缺确认字符串时拒绝执行（防止手误换人）', async () => {
     const { code, out } = await runProjectScriptFailure('scripts/transfer-superadmin.mjs', {
       TRANSFER_FROM_USERNAME: 'ap_admin',
@@ -358,6 +394,19 @@ describe('④ 超级管理员唯一化（业主 Stage 13B §2）', () => {
     })
     assert.match(out, /超级管理员交接完成/, `脚本应当报成功：${out.slice(0, 300)}`)
     assert.match(out, /当前唯一有效管理员：ap7_promote_me/)
+
+    /*
+      目标必须**在动数据之前**脱敏打印出来（业主 Stage 13C §4）：
+      操作者要能一眼确认"我操作的是哪个库"，但口令**绝不能**出现在输出里。
+      测试库口令是 `qlsdev_local_only`，它出现在输出里就是泄漏。
+    */
+    assert.match(out, /目标数据库：postgresql:\/\/[^\s]*@127\.0\.0\.1:55432\/qls_v2_test/, `要打印脱敏目标：${out.slice(0, 400)}`)
+    assert.match(out, /环境判定：本机/, `要标明本机/非本机：${out.slice(0, 400)}`)
+    assert.equal(
+      out.includes('qlsdev_local_only'),
+      false,
+      `输出里**不能**出现口令：${out.slice(0, 400)}`,
+    )
 
     const after = await withSql(async (sql) => {
       const admins = await sql`SELECT username FROM users WHERE role = 'ADMIN' ORDER BY username`
