@@ -304,7 +304,7 @@ V1 存储里的两个 smoke 对象保持原样、不动；V2 采用独立 Bucket
 | G2 | 迁移来源隔离（不得用演练库） | 见 `docs/PRODUCTION_PERMISSION_MATRIX.md` §4 | PASS（文档规则 + 计数器对照） |
 | G3 | 超级管理员唯一 | `scripts/transfer-superadmin.mjs` 加固 + `account-privileges.test.mjs` | PASS（Stage 13C 本轮） |
 | G4 | 教师目录授权决策 | `node scripts/propose-directory-grants.mjs` → 业主填写 → 界面初始化 | **BLOCKED**（等业务） |
-| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out …`（只读；需业主给只读凭证或控制台导出）。**Stage 13C.1/13C.2/13C.3 加固**：默认只接受 https（http 仅限本机模拟器 + 显式开关）、CSV 走 RFC 4180、`--max` 严格解析（`0`/负数/小数/非数字/缺值 → 退出码 2，不再静默退化成全量）且产物恒标 `complete=false`、控制台导出必须 `--expect-count` 核对一致才标完整（`IsTruncated`/下一页令牌/总数不符直接失败）、声明的 Prefix 真的过滤对象集合、**对比还要求存储身份一致**（实时列举=端点+凭据指纹；控制台导出=`--storage-id` 声明；未知或不同一律拒绝，桶名相同不算证据）、**旧清单逐字段自洽校验**，`--compare` 拒绝不完整/矛盾/身份不明的清单 | **BLOCKED**（无凭证）；工具侧已加固并复测 |
+| G5 | R2 对象清单 | `node scripts/r2-inventory.mjs --out …`（只读；需业主给只读凭证或控制台导出）。**Stage 13C.1/13C.2/13C.3 加固**：默认只接受 https（http 仅限本机模拟器 + 显式开关）、CSV 走 RFC 4180、`--max` 严格解析（`0`/负数/小数/非数字/缺值 → 退出码 2，不再静默退化成全量）且产物恒标 `complete=false`、控制台导出必须 `--expect-count` 核对一致才标完整（`IsTruncated`/下一页令牌/总数不符直接失败）、声明的 Prefix 真的过滤对象集合、**对比还要求存储身份一致**（实时列举=端点+凭据指纹；控制台导出=`--storage-id` 声明；未知或不同一律拒绝，桶名相同不算证据）、**身份类型必须与来源匹配**（API 清单必须是指纹且端点与 scope 一致，控制台清单不许伪装成指纹）、**旧清单逐字段自洽校验且两份都在输出差异前校验**，`--compare` 拒绝不完整/矛盾/身份不明的清单 | **BLOCKED**（无凭证）；工具侧已加固并复测 |
 | G6 | 独立 V2 PostgreSQL | Zeabur 控制台建库 | **BLOCKED**（无访问） |
 | G7 | V1 备份 + 恢复演练 | 备份 → 在**另一个**库恢复 → 行数核对 | **NOT RUN** |
 | G8 | Zeabur 预发布部署 + 真实浏览器验收 | `deploy/verify.mjs` + `tests/production/*`（桌面 + 移动） | **NOT RUN** |

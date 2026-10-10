@@ -28,6 +28,90 @@ const REQUIRED = [
   ['R2_SECRET_ACCESS_KEY', '只读 Secret Key'],
 ]
 
+/** 指纹格式：`sha256:` + 16 位十六进制（生成与校验共用同一份定义）。 */
+export const STORAGE_FINGERPRINT_PATTERN = /^sha256:[0-9a-f]{16}$/
+
+/**
+ * 存储身份的**自洽校验**（业主 Stage 13C.4）。
+ *
+ * 为什么不能只在 `assertComparable` 里看身份：产物是磁盘上的文件。
+ * 如果只检查"身份能对上"，那么把一份 **API 清单**的身份块改成
+ * `{kind:'operator-declared', declaredId:'随便一个标签'}`，比较逻辑就会转而
+ * 走"标签相同即同一存储"那条路，**绕过指纹校验** —— 而那正是 13C.3 加指纹的用意。
+ * 所以这里把"身份类型必须与来源匹配"钉死：
+ *
+ *   · `api-list` → 必须 `api-endpoint-fingerprint`，指纹格式合法，
+ *     且 `storageIdentity.endpointHost === scope.endpointHost`；
+ *     不许是 `operator-declared` / `unknown`（补 `declaredId` 也没用，指纹照样必须验）。
+ *   · `console-export` → 只能 `operator-declared`（标签非空、指纹为空）
+ *     或 `unknown`（指纹与标签都为空）——**不许伪装成 API 指纹清单**。
+ *   · `unknown` 是"诚实的未知"，允许存在，但 `assertComparable` 会拒绝它参与比较。
+ *
+ * @param {any} artifact
+ * @returns {{ok: true} | {ok: false, reason: string}}
+ */
+function assertStorageIdentityConsistent(artifact) {
+  const identity = artifact.storageIdentity
+  const method = artifact.scope?.method
+  if (identity === null || typeof identity !== 'object') {
+    return { ok: false, reason: '缺少 storageIdentity（无法确认清单来自哪个存储）' }
+  }
+  const { kind, fingerprint = null, declaredId = null, endpointHost = null } = identity
+  if (!['api-endpoint-fingerprint', 'operator-declared', 'unknown'].includes(kind)) {
+    return { ok: false, reason: `storageIdentity.kind 未知（${String(kind)}）` }
+  }
+  if (declaredId !== null && (typeof declaredId !== 'string' || declaredId.trim() === '')) {
+    return { ok: false, reason: 'storageIdentity.declaredId 必须是非空字符串或 null' }
+  }
+
+  if (method === 'api-list') {
+    if (kind !== 'api-endpoint-fingerprint') {
+      return {
+        ok: false,
+        reason:
+          `实时列举清单的身份类型必须是 api-endpoint-fingerprint，实际是 ${String(kind)}` +
+          '（改类型 / 补 declaredId 都不能绕过指纹校验）',
+      }
+    }
+    if (typeof fingerprint !== 'string' || !STORAGE_FINGERPRINT_PATTERN.test(fingerprint)) {
+      return { ok: false, reason: `实时列举清单的指纹缺失或格式不合法（${String(fingerprint)}）` }
+    }
+    if (endpointHost !== artifact.scope?.endpointHost) {
+      return {
+        ok: false,
+        reason:
+          `身份里记录的端点（${String(endpointHost)}）与 scope.endpointHost（${String(artifact.scope?.endpointHost)}）不一致`,
+      }
+    }
+    return { ok: true }
+  }
+
+  if (method === 'console-export') {
+    if (kind === 'api-endpoint-fingerprint') {
+      return {
+        ok: false,
+        reason: '控制台导出没有端点/账号信息，不能伪装成 api-endpoint-fingerprint（指纹只由实时列举生成）',
+      }
+    }
+    if (kind === 'operator-declared') {
+      if (declaredId === null) {
+        return { ok: false, reason: 'operator-declared 身份必须带非空的 declaredId（--storage-id）' }
+      }
+      if (fingerprint !== null) {
+        return { ok: false, reason: 'operator-declared 身份的指纹字段必须为空（控制台导出算不出指纹）' }
+      }
+      return { ok: true }
+    }
+    // unknown：必须是"真的未知"——不允许夹带标签或指纹
+    if (declaredId !== null || fingerprint !== null) {
+      return { ok: false, reason: 'unknown 身份必须保持未知（不得夹带 declaredId 或 fingerprint）' }
+    }
+    return { ok: true }
+  }
+
+  return { ok: false, reason: `scope.method 未知（${String(method)}），无法判断身份类型是否匹配` }
+}
+
 /**
  * 判定"本机地址"。`--allow-http-local` 只对这些主机生效。
  *
@@ -160,6 +244,10 @@ export function buildStorageIdentity({ method, endpointHost, accessKeyId = null,
   if (method === 'api-list' && endpointHost !== null && endpointHost !== undefined) {
     const seed = `${endpointHost}|${accessKeyId ?? ''}`
     const fingerprint = `sha256:${createHash('sha256').update(seed).digest('hex').slice(0, 16)}`
+    if (!STORAGE_FINGERPRINT_PATTERN.test(fingerprint)) {
+      // 自检：生成与校验必须用同一个格式定义（改错会立刻炸，而不是悄悄放过）
+      throw new Error(`内部错误：指纹格式与 STORAGE_FINGERPRINT_PATTERN 不一致（${fingerprint}）`)
+    }
     return { kind: 'api-endpoint-fingerprint', fingerprint, declaredId: declared, endpointHost }
   }
   if (declared === null) {
@@ -390,6 +478,11 @@ export function assertArtifactSelfConsistent(artifact) {
   if (typeof artifact.scope?.prefix !== 'string') {
     return { ok: false, kind: 'inconsistent', reason: 'scope.prefix 缺失' }
   }
+  // 身份类型必须与来源匹配（业主 Stage 13C.4）：堵住"改身份类型绕过指纹校验"
+  const identity = assertStorageIdentityConsistent(artifact)
+  if (!identity.ok) {
+    return { ok: false, kind: 'inconsistent', reason: identity.reason }
+  }
   return { ok: true }
 }
 
@@ -408,18 +501,25 @@ export function assertArtifactSelfConsistent(artifact) {
  * @param {any} current 当前清单（至少含 complete/scope/storageIdentity）
  */
 export function assertComparable(previous, current) {
+  /*
+    **两份都要完整自洽**（业主 Stage 13C.3 §C + 13C.4）。
+    校验放在这个函数内部（而不是指望调用方先查一遍）：任何人拿到这两份清单
+    调这个函数，得到的都是同一个结论；也不存在"上游松、下游严"的缝。
+  */
   const prevConsistent = assertArtifactSelfConsistent(previous)
   if (!prevConsistent.ok) {
-    const kind = prevConsistent.kind === 'incomplete' ? 'incomplete' : prevConsistent.kind
-    return { ok: false, kind, reason: `前一份清单不可用于对账：${prevConsistent.reason}。` }
-  }
-  if (current.complete !== true) {
     return {
       ok: false,
-      kind: 'incomplete',
-      reason:
-        '当前清单是**不完整的**（complete=false）—— 不完整清单不能用来判断"对象是否消失"；' +
-        '请先跑一次全量列举（不要用 --max / 补齐 --expect-count）。',
+      kind: prevConsistent.kind,
+      reason: `前一份清单不可用于对账：${prevConsistent.reason}。`,
+    }
+  }
+  const currentConsistent = assertArtifactSelfConsistent(current)
+  if (!currentConsistent.ok) {
+    return {
+      ok: false,
+      kind: currentConsistent.kind,
+      reason: `当前清单不可用于对账：${currentConsistent.reason}。`,
     }
   }
 

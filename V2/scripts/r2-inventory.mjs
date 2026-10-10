@@ -50,7 +50,7 @@
  * 退出码：0 成功 / 2 缺配置或参数不合法（含"默认拒绝 http"）
  *         3 列举失败 / 4 产物已存在（未给 --force）
  *         5 对比发现对象消失（**要人来判断，不能静默通过**）
- *         6 对比里有不完整 / 字段自相矛盾 / 来源身份无法确认的清单（拒绝对比）
+ *         6 对比里有不完整 / 字段自相矛盾 / **身份类型与来源不符** / 来源身份无法确认的清单（拒绝对比）
  *         7 对比范围不同、或存储身份不同（拒绝对比）
  *         8 清单来源解析失败（CSV/JSON 坏行、缺 key、非法 size、分页未走完等）
  *         9 预期数量与实际解析结果不一致（不产出可对账的完整清单）
@@ -62,7 +62,6 @@ import { HeadBucketCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/clie
 import { InventorySourceError, parseConsoleExport } from './lib/inventory-source.mjs'
 import {
   applyPrefixFilter,
-  assertArtifactSelfConsistent,
   assertComparable,
   buildInventoryArtifact,
   buildStorageIdentity,
@@ -365,19 +364,12 @@ if (COMPARE !== null) {
     fail(`读不到前一份清单 ${COMPARE}：${error?.message ?? error}`, 6)
   }
   /*
-    当前清单同样要自洽（业主 Stage 13C.3 §C）：用与"前一份"**同一套**判据，
-    避免"上游松、下游严"这种两头都不算错、合起来能放过的缝。
+    把**完整的当前产物**交给 assertComparable：它在内部对两份都做自洽校验
+    （含身份类型与来源匹配，业主 Stage 13C.4），调用方不需要、也不应该
+    自己拼一个"简化版"对象进来 —— 那种简化正是绕过校验的口子。
   */
   const currentArtifact = buildInventoryArtifact({ source, objects, scope, completeness, identity })
-  const currentConsistent = assertArtifactSelfConsistent(currentArtifact)
-  if (!currentConsistent.ok) {
-    fail(`当前清单不能用于对账：${currentConsistent.reason}。`, 6)
-  }
-  const comparable = assertComparable(previous, {
-    complete: completeness.complete,
-    scope,
-    storageIdentity: identity,
-  })
+  const comparable = assertComparable(previous, currentArtifact)
   if (!comparable.ok) {
     /*
       退出码按 kind 选，不靠正则猜：

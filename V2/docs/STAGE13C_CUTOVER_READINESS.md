@@ -1,4 +1,4 @@
-# Stage 13C / 13C.1 / 13C.2 / 13C.3：正式切换就绪（Production Cutover Readiness）
+# Stage 13C / 13C.1 / 13C.2 / 13C.3 / 13C.4：正式切换就绪（Production Cutover Readiness）
 
 > 业主 Stage 13C 的范围是**收尾门禁**，不是加功能：把文档里的矛盾消掉、把最高权限脚本加固、
 > 把"缺什么才能切换"变成一张可执行、可核对的清单。
@@ -20,7 +20,7 @@ Zeabur 预发布 + 真实浏览器验收 : NOT RUN     （前置：解除 Zeabur
 PRODUCTION CUTOVER           : NOT READY
 ```
 
-## 1. 本轮做完的七件事（13C 四件 + 13C.1/13C.2/13C.3 工具加固）
+## 1. 本轮做完的八件事（13C 四件 + 13C.1–13C.4 工具加固）
 
 | # | 事 | 产物 | 证据 |
 |---|---|---|---|
@@ -29,6 +29,7 @@ PRODUCTION CUTOVER           : NOT READY
 | 3 | **预检报告同步 + 门禁清单**（业主 §1/§3） | `docs/CUTOVER_PREFLIGHT_REPORT.md` | §0 结论块拆开写；§7 重写为"身份 PASS / 授权 BLOCKED / 登录 NOT RUN"；新增 §12.1 **G1–G10 门禁表**；§12 按业主给的五步顺序重排 |
 | 4 | **两件只读工具**（业主 §1/§3） | `scripts/propose-directory-grants.mjs`、`scripts/r2-inventory.mjs` | 授权决策清单（不连库、不猜、不覆盖业主填过的表）；R2 对象清单（**源码里没有任何写/删动作**，由 `tests/unit/r2-inventory-safety.test.mjs` 静态盯住） |
 | 5 | **R2 工具加固**（业主 Stage 13C.1 审查发现的 3 个问题） | `scripts/lib/{csv,inventory-source,r2-target}.mjs` | ① **默认只允许 HTTPS**（http 仅限 `--allow-http-local` + 本机地址，远端 http 永远拒绝）；② CSV 改走 **RFC 4180** 解析（引号/内嵌逗号/CRLF/BOM/带引号换行），坏行**报错**而不是跳过；③ 产物带**完整性元数据**（`complete` / `usableForProductionComparison` / `scope`），`--compare` 拒绝不完整清单与范围不一致 |
+| 8 | **身份类型自洽**（业主 Stage 13C.4 复核发现的最后一道缺口） | `scripts/lib/r2-target.mjs` | 自洽校验现在也管身份：`api-list` 清单**必须**是 `api-endpoint-fingerprint`（指纹格式合法、`storageIdentity.endpointHost` 与 `scope.endpointHost` 一致）——把身份块改成 `operator-declared` + 一个标签、或改成 `unknown`，都不再能让比较改走标签匹配从而绕过指纹；控制台导出**只能**是 `operator-declared`（标签非空、指纹为空）或诚实的未知（不带任何标签/指纹），**不许伪装成 API 指纹清单**；`assertComparable` 在输出任何差异之前对**两份**清单都跑完整自洽校验 |
 | 7 | **参数解析与来源身份**（业主 Stage 13C.3 复核发现的 2 个边界） | `scripts/r2-inventory.mjs`、`scripts/lib/r2-target.mjs` | ① **`--max` 严格解析**：判据是"参数有没有出现"而不是"数值是不是 0" —— `--max 0` / 负数 / 小数 / 非数字 / 缺少数值一律退出码 2（以前会被静默变成 0，**绕过"只要用了 `--max` 就不完整"这条门禁**）；② **存储身份**：产物带 `storageIdentity`（实时列举 = `sha256(端点\|AccessKey)` 指纹，只落指纹不落凭据；控制台导出 = `--storage-id <标签>` 操作者声明；都不给 = 未知），**桶名相同不再足以证明是同一个存储** → 身份未知/不同一律拒绝比较；③ **旧清单自洽校验**：`readOnly`/`complete`/`usableForProductionComparison`/`verification`/`reason`/计数/`summary.count`/`scope` 必须互相印证，被手改或旧版本写的产物直接拒绝 |
 | 6 | **完整性最后一道门禁**（业主 Stage 13C.2 复核发现的 3 个边界） | `scripts/r2-inventory.mjs`、`scripts/lib/{inventory-source,r2-target}.mjs` | ① **只要用了 `--max` 就恒不完整**（空桶 / 未触顶 / 刚好等于上限都不例外，两个来源统一）；② **控制台导出不再自动算完整**：必须 `--expect-count <控制台对象数> --expect-source <来源>` 且工具核对一致才标 `complete=true`（产物分开记录「操作者声明」与「工具验证」）；文件自带 `IsTruncated` / 下一页令牌 / 总数不符 → 直接失败；③ **声明的 Prefix 真的过滤对象集合**（不再只改元数据），前缀下没有对象直接拒绝 |
 
@@ -119,6 +120,8 @@ node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects-2.json \
 | 两份清单**存储身份不同**（跨账号同桶名） | 退出码 **7**，且不输出差异 | — |
 | 两份清单**身份无法确认**（控制台导出没给 `--storage-id`） | 退出码 **6**，且不输出差异 | — |
 | 前一份清单**字段不自洽**（被手改 / 旧版本产物） | 退出码 **6**，且不输出差异 | — |
+| 清单**身份类型与来源不符**（API 清单自称"操作者声明"、控制台清单自称指纹） | 退出码 **6**，且不输出差异 | — |
+| API 清单**指纹缺失 / 格式不合法 / 端点与 scope 不一致** | 退出码 **6**，且不输出差异 | — |
 
 **三条保证（Stage 13C.1 加固后）**：
 
@@ -129,7 +132,7 @@ node scripts/r2-inventory.mjs --from-console ~/Downloads/r2-objects-2.json \
 | 完整性 | 默认走完全部分页 → `complete=true`；**只要用了 `--max` → `complete=false`**（无论是否触顶）且 `usableForProductionComparison=false`；控制台导出必须 `--expect-count` 核对一致才算完整；`--compare` 遇到任一份不完整 → 拒绝（退出码 6）；桶/前缀/endpoint 主机不一致 → 拒绝（退出码 7）；`--max` 与 `--compare` 同用 → 直接拒绝（2） |
 | 范围一致性 | 声明的 `--prefix` **真的过滤对象集合**（`prefixFilterApplied=true`），过滤后为空则拒绝产出；没有声明前缀时不会替你把子集说成整桶（只给一句提示）；对比时桶 / 前缀 / endpoint 主机必须完全一致 |
 | 参数解析 | `--max` 只接受**正整数**；`--max 0` / 负数 / 小数 / 非数字 / 缺少数值 → 退出码 **2**（判据是"参数有没有出现"，绝不静默退化成"全量"）；`--max` 与 `--compare` 同用 → 退出码 2 |
-| 存储身份 | 桶名**只在账号内唯一**，跨账号可以重名 —— 所以对比还要求身份一致：实时列举落 `sha256(端点\|AccessKey)` 指纹（不含凭据原文），控制台导出用 `--storage-id <标签>` 声明；**身份未知或不同 → 拒绝比较**（6 / 7） |
+| 身份类型自洽 | 身份类型必须与来源匹配：`api-list` → 必须是指纹（格式合法 + 端点与 `scope` 一致，补 `declaredId` 也没用）；控制台导出 → 只能是"操作者声明（有标签、无指纹）"或"诚实的未知（无标签无指纹）"，伪装成指纹直接拒绝；**身份块被手改的清单进不了比较** |
 | 旧清单自洽 | 对比前逐字段核对 `readOnly` / `complete` / `usableForProductionComparison` / `verification` / `reason` / `expectSource` / `expectedCount` / `observedCount` / `summary.count` / `scope`；**缺字段、互相矛盾、或来源身份不明 → 拒绝**，不接受"补一下元数据再放行" |
 
 **退出码**：0 成功 / 2 参数或配置不合法（含默认拒绝 http、`--max` 取值无效、`--max`+`--compare` 同用）/
@@ -207,10 +210,10 @@ psql -d qls_restore_verify -c "SELECT count(*) FROM resources;"
 | `--from-console`（整桶导出）+ `--prefix uploads/` | 输出"前缀过滤：保留 3 个"，产物 `prefixFilterApplied=true`、`objects` 只剩前缀内对象（元数据与实际集合一致） |
 | `--max 10`（4 个对象）/ `--max 4`（刚好等于上限）/ 空清单 + `--max 10` | 三者产物都是 `complete=false`、`usableForProductionComparison=false` |
 | `npm run build` / `npm run typecheck` / `npm run lint` | 全部退出码 0 |
-| `npm run test:unit` | **307 / 307 PASS**（Stage 13B 是 206，本轮 +101：db-target 9、r2-inventory-safety 15、r2-inventory-parsing 16、r2-inventory-completeness 24、**r2-inventory-args 17**、**r2-inventory-identity 16**、grant-decision-sheet 4） |
+| `npm run test:unit` | **318 / 318 PASS**（Stage 13B 是 206，本轮 +112：db-target 9、r2-inventory-safety 15、r2-inventory-parsing 16、r2-inventory-completeness 24、**r2-inventory-args 17**、**r2-inventory-identity 27**、grant-decision-sheet 4） |
 | `npm run test:integration` | **615 / 615 PASS**（Stage 13B 是 614，本轮 +1：交接脚本"缺 `DATABASE_URL` 就不动数据"）。<br>⚠️ 13C.3 那一轮第一次跑出现过 **1 条偶发红**（`browser.stage4` 的"教师成长"导航）：单独跑 **16 / 16**、紧接着的全量 **615 / 615** 全绿；与 13C.1 时观察到的 stage11 偶发红同类，**尚未定位到根因** —— 若再出现请保留完整输出再查，不要当偶发忽略 |
 | `npm run test:safari`（桌面 1440×900） | **10 / 10 PASS**（13C.3 轮） |
-| `SAFARI_VIEWPORT=mobile npm run test:safari` | **10 / 10 PASS**（单独跑；见下面的两条前提） |
+| `SAFARI_VIEWPORT=mobile npm run test:safari` | **10 / 10 PASS**（13C.4 轮单独跑；见下面的两条前提） |
 
 > ⚠️ Safari 那两条有**两个环境前提**：① `safaridriver` 在跑之外，**Safari 应用本身也要开着**
 > （关掉时 10 条会全部因会话建不起来而"cancel"，报错里已写明"先执行一次 `open -a Safari`"）；

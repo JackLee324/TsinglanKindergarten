@@ -15,8 +15,15 @@
  *      这里要求 `readOnly` / `complete` / `usableForProductionComparison` /
  *      `verification` / `reason` / 计数 / `summary.count` / `scope` **互相印证**。
  *
+ * 13C.4 又补了一层：**身份类型必须与来源匹配**。产物是磁盘上的文件，
+ * 把 API 清单的身份块改成 `operator-declared` + 一个标签，比较逻辑就会改走
+ * "标签相同即同一存储"那条路，**绕过指纹校验**。所以自洽校验现在也管身份：
+ * `api-list` 必须是指纹（格式合法、端点与 scope 一致），控制台导出只能
+ * 是"操作者声明（带标签、无指纹）"或"诚实的未知"（不带任何标签/指纹）。
+ *
  * 前两节是纯函数级（合成产物，能精确构造"跨账号同桶名"这种现实中不容易复现的情形），
- * 第三节跑真脚本、真产物。
+ * 第三节跑真脚本、真产物，第四节**先起本机 S3 产出真 API 清单、再篡改它的身份块**，
+ * 验证比较确实被拒且不输出差异。
  */
 import { test, describe, before } from 'node:test'
 import assert from 'node:assert/strict'
@@ -66,7 +73,8 @@ describe('① 存储身份：桶名相同不足以证明是同一个存储', () 
     const a = makeArtifact({ endpointHost: 'acct-a.r2.cloudflarestorage.com', accessKeyId: 'AKA' })
     const b = makeArtifact({ endpointHost: 'acct-b.r2.cloudflarestorage.com', accessKeyId: 'AKB' })
     assert.equal(a.scope.bucket, b.scope.bucket, '前提：桶名故意一样')
-    const out = assertComparable(a, { complete: b.complete, scope: b.scope, storageIdentity: b.storageIdentity })
+    // assertComparable 现在要求两份都是**完整产物**（它内部统一做自洽校验）
+    const out = assertComparable(a, b)
     assert.equal(out.ok, false)
     assert.equal(out.kind, 'identity-mismatch')
     assert.match(out.reason, /存储指纹不同/)
@@ -76,10 +84,7 @@ describe('① 存储身份：桶名相同不足以证明是同一个存储', () 
     const a = makeArtifact({ accessKeyId: 'AKA' })
     const b = makeArtifact({ accessKeyId: 'AKB' })
     assert.notEqual(a.storageIdentity.fingerprint, b.storageIdentity.fingerprint)
-    assert.equal(
-      assertComparable(a, { complete: b.complete, scope: b.scope, storageIdentity: b.storageIdentity }).kind,
-      'identity-mismatch',
-    )
+    assert.equal(assertComparable(a, b).kind, 'identity-mismatch')
   })
 
   test('指纹里不含凭据原文（只落 sha256 截断）', () => {
@@ -94,11 +99,7 @@ describe('① 存储身份：桶名相同不足以证明是同一个存储', () 
     const apiArtifact = makeArtifact()
     assert.equal(consoleArtifact.storageIdentity.kind, 'unknown')
 
-    const out = assertComparable(consoleArtifact, {
-      complete: apiArtifact.complete,
-      scope: apiArtifact.scope,
-      storageIdentity: apiArtifact.storageIdentity,
-    })
+    const out = assertComparable(consoleArtifact, apiArtifact)
     assert.equal(out.ok, false)
     assert.equal(out.kind, 'identity-unknown')
     assert.match(out.reason, /存储身份未知/)
@@ -108,32 +109,19 @@ describe('① 存储身份：桶名相同不足以证明是同一个存储', () 
   test('控制台导出 + API 清单：API 那份带同一个 --storage-id → 允许比较', () => {
     const consoleArtifact = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'cf-account-tsinglan' })
     const apiArtifact = makeArtifact({ declaredId: 'cf-account-tsinglan' })
-    assert.equal(
-      assertComparable(consoleArtifact, {
-        complete: apiArtifact.complete,
-        scope: apiArtifact.scope,
-        storageIdentity: apiArtifact.storageIdentity,
-      }).ok,
-      true,
-    )
+    assert.equal(assertComparable(consoleArtifact, apiArtifact).ok, true)
   })
 
   test('控制台导出 + API 清单：只有一边有 --storage-id → 仍然拒绝', () => {
     const consoleArtifact = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'cf-account-tsinglan' })
     const apiArtifact = makeArtifact({ declaredId: null })
-    const out = assertComparable(consoleArtifact, {
-      complete: apiArtifact.complete,
-      scope: apiArtifact.scope,
-      storageIdentity: apiArtifact.storageIdentity,
-    })
-    assert.equal(out.kind, 'identity-unknown')
+    assert.equal(assertComparable(consoleArtifact, apiArtifact).kind, 'identity-unknown')
   })
 
   test('两份控制台导出：--storage-id 不同 → 拒绝', () => {
     const a = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'account-a' })
     const b = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'account-b' })
-    const out = assertComparable(a, { complete: b.complete, scope: b.scope, storageIdentity: b.storageIdentity })
-    assert.equal(out.kind, 'identity-mismatch')
+    assert.equal(assertComparable(a, b).kind, 'identity-mismatch')
   })
 })
 
@@ -172,8 +160,7 @@ describe('② 旧清单的自洽校验（§C）：只看 complete 是不够的',
   test('前一份清单不自洽 → assertComparable 直接拒绝，且不进入范围/身份判断', () => {
     const tampered = makeArtifact()
     tampered.completeness.verification = 'none'
-    const current = { complete: true, scope: makeArtifact().scope, storageIdentity: makeArtifact().storageIdentity }
-    const out = assertComparable(tampered, current)
+    const out = assertComparable(tampered, makeArtifact())
     assert.equal(out.ok, false)
     assert.equal(out.kind, 'inconsistent')
     assert.match(out.reason, /前一份清单不可用于对账/)
@@ -184,8 +171,94 @@ describe('② 旧清单的自洽校验（§C）：只看 complete 是不够的',
     partial.complete = false
     partial.completeness.complete = false
     partial.completeness.usableForProductionComparison = false
-    const current = { complete: true, scope: partial.scope, storageIdentity: partial.storageIdentity }
-    assert.equal(assertComparable(partial, current).kind, 'incomplete')
+    assert.equal(assertComparable(partial, makeArtifact()).kind, 'incomplete')
+  })
+})
+
+describe('②bis 身份类型必须与来源匹配（业主 Stage 13C.4）', () => {
+  test('合法的 API 指纹清单通过自洽检查', () => {
+    assert.equal(assertArtifactSelfConsistent(makeArtifact()).ok, true)
+  })
+
+  test('API 清单的身份被改成 operator-declared（哪怕补上 declaredId）→ 拒绝', () => {
+    const a = makeArtifact()
+    a.storageIdentity = { ...a.storageIdentity, kind: 'operator-declared', declaredId: 'sneaky-label' }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /api-endpoint-fingerprint/)
+    // 比较也必须因此被拒（不是只在纯函数里拦）
+    assert.equal(assertComparable(a, makeArtifact()).ok, false)
+  })
+
+  test('API 清单的身份被改成 unknown → 拒绝', () => {
+    const a = makeArtifact()
+    a.storageIdentity = { kind: 'unknown', fingerprint: null, declaredId: null, endpointHost: null }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /api-endpoint-fingerprint/)
+  })
+
+  test('API 清单指纹缺失或格式不对 → 拒绝', () => {
+    for (const bad of [null, '', 'sha256:', 'sha256:0123', 'md5:0123456789abcdef', 'sha256:0123456789ABCDEF', 'sha256:0123456789abcdef0']) {
+      const a = makeArtifact()
+      a.storageIdentity = { ...a.storageIdentity, fingerprint: bad }
+      const out = assertArtifactSelfConsistent(a)
+      assert.equal(out.ok, false, `指纹 "${String(bad)}" 应当被拒绝`)
+      assert.match(out.reason, /指纹/)
+    }
+  })
+
+  test('API 身份记录的端点与 scope.endpointHost 不一致 → 拒绝', () => {
+    const a = makeArtifact()
+    a.storageIdentity = { ...a.storageIdentity, endpointHost: 'someone-else.r2.cloudflarestorage.com' }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /不一致/)
+  })
+
+  test('控制台清单带非空标签（无指纹）→ 通过', () => {
+    const a = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'cf-account-tsinglan' })
+    assert.equal(a.storageIdentity.kind, 'operator-declared')
+    assert.equal(assertArtifactSelfConsistent(a).ok, true)
+  })
+
+  test('控制台清单声明 operator-declared 却没有标签 → 拒绝', () => {
+    const a = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'x' })
+    a.storageIdentity = { ...a.storageIdentity, declaredId: null }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /declaredId/)
+  })
+
+  test('控制台清单被伪装成 API 指纹类型 → 拒绝', () => {
+    const a = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'x' })
+    a.storageIdentity = { ...a.storageIdentity, kind: 'api-endpoint-fingerprint', fingerprint: 'sha256:0123456789abcdef' }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /不能伪装/)
+  })
+
+  test('unknown 身份必须"真的未知"（不得夹带标签或指纹）', () => {
+    const withLabel = makeArtifact({ method: 'console-export', endpointHost: null })
+    withLabel.storageIdentity = { kind: 'unknown', fingerprint: null, declaredId: 'sneaky', endpointHost: null }
+    assert.equal(assertArtifactSelfConsistent(withLabel).ok, false)
+
+    const withFingerprint = makeArtifact({ method: 'console-export', endpointHost: null })
+    withFingerprint.storageIdentity = { kind: 'unknown', fingerprint: 'sha256:0123456789abcdef', declaredId: null, endpointHost: null }
+    assert.equal(assertArtifactSelfConsistent(withFingerprint).ok, false)
+
+    // 真正的未知：允许存在（它会在比较阶段被拒），字段必须干净
+    const realUnknown = makeArtifact({ method: 'console-export', endpointHost: null })
+    assert.deepEqual(realUnknown.storageIdentity, { kind: 'unknown', fingerprint: null, declaredId: null, endpointHost: null })
+    assert.equal(assertArtifactSelfConsistent(realUnknown).ok, true)
+  })
+
+  test('身份块整体缺失 → 拒绝', () => {
+    const a = makeArtifact()
+    delete a.storageIdentity
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /storageIdentity/)
   })
 })
 
@@ -253,6 +326,70 @@ describe('③ 脚本级：身份与自洽守卫真的在退出码上生效', () 
     assert.equal(code, 6, out)
     assert.match(out, /前一份清单不可用于对账/)
     assert.equal(DIFF.test(out), false)
+  })
+
+  test('被篡改身份块的清单产物不能参与比较（走真比较脚本，拒绝且不输出差异）', () => {
+    /*
+      业主 Stage 13C.4 §二 9：要"修改已生成的真实清单产物，再通过实际比较脚本
+      验证退出码和输出"，而不是只测一个孤立纯函数。
+
+      这里的产物用**生产代码路径**生成（`buildInventoryArtifact` + `buildStorageIdentity`，
+      与脚本里用的是同一对函数），写到磁盘后逐种篡改，再交给**真脚本**
+      （`scripts/r2-inventory.mjs --compare`）跑：比较、自洽校验、退出码、输出全是真实行为。
+
+      ⚠️ 这个文件不再自己起 S3 后端：单元测试是**按文件并行**跑的，
+        两个文件同时占用固定的测试端口会互相打断；真后端的实时列举由
+        `r2-inventory-completeness.test.mjs` 覆盖（那份是唯一占用后端端口的）。
+    */
+    const real = makeArtifact({ declaredId: 'id-a' })
+    real.source = 'ListObjectsV2 endpoint=acct-a.r2.cloudflarestorage.com bucket=tsinglan-curriculum'
+    assert.equal(real.scope.method, 'api-list')
+    assert.equal(real.storageIdentity.kind, 'api-endpoint-fingerprint')
+    assert.equal(assertArtifactSelfConsistent(real).ok, true, '真实产物本身必须自洽')
+
+    const current = makeArtifact({ declaredId: 'id-a' })
+    const currentPath = join(WORK, 'api-current.json')
+    writeFileSync(currentPath, JSON.stringify(current), 'utf8')
+
+    const tampers = [
+      ['身份类型改成 operator-declared', 6, (a) => { a.storageIdentity.kind = 'operator-declared'; a.storageIdentity.declaredId = 'fake' }],
+      ['身份类型改成 unknown', 6, (a) => { a.storageIdentity = { kind: 'unknown', fingerprint: null, declaredId: null, endpointHost: null } }],
+      ['指纹被删掉', 6, (a) => { a.storageIdentity.fingerprint = null }],
+      ['指纹格式被改坏', 6, (a) => { a.storageIdentity.fingerprint = 'sha256:zzzz' }],
+      ['身份端点与 scope 不一致', 6, (a) => { a.storageIdentity.endpointHost = 'other.r2.cloudflarestorage.com' }],
+      ['scope 端点被改到别处', 6, (a) => { a.scope.endpointHost = 'other.r2.cloudflarestorage.com' }],
+    ]
+    /*
+      注：这里当前清单是**控制台导出**，与 api 清单互比时按规则比的是
+      `--storage-id` 声明（"操作者确认这是同一个存储"），所以"指纹被换成另一个"
+      在这条路径上不会触发拒绝 —— 那是 api↔api 的判据，已由第 ① 节的
+      "两个不同账号、同一个桶名" 与 "同端点换凭据" 两条覆盖。
+    */
+
+    for (const [label, expectedCode, mutate] of tampers) {
+      const copy = JSON.parse(JSON.stringify(real))
+      mutate(copy)
+      const tamperedPath = join(WORK, 'api-real.json')
+      writeFileSync(tamperedPath, JSON.stringify(copy), 'utf8')
+
+      const res = run([
+        '--from-console', EXPORT, '--bucket', BUCKET,
+        '--expect-count', String(KEYS.length), '--expect-source', 'fixture',
+        '--storage-id', 'id-a', '--compare', tamperedPath,
+      ])
+      assert.equal(res.code, expectedCode, `${label}：应当退出码 ${expectedCode}，实际 ${res.code}\n${res.out}`)
+      assert.match(res.out, /拒绝对比/, label)
+      assert.equal(DIFF.test(res.out), false, `${label}：拒绝时不得输出任何差异结论`)
+    }
+
+    // 对照：同身份、都自洽时比较正常进行（证明前面的拒绝不是因为"比不了"）
+    const ok = run([
+      '--from-console', EXPORT, '--bucket', BUCKET,
+      '--expect-count', String(KEYS.length), '--expect-source', 'fixture',
+      '--storage-id', 'id-a', '--compare', currentPath,
+    ])
+    assert.equal(ok.code, 0, ok.out)
+    assert.match(ok.out, /消失 0 个 \/ 新增 0 个/)
   })
 
   test('产物里带着存储身份（可审计），且不含任何凭据', () => {
