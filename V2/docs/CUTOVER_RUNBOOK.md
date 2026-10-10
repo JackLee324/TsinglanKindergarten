@@ -113,7 +113,9 @@ title='test' 残留 = 0
 | 应用自检 | 驱动 `s3` / 已配置 **是** / 可访问 **是**（"对象存储可访问"） | `node scripts/check-storage.mjs` |
 | 写权限 | **通过**：探针对象写入 → 读回 sha256 一致 → 删除 → 桶回到 0 对象 | 探针只写 `_preflight/…`，不留残留 |
 | 生产配置块能否启动 | **通过**：用最终生产环境变量在本机起进程，`/api/health` 200、`/api/health/ready` 200（`database:ok`，即生产库连接串可用）、`/` 200（SPA） | 端口 3399 本地冒烟，跑完即停 |
-| 桶 CORS | **未配置**（`NoSuchCORSConfiguration`）——唯一剩余项 | 需要 V2 域名：`V2_PUBLIC_ORIGIN=https://<v2 域名> node scripts/configure-bucket-cors.mjs`（浏览器直传上传必须有它） |
+| 桶 CORS | **已配置并回读确认** | `V2_PUBLIC_ORIGIN=https://tsinglan.zeabur.app node scripts/configure-bucket-cors.mjs` → 回读 `GetBucketCors`：`AllowedOrigins=[https://tsinglan.zeabur.app]`，方法 `PUT/GET/HEAD`，无通配符；`scripts/check-storage.mjs` 退出码 **0** |
+| 浏览器直传链路 | **通过（对生产桶实测）** | 用 `dist` 里的 `S3StorageProvider.presignPut` 签名 → `OPTIONS` 预检 **204** 且 `allow-origin=https://tsinglan.zeabur.app`、`allow-methods=PUT, GET, HEAD` → 带 `Origin` 真发 `PUT` **200** → 读回 sha256 与上传一致 → 删除探针，桶回到 0 对象 |
+| 部署后的应用 | **BLOCKED（502）** | `https://tsinglan.zeabur.app/` 与 `/api/health` 连续 3 次探测均 **502 Bad Gateway**（`http://` 会 302 到 https）。同一时刻 V1 站点 200、未受影响。待查：部署是否仍在构建、服务端口是否为 3300、环境变量是否保存成功 |
 
 ### V1 的历史文件要不要搬？——**不需要**（这就是 `resource_files=0` 是对的）
 
