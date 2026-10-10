@@ -35,3 +35,6 @@ playwright-report/
 
 # 迁移前后快照（机器相关，且是可重新生成的证据 —— 结论进 docs/V1_RESOURCE_CENSUS.md）
 .migration/
+
+# 切换执行日志（含每一步命令与输出，属于运行证据，不进版本库）
+deploy/logs/

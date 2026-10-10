@@ -15,7 +15,7 @@
     "migrate:verify": "node scripts/migrate.mjs verify",
     "seed": "node scripts/seed.mjs",
     "typecheck": "npm run typecheck:server && npm run typecheck:client",
-    "lint": "eslint server shared scripts tests client/src",
+    "lint": "eslint server shared scripts tests deploy client/src",
     "test:unit": "node --test tests/unit/*.test.mjs",
     "test:integration": "node scripts/fetch-storage-backend.mjs && node --test --test-concurrency=1 tests/integration/*.test.mjs",
     "test": "npm run build && npm run test:unit && npm run test:integration",

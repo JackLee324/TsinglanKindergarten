@@ -29,7 +29,9 @@ export default tseslint.config(
     },
   },
   {
-    files: ['scripts/**/*.mjs', 'tests/**/*.mjs'],
+    // `deploy/**` 一起纳入：它是运维/切换脚本，同样只该用 Node 内建全局
+    // （以前它不在 lint 范围里，等于"没人看管的那部分"）。
+    files: ['scripts/**/*.mjs', 'tests/**/*.mjs', 'deploy/**/*.mjs'],
     languageOptions: {
       // Node 22 的内建全局。逐项列出而不是引第三方 globals 包 ——
       // 少一个依赖，而且"这个文件能用哪些全局"在配置里一眼可见。

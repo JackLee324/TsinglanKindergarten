@@ -1,4 +1,4 @@
-# Stage 13C / 13C.1 / 13C.2 / 13C.3 / 13C.4 / 13C.5：正式切换就绪（Production Cutover Readiness）
+# Stage 13C / 13C.1–13C.5：正式切换就绪（Production Cutover Readiness）
 
 > 业主 Stage 13C 的范围是**收尾门禁**，不是加功能：把文档里的矛盾消掉、把最高权限脚本加固、
 > 把"缺什么才能切换"变成一张可执行、可核对的清单。
@@ -20,7 +20,7 @@ Zeabur 预发布 + 真实浏览器验收 : NOT RUN     （前置：解除 Zeabur
 PRODUCTION CUTOVER           : NOT READY
 ```
 
-## 1. 本轮做完的九件事（13C 四件 + 13C.1–13C.5 工具加固）
+## 1. 本轮做完的十件事（13C 四件 + 13C.1–13C.5 工具加固 + 切换执行器与演练）
 
 | # | 事 | 产物 | 证据 |
 |---|---|---|---|
@@ -29,6 +29,7 @@ PRODUCTION CUTOVER           : NOT READY
 | 3 | **预检报告同步 + 门禁清单**（业主 §1/§3） | `docs/CUTOVER_PREFLIGHT_REPORT.md` | §0 结论块拆开写；§7 重写为"身份 PASS / 授权 BLOCKED / 登录 NOT RUN"；新增 §12.1 **G1–G10 门禁表**；§12 按业主给的五步顺序重排 |
 | 4 | **两件只读工具**（业主 §1/§3） | `scripts/propose-directory-grants.mjs`、`scripts/r2-inventory.mjs` | 授权决策清单（不连库、不猜、不覆盖业主填过的表）；R2 对象清单（**源码里没有任何写/删动作**，由 `tests/unit/r2-inventory-safety.test.mjs` 静态盯住） |
 | 5 | **R2 工具加固**（业主 Stage 13C.1 审查发现的 3 个问题） | `scripts/lib/{csv,inventory-source,r2-target}.mjs` | ① **默认只允许 HTTPS**（http 仅限 `--allow-http-local` + 本机地址，远端 http 永远拒绝）；② CSV 改走 **RFC 4180** 解析（引号/内嵌逗号/CRLF/BOM/带引号换行），坏行**报错**而不是跳过；③ 产物带**完整性元数据**（`complete` / `usableForProductionComparison` / `scope`），`--compare` 拒绝不完整清单与范围不一致 |
+| 10 | **切换执行器 + 回滚 + 全流程演练**（业主本轮指定「先只做本机准备」） | `deploy/cutover.mjs`、`docs/CUTOVER_RUNBOOK.md` | `--plan` 只做前置检查与打印；`--drill` 在本机嵌入式 Postgres 上把**数据链路整条跑通**（冻结快照 → 受控 V1 库 → 全新 V2 库 → 迁移 → 导入 → 十条不变量 → 自删临时库）；`--production` 要求显式 `--target` + `--confirm CUTOVER-PRODUCTION`，本机目标被拒，教师授权未决定时拒绝继续（退出码 4）。回滚清单写进脚本与运行手册：**数据层不做任何删除**，域名回指 V1 + 确认 V1 可用 + V2 降级为预发布。lint 范围扩到 `deploy/**`（顺手清掉两处未使用变量） |
 | 9 | **API 端点非空校验**（业主 Stage 13C.5 复核发现的最后边界） | `scripts/lib/r2-target.mjs` | `api-list` 清单的 `scope.endpointHost` 与 `storageIdentity.endpointHost` 现在必须**都非空、都合法、规范化后一致** —— 只比「两个字段是否相等」的话，把两者**一起**改成 `null`/空串就能混过自洽校验；端点规范化抽成 `normalizeEndpointHost()`，与 `resolveR2Config()` **共用同一套规则**（完整 URL 或 `host[:port]`、大小写归一、端口范围校验），`console-export` 的空端点不受影响 |
 | 8 | **身份类型自洽**（业主 Stage 13C.4 复核发现的最后一道缺口） | `scripts/lib/r2-target.mjs` | 自洽校验现在也管身份：`api-list` 清单**必须**是 `api-endpoint-fingerprint`（指纹格式合法、`storageIdentity.endpointHost` 与 `scope.endpointHost` 一致）——把身份块改成 `operator-declared` + 一个标签、或改成 `unknown`，都不再能让比较改走标签匹配从而绕过指纹；控制台导出**只能**是 `operator-declared`（标签非空、指纹为空）或诚实的未知（不带任何标签/指纹），**不许伪装成 API 指纹清单**；`assertComparable` 在输出任何差异之前对**两份**清单都跑完整自洽校验 |
 | 7 | **参数解析与来源身份**（业主 Stage 13C.3 复核发现的 2 个边界） | `scripts/r2-inventory.mjs`、`scripts/lib/r2-target.mjs` | ① **`--max` 严格解析**：判据是"参数有没有出现"而不是"数值是不是 0" —— `--max 0` / 负数 / 小数 / 非数字 / 缺少数值一律退出码 2（以前会被静默变成 0，**绕过"只要用了 `--max` 就不完整"这条门禁**）；② **存储身份**：产物带 `storageIdentity`（实时列举 = `sha256(端点\|AccessKey)` 指纹，只落指纹不落凭据；控制台导出 = `--storage-id <标签>` 操作者声明；都不给 = 未知），**桶名相同不再足以证明是同一个存储** → 身份未知/不同一律拒绝比较；③ **旧清单自洽校验**：`readOnly`/`complete`/`usableForProductionComparison`/`verification`/`reason`/计数/`summary.count`/`scope` 必须互相印证，被手改或旧版本写的产物直接拒绝 |
@@ -181,6 +182,11 @@ psql -d qls_restore_verify -c "SELECT count(*) FROM resources;"
 
 ### G8 / G9 预发布部署与回滚
 
+**执行器与运行手册**：`deploy/cutover.mjs` + `docs/CUTOVER_RUNBOOK.md`。
+`--drill` 已在本机演练栈把整条数据链路跑通（347/24/69/0/621、管理员恰好 1 名、悬空 0、
+不在 `allow_files=false` 目录上的资源 0）；`--production` 需要显式目标与确认字面量，
+教师授权未决定时拒绝继续（退出码 4）。
+
 按 `docs/CUTOVER_PREFLIGHT_REPORT.md` §11–§12 与 `docs/DISASTER_RECOVERY.md` 执行：
 预发布域名上跑 `deploy/verify.mjs` + `tests/production/*`（桌面 + 移动）；
 回滚步骤要**实际演练一遍**并写下耗时与判定点。
@@ -212,7 +218,9 @@ psql -d qls_restore_verify -c "SELECT count(*) FROM resources;"
 | `R2_ENDPOINT=http://…`（默认） | 退出码 **2**，提示"必须是 https"并说明本地开关；**未创建 S3 客户端** |
 | `--from-console`（整桶导出）+ `--prefix uploads/` | 输出"前缀过滤：保留 3 个"，产物 `prefixFilterApplied=true`、`objects` 只剩前缀内对象（元数据与实际集合一致） |
 | `--max 10`（4 个对象）/ `--max 4`（刚好等于上限）/ 空清单 + `--max 10` | 三者产物都是 `complete=false`、`usableForProductionComparison=false` |
-| `npm run build` / `npm run typecheck` / `npm run lint` | 全部退出码 0 |
+| `node deploy/cutover.mjs --plan` | 退出码 0；打印 S1–S8 与回滚清单；识别出"授权门禁未满足（24 个账号未决定）" |
+| `node deploy/cutover.mjs --drill --accept-zero-grants` | 退出码 0；S1–S5 全部 0；S6 十条不变量全 ✓；临时库自删；**演练应用库未被触碰**（复核 354/26/4/1 与 drill 前一致） |
+| `npm run build` / `npm run typecheck` / `npm run lint` | 全部退出码 0（lint 现在也覆盖 `deploy/**`） |
 | `npm run test:unit` | **329 / 329 PASS**（Stage 13B 是 206，本轮 +123：db-target 9、r2-inventory-safety 15、r2-inventory-parsing 16、r2-inventory-completeness 24、**r2-inventory-args 17**、**r2-inventory-identity 38**、grant-decision-sheet 4） |
 | `npm run test:integration` | **615 / 615 PASS**（Stage 13B 是 614，本轮 +1：交接脚本"缺 `DATABASE_URL` 就不动数据"）。<br>⚠️ 13C.3 那一轮第一次跑出现过 **1 条偶发红**（`browser.stage4` 的"教师成长"导航）：单独跑 **16 / 16**、紧接着的全量 **615 / 615** 全绿；与 13C.1 时观察到的 stage11 偶发红同类，**尚未定位到根因** —— 若再出现请保留完整输出再查，不要当偶发忽略 |
 | `npm run test:safari`（桌面 1440×900） | **10 / 10 PASS**（13C.3 轮） |

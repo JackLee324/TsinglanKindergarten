@@ -123,11 +123,9 @@ try {
   )
 }
 
-let homeStatus = 0
 let headers = new Headers()
 try {
   const res = await get('/')
-  homeStatus = res.status
   headers = res.headers
   check('HTTPS 首页可取', res.status === 200, `HTTP ${res.status}`)
 } catch (e) {
