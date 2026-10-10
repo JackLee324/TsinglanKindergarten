@@ -8,7 +8,10 @@
 ## 0. 一句话现状
 
 **数据链路已在本机演练栈上整条跑通（drill，PASS）；正式环境的执行仍然 BLOCKED**
-—— 卡在 Zeabur 访问、生产 R2 清单与教师授权决定（三件都不是代码问题）。
+—— 卡在 Zeabur 环境变量写权限与教师授权决定（两件都不是代码问题）。
+
+2026-10-10 更新（§6）：**生产 R2 已配置并实测通过**（G5 清单门禁 PASS），
+**独立 V2 库已存在**；存储侧只剩"CORS 等 V2 域名"这一项，随部署一起做。
 
 ## 1. 切换那天怎么走（三条命令）
 
@@ -89,12 +92,38 @@ title='test' 残留 = 0
 
 ## 5. 现在还差什么才能真的切
 
-| # | 缺的东西 | 谁提供 | 提供方式（**不要贴到聊天里**） |
+| # | 缺的东西 | 谁提供 | 状态（2026-10-10） |
 |---|---|---|---|
-| 1 | Zeabur 访问（CLI 登录态或 API token） | 业主 | 在 Zeabur 控制台生成 token，放本机 `~/.zeabur` 登录态或 `ZEABUR_TOKEN` 环境变量 |
-| 2 | 生产 R2 只读凭证（或控制台导出的完整对象清单 JSON） | 业主 | 只读 Access Key/Secret 放本机环境变量；或从 R2 控制台导出 JSON 交给 `scripts/r2-inventory.mjs --from-console` |
-| 3 | 24 个账号的教师开放目录（业务决定） | 业主 | 在 `.migration/production-grant-decision-sheet.md` 上填写（本机文件，gitignore） |
-| 4 | 独立 V2 PostgreSQL | 业主（Zeabur 控制台） | 建库后把连接串交给 `--target` |
-| 5 | V1 备份 + **独立恢复演练** | 执行者（部署环境有 `pg_dump`） | 见 `docs/STAGE13C_CUTOVER_READINESS.md` §G7 |
+| 1 | Zeabur **可写环境变量**的 API token（或业主在控制台代填） | 业主 | **仍缺**：现有 token 调 `createEnvironmentVariable` 返回 `FORBIDDEN`，7 个变量全被拒；连读服务端口也被拒 |
+| 2 | 生产 R2 凭据（只读即可做清单，读写用于部署） | 业主 | **已到位**：读写权限实测通过，见 §6 |
+| 3 | 24 个账号的教师开放目录（业务决定） | 业主 | 仍缺：在 `.migration/production-grant-decision-sheet.md` 上填写（本机文件，gitignore） |
+| 4 | 独立 V2 PostgreSQL | 业主（Zeabur 控制台） | **已到位**：`postgresql-triket`，已建 39 个名额，与 V1 库完全独立 |
+| 5 | V1 备份 + **独立恢复演练** | 执行者（部署环境有 `pg_dump`） | 仍缺，见 `docs/STAGE13C_CUTOVER_READINESS.md` §G7 |
 
 上面 1–4 到位后，切换是**一条命令**（§1 的 ③）；5 完成前不得退役 V1。
+
+## 6. 存储（R2）配置现状（2026-10-10 实测）
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| 端点 | `https://<accountid>.r2.cloudflarestorage.com`（账号 ID 与密钥只在本机 `.env.production.local`，600 权限、gitignore） | `ListBuckets` 返回该账号**恰好 2 个桶**：`tsinglan-curriculum`、`tsinglan2` |
+| 写入桶（V2） | `tsinglan2`（2026-10-10 新建，空桶） | 清单：0 对象 |
+| 历史桶（V1） | `tsinglan-curriculum` | 清单：20 对象 / 2,295,707 字节 |
+| G5 只读清单门禁 | **PASS** | `.migration/r2-inventory-{tsinglan2,tsinglan-curriculum}.json`，两份都 `complete=true`（`reason=listed-all-pages`，可用于正式对账） |
+| 应用自检 | 驱动 `s3` / 已配置 **是** / 可访问 **是**（"对象存储可访问"） | `node scripts/check-storage.mjs` |
+| 写权限 | **通过**：探针对象写入 → 读回 sha256 一致 → 删除 → 桶回到 0 对象 | 探针只写 `_preflight/…`，不留残留 |
+| 生产配置块能否启动 | **通过**：用最终生产环境变量在本机起进程，`/api/health` 200、`/api/health/ready` 200（`database:ok`，即生产库连接串可用）、`/` 200（SPA） | 端口 3399 本地冒烟，跑完即停 |
+| 桶 CORS | **未配置**（`NoSuchCORSConfiguration`）——唯一剩余项 | 需要 V2 域名：`V2_PUBLIC_ORIGIN=https://<v2 域名> node scripts/configure-bucket-cors.mjs`（浏览器直传上传必须有它） |
+
+### V1 的历史文件要不要搬？——**不需要**（这就是 `resource_files=0` 是对的）
+
+1. 送进 V2 的 347 行资源快照里，`file_path` / `file_bucket_id` **全为 NULL**（逐行统计 = 0）。
+2. `tsinglan-curriculum` 里唯一被数据库引用的对象
+   （`uploads/76b60eb6-…/1791293126057-校服申领登记.png`，1,618,105 字节）属于
+   被排除的 smoke 资源 —— `.migration/prod-exports/v2-cutover-20261008.exclusion.json`
+   按业主授权规则排除（ID + 标题字面量 `test` + 同一张 smoke 图，三条同时命中）。
+3. 其余 19 个对象是 V1 开发期的探针残留（`prod-probe` / `browser-probe` / `sig` /
+   `全链路-…`，含 0 字节与 69 字节的失败上传），数据库里早已没有任何行引用它们。
+
+**结论：桶里的东西一条都不该进 V2；不得为了"看起来有文件"把 smoke 数据搬进生产桶。**
+`tsinglan-curriculum` 保持只读、原样保留（回滚仍可能需要它）。
