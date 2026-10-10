@@ -422,7 +422,7 @@ export function canonicalSourceLabel(url) {
 }
 
 export async function openReadOnly(url) {
-  const sql = postgres(url, { max: 1, onnotice: () => {} })
+  const sql = postgres(url, { max: 1, onnotice: () => {}, keep_alive: true, connect_timeout: 30, idle_timeout: 0 })
   await sql.unsafe('SET default_transaction_read_only = on')
   return sql
 }
@@ -586,7 +586,19 @@ async function main() {
   }
 
   const source = await openReadOnly(sourceUrl)
-  const target = postgres(targetUrl, { max: 1, onnotice: () => {} })
+  /*
+    ⚠️ 远端目标（例如 Zeabur 的 Postgres TCP 代理）会在**长事务**里把连接掐掉，
+    表现为 `write CONNECTION_CLOSED <host>:<port>` —— 一次导入几千行就很容易撞上。
+    这里显式开 keep-alive、放宽连接/空闲超时：代理层看到的是"一直有活动的连接"，
+    而不是"挂在那里很久的会话"。本地目标同样受益（没有任何副作用）。
+  */
+  const target = postgres(targetUrl, {
+    max: 1,
+    onnotice: () => {},
+    keep_alive: true,
+    connect_timeout: 30,
+    idle_timeout: 0,
+  })
 
   try {
     // ── 目标库体检 ────────────────────────────────────────────────────────

@@ -69,8 +69,17 @@ describe('数据库里只有一个权限真相', () => {
    * 也不参与运行时的读写 —— 只有 `scripts/import-v1.mjs` 与迁移报告会碰它们。
    * 加这两张表是为了满足业主 Stage 9 的"幂等 + 可追溯 + 历史字段不丢"，
    * 不是为了给 V2 添一个业务概念。
+   *
+   * 阶段 14A 再加 1 张业务表（业主的"39 个名额"）：
+   *   · `teacher_slots` —— 岗位编制名额（K-01 … PK-08）。**名额 ≠ 账号**：
+   *     名额是学校编制，账号要等管理员绑上真实人员才在 `users` 里诞生。
+   *     它只存一列 `bound_user_id` 指向 `users`，**不持有任何授权** ——
+   *     报到哪个班、能传什么，仍然由 `user_permissions` 唯一决定。
+   *
+   * 名单是**逐张列出来**的（不是数个数），所以"悄悄多了一张表"会立刻红；
+   * 每次加表都必须同时改这份名单 + 上面的说明 —— 这就是这张清单的用处。
    */
-  test('恰好 12 张表（10 张业务 + 2 张迁移记账），名单逐张核对（V1 是 13 张，旧表一张都不许回来）', () => {
+  test('恰好 13 张表（11 张业务 + 2 张迁移记账），名单逐张核对（V1 旧表一张都不许回来）', () => {
     assert.deepEqual(tables.sort(), [
       'audit_logs',
       'directories',
@@ -79,6 +88,7 @@ describe('数据库里只有一个权限真相', () => {
       'resources',
       'sessions',
       'storage_orphans',
+      'teacher_slots',
       'upload_tickets',
       'user_permissions',
       'users',
@@ -99,8 +109,14 @@ describe('数据库里只有一个权限真相', () => {
     }
   })
 
-  test('阶段 6 / 阶段 9 新增的表都不持有授权信息', () => {
-    for (const table of ['upload_tickets', 'storage_orphans', 'v1_import_runs', 'v1_migration_map']) {
+  test('阶段 6 / 阶段 9 / 阶段 14A 新增的表都不持有授权信息', () => {
+    for (const table of [
+      'upload_tickets',
+      'storage_orphans',
+      'v1_import_runs',
+      'v1_migration_map',
+      'teacher_slots',
+    ]) {
       assert.equal(tables.includes(table), true, `${table} 应当存在`)
       /*
         查的是**列名**，不是整段文本里的子串。
@@ -130,13 +146,19 @@ describe('数据库里只有一个权限真相', () => {
     assert.deepEqual(permissionTables, ['user_permissions'])
   })
 
-  test('V1 的旧权限表一个都不在', () => {
+  test('V1 的旧表一个都不在（含旧账号/旧审核表）', () => {
     for (const banned of [
+      // V1 的授权形态（业主点名不许回来）
       'subject_permissions',
       'account_permission_overrides',
       'account_scopes',
       'role_permissions',
       'permission_overrides',
+      // V1 的账号与审核记录表：V2 用 users / resource_reviews 取代
+      // （`teachers` 一表兼了账号+角色数组，`review_records` 只关联 resource_id，
+      //  拿不到"谁在哪个目录上有权审"这件事）
+      'teachers',
+      'review_records',
     ]) {
       assert.ok(!tables.includes(banned), `不该存在 ${banned}`)
     }
