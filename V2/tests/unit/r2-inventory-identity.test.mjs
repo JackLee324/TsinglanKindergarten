@@ -21,6 +21,10 @@
  * `api-list` 必须是指纹（格式合法、端点与 scope 一致），控制台导出只能
  * 是"操作者声明（带标签、无指纹）"或"诚实的未知"（不带任何标签/指纹）。
  *
+ * 13C.5 又把端点本身钉死：`api-list` 清单的 `scope.endpointHost` 与
+ * `storageIdentity.endpointHost` 必须**都非空、都合法、规范化后一致** ——
+ * 只比"两个字段是否相等"的话，把两者一起改成 `null`/空串就能蒙混过关。
+ *
  * 前两节是纯函数级（合成产物，能精确构造"跨账号同桶名"这种现实中不容易复现的情形），
  * 第三节跑真脚本、真产物，第四节**先起本机 S3 产出真 API 清单、再篡改它的身份块**，
  * 验证比较确实被拒且不输出差异。
@@ -262,6 +266,102 @@ describe('②bis 身份类型必须与来源匹配（业主 Stage 13C.4）', () 
   })
 })
 
+describe('②ter API 清单的端点必须非空、合法、一致（业主 Stage 13C.5）', () => {
+  test('两个端点都合法且一致 → 通过（有效 API 端点 + 有效指纹）', () => {
+    const a = makeArtifact()
+    assert.equal(a.scope.endpointHost, 'acct-a.r2.cloudflarestorage.com')
+    assert.equal(assertArtifactSelfConsistent(a).ok, true)
+  })
+
+  test('两个端点**同时为 null** → 拒绝（不能靠"都空所以相等"混过去）', () => {
+    const a = makeArtifact()
+    a.scope.endpointHost = null
+    a.storageIdentity = { ...a.storageIdentity, endpointHost: null }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /endpointHost/)
+    assert.match(out.reason, /不合法/)
+  })
+
+  test('两个端点**同时为空字符串** → 拒绝', () => {
+    const a = makeArtifact()
+    a.scope.endpointHost = ''
+    a.storageIdentity = { ...a.storageIdentity, endpointHost: '' }
+    assert.equal(assertArtifactSelfConsistent(a).ok, false)
+  })
+
+  test('两个端点**同时为纯空白** → 拒绝', () => {
+    const a = makeArtifact()
+    a.scope.endpointHost = '   '
+    a.storageIdentity = { ...a.storageIdentity, endpointHost: '\t \n' }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /为空/)
+  })
+
+  test('两个端点**格式都非法** → 拒绝', () => {
+    for (const bad of ['not a host!!', 'https://', 'host:99999', '-bad-.example.com', 'http://:8080', 'a b c']) {
+      const a = makeArtifact()
+      a.scope.endpointHost = bad
+      a.storageIdentity = { ...a.storageIdentity, endpointHost: bad }
+      const out = assertArtifactSelfConsistent(a)
+      assert.equal(out.ok, false, `端点 "${bad}" 应当被拒绝`)
+      assert.match(out.reason, /端点/)
+    }
+  })
+
+  test('只有一个端点为空 → 同样拒绝（两种情况都测）', () => {
+    const a = makeArtifact()
+    a.scope.endpointHost = null
+    assert.equal(assertArtifactSelfConsistent(a).ok, false, 'scope 为空 → 拒绝')
+
+    const b = makeArtifact()
+    b.storageIdentity = { ...b.storageIdentity, endpointHost: null }
+    assert.equal(assertArtifactSelfConsistent(b).ok, false, '身份为空 → 拒绝')
+  })
+
+  test('身份端点与 scope 端点不一致 → 保持拒绝', () => {
+    const a = makeArtifact()
+    a.storageIdentity = { ...a.storageIdentity, endpointHost: 'other.r2.cloudflarestorage.com' }
+    const out = assertArtifactSelfConsistent(a)
+    assert.equal(out.ok, false)
+    assert.match(out.reason, /不一致/)
+  })
+
+  test('大小写/端口写法不同但规范化后相同 → 视为一致（同一套端点规范）', () => {
+    const a = makeArtifact()
+    a.scope.endpointHost = 'ACCT-A.r2.CloudflareStorage.com'
+    a.storageIdentity = { ...a.storageIdentity, endpointHost: 'acct-a.r2.cloudflarestorage.com' }
+    assert.equal(assertArtifactSelfConsistent(a).ok, true)
+  })
+
+  test('端点检查没有放宽指纹要求（指纹仍需格式合法）', () => {
+    const a = makeArtifact()
+    a.storageIdentity = { ...a.storageIdentity, fingerprint: null }
+    assert.equal(assertArtifactSelfConsistent(a).ok, false)
+  })
+
+  test('console-export 的空端点不受影响（它的身份靠操作者声明）', () => {
+    const declared = makeArtifact({ method: 'console-export', endpointHost: null, declaredId: 'cf-account-tsinglan' })
+    assert.equal(declared.scope.endpointHost, null)
+    assert.equal(assertArtifactSelfConsistent(declared).ok, true)
+
+    const unknown = makeArtifact({ method: 'console-export', endpointHost: null })
+    assert.equal(assertArtifactSelfConsistent(unknown).ok, true)
+  })
+
+  test('assertComparable：当前侧被篡改为空端点时同样拒绝（不只管前一份）', () => {
+    const previous = makeArtifact()
+    const current = makeArtifact()
+    current.scope.endpointHost = null
+    current.storageIdentity = { ...current.storageIdentity, endpointHost: null }
+    const out = assertComparable(previous, current)
+    assert.equal(out.ok, false)
+    assert.equal(out.kind, 'inconsistent')
+    assert.match(out.reason, /当前清单不可用于对账/)
+  })
+})
+
 describe('③ 脚本级：身份与自洽守卫真的在退出码上生效', () => {
   const EXPORT = join(WORK, 'two.json')
   const run = (args) => {
@@ -379,6 +479,33 @@ describe('③ 脚本级：身份与自洽守卫真的在退出码上生效', () 
       ])
       assert.equal(res.code, expectedCode, `${label}：应当退出码 ${expectedCode}，实际 ${res.code}\n${res.out}`)
       assert.match(res.out, /拒绝对比/, label)
+      assert.equal(DIFF.test(res.out), false, `${label}：拒绝时不得输出任何差异结论`)
+    }
+
+    /*
+      13C.5：把两个端点字段**一起**改成空值 —— 只比"字段是否相等"的写法会放过它。
+      这些用例走的是真比较入口（`--compare`），不是孤立函数。
+    */
+    const clearedEndpoints = [
+      ['两个端点同时改成 null', (a) => { a.scope.endpointHost = null; a.storageIdentity.endpointHost = null }],
+      ['两个端点同时改成空字符串', (a) => { a.scope.endpointHost = ''; a.storageIdentity.endpointHost = '' }],
+      ['两个端点同时改成纯空白', (a) => { a.scope.endpointHost = '  '; a.storageIdentity.endpointHost = '\t' }],
+      ['两个端点同时改成非法格式', (a) => { a.scope.endpointHost = 'not a host!!'; a.storageIdentity.endpointHost = 'not a host!!' }],
+    ]
+    for (const [label, mutate] of clearedEndpoints) {
+      const copy = JSON.parse(JSON.stringify(real))
+      mutate(copy)
+      const tamperedPath = join(WORK, 'api-endpoints-cleared.json')
+      writeFileSync(tamperedPath, JSON.stringify(copy), 'utf8')
+
+      const res = run([
+        '--from-console', EXPORT, '--bucket', BUCKET,
+        '--expect-count', String(KEYS.length), '--expect-source', 'fixture',
+        '--storage-id', 'id-a', '--compare', tamperedPath,
+      ])
+      assert.equal(res.code, 6, `${label}：应当退出码 6，实际 ${res.code}\n${res.out}`)
+      assert.match(res.out, /拒绝对比/, label)
+      assert.match(res.out, /端点/, `${label}：拒绝原因要提到端点\n${res.out}`)
       assert.equal(DIFF.test(res.out), false, `${label}：拒绝时不得输出任何差异结论`)
     }
 

@@ -28,6 +28,56 @@ const REQUIRED = [
   ['R2_SECRET_ACCESS_KEY', '只读 Secret Key'],
 ]
 
+/**
+ * 端点的**规范化与校验**（业主 Stage 13C.5）。
+ *
+ * WHY 单独抽出来：`resolveR2Config()` 早就用 `new URL(endpoint).host` 算出
+ * "这个清单来自哪个端点"，而身份自洽校验需要**同一套**判断。两处各写一套规则，
+ * 迟早会出现"配置那边合法、自洽校验这边不认"（或反过来）的矛盾 ——
+ * 那正是"同一件事有两份真相"的老问题。
+ *
+ * 接受两种写法：
+ *   · 完整 URL（`https://acct.r2.cloudflarestorage.com`、`http://127.0.0.1:18444`）；
+ *   · 已规范化的 `host[:port]`（`acct.r2.cloudflarestorage.com`、`[::1]:18443`）。
+ *
+ * 返回**小写化**的规范化端点；空、纯空白、`null`、缺主机名、端口非法一律判不合法。
+ *
+ * @param {unknown} value
+ * @returns {{ok: true, host: string} | {ok: false, reason: string}}
+ */
+export function normalizeEndpointHost(value) {
+  if (typeof value !== 'string') {
+    return { ok: false, reason: `不是字符串（${value === null ? 'null' : typeof value}）` }
+  }
+  const text = value.trim()
+  if (text === '') return { ok: false, reason: '为空（或纯空白）' }
+
+  // 完整 URL：与 resolveR2Config 完全一致地解析（同一套规则）
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+    let parsed
+    try {
+      parsed = new URL(text)
+    } catch {
+      return { ok: false, reason: 'URL 无法解析' }
+    }
+    if (parsed.hostname === '') return { ok: false, reason: 'URL 里没有主机名' }
+    return { ok: true, host: parsed.host.toLowerCase() }
+  }
+
+  // 已是 host[:port] 写法：允许 IPv6 方括号形式
+  const ipv6 = /^\[([0-9a-f:.]+)\](?::(\d{1,5}))?$/i.exec(text)
+  if (ipv6 !== null) {
+    const port = ipv6[2] === undefined ? null : Number(ipv6[2])
+    if (port !== null && (port < 1 || port > 65535)) return { ok: false, reason: `端口超出范围（${String(port)}）` }
+    return { ok: true, host: text.toLowerCase() }
+  }
+  const hostPort = /^([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::(\d{1,5}))?$/i.exec(text)
+  if (hostPort === null) return { ok: false, reason: '不是合法的 主机[:端口]' }
+  const port = hostPort[2] === undefined ? null : Number(hostPort[2])
+  if (port !== null && (port < 1 || port > 65535)) return { ok: false, reason: `端口超出范围（${String(port)}）` }
+  return { ok: true, host: text.toLowerCase() }
+}
+
 /** 指纹格式：`sha256:` + 16 位十六进制（生成与校验共用同一份定义）。 */
 export const STORAGE_FINGERPRINT_PATTERN = /^sha256:[0-9a-f]{16}$/
 
@@ -76,11 +126,30 @@ function assertStorageIdentityConsistent(artifact) {
     if (typeof fingerprint !== 'string' || !STORAGE_FINGERPRINT_PATTERN.test(fingerprint)) {
       return { ok: false, reason: `实时列举清单的指纹缺失或格式不合法（${String(fingerprint)}）` }
     }
-    if (endpointHost !== artifact.scope?.endpointHost) {
+    /*
+      ⚠️ 只比"两个字段是否相等"是不够的（业主 Stage 13C.5）：
+      把 `scope.endpointHost` 与 `storageIdentity.endpointHost` **一起**改成 `null`
+      （或空串），相等判断照样成立，等于给"没有来源"的清单发了一张通行证。
+      所以这里要求**两边都非空、都合法、规范化后一致**。
+    */
+    const scopeHost = normalizeEndpointHost(artifact.scope?.endpointHost)
+    if (!scopeHost.ok) {
       return {
         ok: false,
-        reason:
-          `身份里记录的端点（${String(endpointHost)}）与 scope.endpointHost（${String(artifact.scope?.endpointHost)}）不一致`,
+        reason: `实时列举清单的端点（scope.endpointHost）不合法：${scopeHost.reason}`,
+      }
+    }
+    const identityHost = normalizeEndpointHost(endpointHost)
+    if (!identityHost.ok) {
+      return {
+        ok: false,
+        reason: `身份里记录的端点（storageIdentity.endpointHost）不合法：${identityHost.reason}`,
+      }
+    }
+    if (identityHost.host !== scopeHost.host) {
+      return {
+        ok: false,
+        reason: `身份里记录的端点（${identityHost.host}）与 scope.endpointHost（${scopeHost.host}）不一致`,
       }
     }
     return { ok: true }
@@ -183,6 +252,14 @@ export function resolveR2Config(env, { allowInsecureLocal = false } = {}) {
     return { ok: false, reason: `R2_ENDPOINT 必须是 http(s) 地址（实际协议：${parsed.protocol}）。` }
   }
 
+  /*
+    同一套端点规范化（见 normalizeEndpointHost）：配置与自洽校验不能各有一套规则。
+    放在**协议检查之后** —— 协议就不对的时候，先说协议，再说主机名（否则
+    `ftp://x/y` 会被报成"没有主机名"，照着改还是错的）。
+  */
+  const normalized = normalizeEndpointHost(endpoint)
+  if (!normalized.ok) return { ok: false, reason: `R2_ENDPOINT 的端点不合法：${normalized.reason}。` }
+
   const bucket = String(env.R2_BUCKET).trim()
   if (bucket === '') return { ok: false, reason: 'R2_BUCKET 是空白 —— 不猜要列哪个桶。' }
 
@@ -192,7 +269,7 @@ export function resolveR2Config(env, { allowInsecureLocal = false } = {}) {
     bucket,
     accessKeyId: String(env.R2_ACCESS_KEY_ID).trim(),
     secretAccessKey: String(env.R2_SECRET_ACCESS_KEY).trim(),
-    redactedEndpoint: parsed.host,
+    redactedEndpoint: normalized.host,
     insecureLocal,
   }
 }
