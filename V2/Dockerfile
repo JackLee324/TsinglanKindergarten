@@ -20,12 +20,30 @@
 # ── 1. 依赖 ─────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
+# ⚠️ 这一层**必须真的装上 devDependencies** —— `nest` / `vite` / `typescript`
+#    全都在 devDeps 里，而 `npm run build` 就是从 `node_modules/.bin` 调它们的。
+#
+# 为什么要把 `--include=dev` 写死（2026-10-10 的真实事故，不是理论风险）：
+#   Zeabur 会把**服务变量**带进 Docker 构建，而服务上设了 `NODE_ENV=production`。
+#   npm 的规则是"NODE_ENV=production 等于 `--omit=dev`"，于是这一层的 `npm ci`
+#   **静默跳过全部 devDeps**，`npm run build` 走到第 2 步 `nest build` 时
+#   直接 **exit 127（command not found）**；构建日志里只剩一句
+#   "did not complete successfully: exit code 127"，指不到原因。
+#   本机复现（2026-10-10）：
+#     NODE_ENV=production npm ci           → 166 个包，`.bin/nest` **不存在**
+#     NODE_ENV=production npm ci --include=dev → 624 个包，`.bin/nest`/`.bin/vite` 都在
+#   命令行的 `--include=dev` 优先级高于 NODE_ENV，所以这样写对两种构建环境都成立。
+#   同时把这一层的 NODE_ENV 钉成 development：这层是**构建期**，不是运行期。
+ENV NODE_ENV=development
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci --include=dev --no-audit --no-fund
 
 # ── 2. 构建 ─────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
+# 这一层不设 NODE_ENV：构建产物（nest build + vite build）与 NODE_ENV 无关
+# （已核查：scripts/*.mjs、nest-cli.json、vite.config.mts 都不读它），
+# 保持与演练镜像一致的构建环境，避免"为了修依赖把产物改了"。
 COPY --from=deps /app/node_modules ./node_modules
 # ⚠️ `postcss.config.mjs` 必须在这里 —— Tailwind v4 是**通过它**接进 Vite 的
 #    （`vite.config.mts` 里只有 `react()` 插件，没有 `@tailwindcss/vite`）。

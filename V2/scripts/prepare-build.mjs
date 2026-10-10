@@ -19,6 +19,26 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = join(ROOT, 'dist')
 
+/**
+ * 构建前自检：构建工具在不在。
+ *
+ * 为什么要有这一段（2026-10-10 真实事故，不是假想）：平台把 `NODE_ENV=production`
+ * 带进构建环境时，`npm ci` 会**跳过 devDependencies**，于是 `nest` / `vite`
+ * 这两个二进制根本不存在，`npm run build` 以 **exit 127（command not found）**
+ * 失败 —— 而构建日志里只有一句 "exit code 127"，看的人只能猜。
+ *
+ * 这条检查把 127 变回人话；真正的修法在 `Dockerfile`（`npm ci --include=dev`）。
+ */
+const BUILD_TOOLS = ['nest', 'vite']
+const missingTools = BUILD_TOOLS.filter((t) => !existsSync(join(ROOT, 'node_modules', '.bin', t)))
+if (missingTools.length > 0) {
+  console.error(`✖ 构建工具缺失：${missingTools.join(' / ')}`)
+  console.error('  `npm run build` 是从 node_modules/.bin 调它们的（nest build / vite build）。')
+  console.error('  最常见原因：在 NODE_ENV=production 下跑了 npm ci —— npm 会据此跳过 devDependencies。')
+  console.error('  修法：npm ci --include=dev（Dockerfile 的 deps 阶段已经这么写）。')
+  process.exit(1)
+}
+
 const strays = readdirSync(ROOT, { withFileTypes: true })
   .filter((e) => e.isDirectory() && /^(dist|server|shared) \d+$/.test(e.name))
   .map((e) => e.name)
