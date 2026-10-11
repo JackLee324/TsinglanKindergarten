@@ -7,11 +7,13 @@
 
 ## 0. 一句话现状
 
-**数据链路已在本机演练栈上整条跑通（drill，PASS）；正式环境的执行仍然 BLOCKED**
-—— 卡在 Zeabur 环境变量写权限与教师授权决定（两件都不是代码问题）。
+**V2 已在临时网址上正常运行**（`https://tsinglan.zeabur.app`，部署 `36ba9207`，
+`deploy/verify.mjs` 退出码 0、真实浏览器桌面 + 移动 9/9）；**正式域名仍然不切**，
+因为教师名额管理界面、支付/账单/发票尚未实现，且 24 个账号的目录授权仍未决定（§6）。
 
-2026-10-10 更新（§6）：**生产 R2 已配置并实测通过**（G5 清单门禁 PASS），
-**独立 V2 库已存在**；存储侧只剩"CORS 等 V2 域名"这一项，随部署一起做。
+2026-10-11 更新（§6）：构建失败（exit 127）、502（端口不匹配）、安全头与登录限流
+三个线上问题均已定位并修复，前两个在线上验证通过；存储侧全部 PASS。
+剩下卡在"人"的条件：教师授权决定与管理员凭据（用于登录后的验收）。
 
 ## 1. 切换那天怎么走（三条命令）
 
@@ -115,10 +117,11 @@ title='test' 残留 = 0
 | 生产配置块能否启动 | **通过**：用最终生产环境变量在本机起进程，`/api/health` 200、`/api/health/ready` 200（`database:ok`，即生产库连接串可用）、`/` 200（SPA） | 端口 3399 本地冒烟，跑完即停 |
 | 桶 CORS | **已配置并回读确认** | `V2_PUBLIC_ORIGIN=https://tsinglan.zeabur.app node scripts/configure-bucket-cors.mjs` → 回读 `GetBucketCors`：`AllowedOrigins=[https://tsinglan.zeabur.app]`，方法 `PUT/GET/HEAD`，无通配符；`scripts/check-storage.mjs` 退出码 **0** |
 | 浏览器直传链路 | **通过（对生产桶实测）** | 用 `dist` 里的 `S3StorageProvider.presignPut` 签名 → `OPTIONS` 预检 **204** 且 `allow-origin=https://tsinglan.zeabur.app`、`allow-methods=PUT, GET, HEAD` → 带 `Origin` 真发 `PUT` **200** → 读回 sha256 与上传一致 → 删除探针，桶回到 0 对象 |
-| 部署后的应用 | **BLOCKED（502）** | `https://tsinglan.zeabur.app/` 与 `/api/health` 连续探测均 **502 Bad Gateway**（`http://` 会 302 到 https）；`deploy/verify.mjs --base … --skip-compose --skip-db` 退出码 **1**（7/9 未通过，全部由 502 引起）。同一时刻 V1 站点 200、未受影响 |
-| 部署触发 | **BLOCKED（无人可点）** | 本机没有 Zeabur CLI 登录态、没有可用 API token（此前那个 `zat_…` 无写环境变量权限，且未留存全文）→ **我无法触发 Redeploy 或读构建/运行日志**；Git 上 `main = f487146` 已就绪，等服务上一次 Redeploy |
-| 构建失败根因（已修） | **修好并本机复现** | 平台把 `NODE_ENV=production` 带进 Docker 构建 → deps 阶段 `npm ci` 静默跳过 devDeps → `nest`/`vite` 不存在 → `npm run build` **exit 127**。复现：`NODE_ENV=production npm ci` = 166 包、无 `.bin/nest`；加 `--include=dev` = 624 包、`.bin/nest` 在。Dockerfile 已显式 `--include=dev`，并新增构建前自检把 127 变人话（5 条单测锁住） |
-| 安全响应头 / 登录限流（已修） | **搬进应用并本机实测通过** | 这两件事以前只由演练栈 Nginx 提供，正式环境没有 Nginx → 六个头全缺、错口令 10 次无 429。现由 `server/common/security-headers.ts` + `server/auth/login-throttle.ts` 提供：本机生产配置实测六头齐全、CSP 放行生产 R2 origin、错口令序列 `401,401,401,429,…`；成功登录不消耗配额 |
+| 部署后的应用 | **RUNNING（200）** | 部署 `36ba9207`（BUILDING → DEPLOYING → RUNNING，finished `2026-10-11T02:00:59Z`）。`/api/health` **200**、`/api/health/ready` **200**（`database:ok`）；`deploy/verify.mjs --base https://tsinglan.zeabur.app --skip-compose --skip-db` → **退出码 0（9 项通过，1 项未验证：需要管理员凭据的服务端存储检查）**；真实浏览器（Chrome/CDP）桌面 + 移动 9/9 通过；V1 站点同期 200、未受影响 |
+| 部署触发 | **可用（自动部署）** | `v2-app` 绑定了 `JackLee324/TsinglanKindergarten` 的 `main`：**push 即自动构建部署**（部署历史逐条对应 commit）。业主提供的令牌可读项目/服务/部署/构建日志，但 **`updateServicePorts` 与 `updateSingleEnvironmentVariable` 均为 FORBIDDEN** —— 平台配置改不了，只能改代码 |
+| 构建失败根因（已修） | **修好并本机复现** | 平台把服务变量带进 Docker 构建（日志里可见 `RUN --mount=type=secret,…`）→ deps 阶段 `npm ci` 静默跳过 devDeps → `nest`/`vite` 不存在 → `npm run build` **exit 127**（对应部署 `273467f` FAILED）。复现：`NODE_ENV=production npm ci` = 166 包、无 `.bin/nest`；加 `--include=dev` = 624 包、`.bin/nest` 在。修复后部署日志 `Successfully compiled: 54 files with swc` + 镜像 digest 已推送 |
+| 502 根因（已修） | **修好并线上验证** | 服务端口配置 `ports:[{id:"web",port:8080}]` —— 边缘路由到 **8080**，而应用只听 `SERVER_PORT=3300`：构建成功、容器活着、站点 502。端口由平台说了算，所以改成 `resolveServerPort()`：**生产跟随平台 `PORT`**，其余环境仍用 `SERVER_PORT`（本地/测试/演练行为不变）。本机模拟 Zeabur 环境实测：日志 `listening on …:8080（端口来源：PORT）`，`:8080` 200、`:3300` 连不上 |
+| 安全响应头 / 登录限流（已修） | **线上实测通过** | 六个头（HSTS/XCTO/Referrer-Policy/X-Frame-Options/CSP/Permissions-Policy）线上齐全，CSP 放行生产 R2 origin；登录失败限流线上序列 `401,401,401,429,…`。均为应用自己提供（先前只由演练栈 Nginx 提供） |
 
 ### V1 的历史文件要不要搬？——**不需要**（这就是 `resource_files=0` 是对的）
 
