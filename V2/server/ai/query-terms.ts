@@ -107,6 +107,40 @@ function stripStopWords(segment: string): string {
 }
 
 /**
+ * 把一段"中英混排"的片段按字符集拆开：汉字一段、拉丁/数字/连字符一段。
+ *
+ * 为什么必须拆（实测踩到）：`调用Ai` 这种混排片段如果整段取二元组，会切出
+ * `调用 / 用A / Ai` —— 其中 `用A` 是**跨语种垃圾词元**（汉字与字母相邻），
+ * 既没有检索意义，又把词元总数抬高、覆盖率压低，
+ * 于是「调用Ai」这类完全正常的提问反而达不到相关门槛，
+ * 最后落到"没找到"的固定文案上（业主就是这样看到的）。
+ */
+function splitByScript(segment: string): string[] {
+  const runs: string[] = []
+  let current = ''
+  let currentIsHan: boolean | null = null
+  for (const char of segment) {
+    const isHan = HAN.test(char)
+    const isWordChar = /[\p{L}\p{N}-]/u.test(char)
+    const kind = isHan ? true : isWordChar ? false : null
+    if (kind === null) {
+      if (current !== '') runs.push(current)
+      current = ''
+      currentIsHan = null
+      continue
+    }
+    if (currentIsHan !== null && kind !== currentIsHan && current !== '') {
+      runs.push(current)
+      current = ''
+    }
+    current += char
+    currentIsHan = kind
+  }
+  if (current !== '') runs.push(current)
+  return runs
+}
+
+/**
  * 中文片段 → 词元。
  *
  * 短片段（≤6 字）先**整段**保留：老师用几个字提问时，那通常就是一个关键词
@@ -142,13 +176,16 @@ export function queryTerms(query: string, options: { readonly maxTerms?: number 
 
   for (const segment of raw.split(SEGMENT_SPLIT)) {
     if (segment === '') continue
-    if (HAN.test(segment)) {
-      hanTerms(segment, push)
-      continue
-    }
-    // 英文/数字：整词（含连字符，例如 Pre-K 要作为一个词才能对上原文）
-    for (const token of segment.split('-').length > 1 ? [segment, ...segment.split('-')] : [segment]) {
-      push(token.toLowerCase())
+    // 中英混排先按字符集拆开，避免出现「用A」这种跨语种垃圾词元
+    for (const run of splitByScript(segment)) {
+      if (HAN.test(run)) {
+        hanTerms(run, push)
+        continue
+      }
+      // 英文/数字：整词（含连字符，例如 Pre-K 要作为一个词才能对上原文）
+      for (const token of run.split('-').length > 1 ? [run, ...run.split('-')] : [run]) {
+        push(token.toLowerCase())
+      }
     }
   }
 

@@ -43,6 +43,11 @@ describe('① 「问助手自己」的识别：要准，也要稳', () => {
       '你能修改资源吗',
       '你的知识来源是什么',
       'deepseek 是什么',
+      // 业主第二轮实测问过的（当时落进了固定文案）
+      '调用Ai',
+      '怎么调用AI助手',
+      '使用AI',
+      'AI助手在哪',
     ]) {
       assert.equal(isMetaQuestion(question), true, `应当识别为"问助手自己"：${question}`)
     }
@@ -58,6 +63,8 @@ describe('① 「问助手自己」的识别：要准，也要稳', () => {
       '蒙特梭利的日常生活区有哪些材料',
       '',
       '？',
+      '体育',
+      '中秋主题活动做月饼',
     ]) {
       assert.equal(isMetaQuestion(question), false, `不该误判：${question}`)
     }

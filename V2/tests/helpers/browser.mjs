@@ -571,7 +571,22 @@ export class Browser {
     this.process.kill('SIGKILL')
     // 等进程真的退出，否则下一次启动的 profile 目录可能被占用
     await sleep(200)
-    rmSync(this.profileDir, { recursive: true, force: true })
+    /*
+      删临时 profile 目录要**重试**：SIGKILL 之后 Chrome 的子进程（渲染器/网络进程）
+      可能还在写文件，`rmSync` 会抛 ENOTEMPTY。
+      2026-10-11 的整跑里就撞到过一次 —— 整个 `browser.stage11` 套件因为
+      `after` 钩子的清理失败被记成红，而**用例本身全绿**。
+      这是清理动作，不是断言：它失败不该让用例背锅，所以重试几次之后放弃，
+      剩下的临时目录交给操作系统回收（在 /tmp 下，不影响任何断言）。
+    */
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        rmSync(this.profileDir, { recursive: true, force: true })
+        return
+      } catch {
+        await sleep(200)
+      }
+    }
   }
 }
 

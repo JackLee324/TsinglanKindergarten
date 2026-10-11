@@ -96,6 +96,16 @@ describe('③ 有界：词元数量有上限（SQL 条件数必须可控）', ()
     assert.equal(terms.includes('pr'), false, '英文不能切字母二元组')
   })
 
+  test('**中英混排不能切出跨语种垃圾词元**（「调用Ai」曾经切出「用A」）', () => {
+    const { terms } = queryTerms('调用Ai')
+    assert.deepEqual([...terms].sort(), ['ai', '调用'].sort(), `混排词元应当干净：${JSON.stringify(terms)}`)
+    assert.equal(terms.some((t) => /[\u4e00-\u9fff][a-z]/i.test(t)), false, '不该出现"汉字+字母"的相邻词元')
+    const ordered = queryTerms('怎么调用AI助手')
+    assert.equal(ordered.terms.includes('ai'), true)
+    assert.equal(ordered.terms.includes('助手'), true)
+    assert.equal(ordered.terms.some((t) => t === '用A' || t === 'I助'), false)
+  })
+
   test('单字与空白片段被丢弃（长度 < 2 没有检索意义）', () => {
     const { terms } = queryTerms('a 中 ?')
     assert.deepEqual(terms, [])

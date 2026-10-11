@@ -494,7 +494,12 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
   test('⑮ 系统提示里列出的目录必须是**这个账号真能访问的**（不泄露目录名）', async () => {
     const b2 = client()
     await b2.login('ai_api_b', 'AiApiPass!2')
-    const res = await b2.post('/api/ai/chat', { question: '这个平台有什么内容' })
+    /*
+      用一个"资源和文档都命中不到"的问题，才能逼出那条系统提示
+      （"这个平台有什么内容"现在会由文档回答 —— 那是 ⑯ 覆盖的另一件事）。
+      "体育"在本套件语料里确实不存在（目录用的是"美德/体能"这类名字）。
+    */
+    const res = await b2.post('/api/ai/chat', { question: '体育' })
     assert.equal(res.status, 201, JSON.stringify(res.data))
     assert.equal(res.data.answeredBy, 'system', `这句在乙的权限下没有依据：${res.data.answer?.slice(0, 80)}`)
 
@@ -522,6 +527,26 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
     for (const name of listed) {
       assert.equal(accessible.has(name), true, `路标里出现了乙无权访问的目录「${name}」：${hint}`)
     }
+  })
+
+  test('⑯ 「调用Ai」这类"问平台/助手怎么用"的问题：必须真答（走平台文档），不是固定文案', async () => {
+    // 业主第二轮实测就问了这一句，收到的是"没有找到"的固定文案 —— 因为它的答案在
+    // 平台文档（站规里有一节「AI 助手能做什么、不能做什么」）而不在资料库里，
+    // 而旧实现只在"问助手自己"时才去查文档。
+    const before = mock.requests.length
+    const res = await teacherAClient.post('/api/ai/chat', { question: '调用Ai' })
+    assert.equal(res.status, 201, JSON.stringify(res.data))
+    assert.equal(res.data.answeredBy, 'model', '这类问题必须由模型回答，不能落进固定文案')
+    assert.equal(mock.requests.length, before + 1, '应当真的调用模型')
+    assert.equal(res.data.model, MODEL)
+
+    // 送给模型的上下文里应当有平台文档（站规），而不是空手回答
+    const sent = lastSentText()
+    assert.match(sent, /SITE_RULE/, `应当把站规片段交给模型：${sent.slice(0, 300)}`)
+    assert.match(sent, /AI 助手|助手能做什么|资料助手/, '文档里应当包含"AI 助手能做什么/不能做什么"那一节')
+    // 即便如此也不许带出无权内容
+    assert.doesNotMatch(sent, new RegExp(DRAFT_TITLE))
+    assert.doesNotMatch(sent, new RegExp(KW_OTHER))
   })
 
   test('⑫ **建议问题必须真的问得出东西**（否则界面上那几个按钮就是几个"没找到"）', async () => {

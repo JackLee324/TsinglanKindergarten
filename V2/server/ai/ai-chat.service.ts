@@ -269,10 +269,17 @@ export class AiChatService {
       */
       const meta = isMetaQuestion(input.question)
       let usedChunks = chunks
-      if (meta && usedChunks.length === 0) {
-        // 文档语料小且是精编的，放宽到"命中 1 个词元"；且这条路**碰不到任何用户资料**
+      if (usedChunks.length === 0) {
+        /*
+          资源里没有依据时，**再查一次平台文档**（站规 + 目录说明），而不是直接给固定文案。
+          这是业主第二轮反馈（问「调用Ai」拿到固定文案）之后补的：
+          这类问题的答案本来就在文档里（站规里就有一节叫「AI 助手能做什么、不能做什么」），
+          以前只有"问助手自己"的问题才会去查文档。
+          放宽到"命中 1 个词元"：文档语料小而精编，命中一个词元就值得交给模型判断；
+          而且这条路**碰不到任何用户资料**（SQL 里已经把资源片段排除掉了）。
+        */
         const docs = await this.retrieval.retrieve(user, input.question, {
-          limit: 3,
+          limit: meta ? 3 : 4,
           docsOnly: true,
           minHits: 1,
         })
