@@ -188,25 +188,30 @@ describe('线上：AI 助手的真实链路', () => {
     await shot('05-meta-question')
   })
 
-  test('⑥ 没找到时：线上显示为"系统提示 · 未调用 AI 模型"，并给出可访问目录当路标', async () => {
+  test('⑥ 没找到时：**仍然是模型在回答**（不是写死文案），要是说人话的"没找到 + 下一步"', async () => {
     await browser.realClick('[data-testid="ai-new"]')
     await browser.fill('[data-testid="ai-input"]', '体育')
     await browser.realClick('[data-testid="ai-send"]')
     await browser.waitFor(
-      `!!document.querySelector('[data-testid="ai-system-answer-label"]')`,
-      30000,
-      '系统提示标签',
+      `document.querySelectorAll('[data-testid="ai-loading"]').length === 0 &&
+       document.querySelectorAll('[data-testid="ai-message-assistant"]').length > 0`,
+      90000,
+      '没找到时的回答',
     )
     assert.equal(
       await browser.attr('[data-testid="ai-message-assistant"]', 'data-answer-by'),
-      'system',
-      '未命中资料且不是问助手自己时，应当是系统提示',
+      'model',
+      '没有资料时也必须是模型回答（业主两次反馈的正是这里）',
+    )
+    assert.equal(
+      await browser.exists('[data-testid="ai-no-evidence-note"]'),
+      true,
+      '要如实说明本次没有检索到站内资料',
     )
     const answer = await browser.text('[data-testid="ai-answer"]')
-    assert.match(answer, /未调用 AI 模型/)
-    assert.match(answer, /「体育」/, '要把用户问的原话带回来')
-    assert.match(answer, /教育教学|教师成长|目录包括/, `要给出路标：${answer.slice(0, 200)}`)
-    await shot('06-system-reply')
+    assert.match(answer, /没有找到|没有查到|未找到/, `要明确说没找到：${answer.slice(0, 200)}`)
+    assert.match(answer, /目录|关键词|换/, `要给出下一步：${answer.slice(0, 200)}`)
+    await shot('06-no-evidence')
   })
 
   test('⑦ 问「调用Ai」（业主实际问过、当时落到固定文案）：线上必须由模型基于平台文档真答', async () => {

@@ -33,7 +33,7 @@ import { AiRateLimiter } from './ai-rate-limit'
 import {
   SUGGESTED_QUESTIONS,
   buildContextBlock,
-  buildNoEvidenceAnswer,
+  buildPlatformFacts,
   buildSystemPrompt,
   buildUserMessage,
   isMetaQuestion,
@@ -286,25 +286,22 @@ export class AiChatService {
         usedChunks = await this.retrieval.filterCitable(user, docs)
       }
 
-      if (usedChunks.length === 0 && !meta) {
-        const answer = buildNoEvidenceAnswer({
-          question: input.question,
-          directoryNames: await this.accessibleDirectoryNames(user),
-        })
-        await this.persistAssistant(conversationId, answer, [], null, null)
-        await this.finishTurn({ user, conversationId, outcome: 'ok', model: null, usage: null, started, noEvidence: true })
-        return {
-          conversationId,
-          answer,
-          citations: [],
-          model: null,
-          usage: null,
-          noEvidence: true,
-          answeredBy: 'system',
-        }
-      }
-
+      /*
+        没有资料时**也交给模型**（2026-10-11 业主第二次反馈"和 AI 聊天还是不行"之后改的）。
+        旧行为是自己写死一段"与「…」相关的内容没有找到"，问"在吗""现在有什么内容""今天教什么"
+        收到的都是同一句话 —— 那确实不像在聊天。
+        现在的分工：**文案交给模型**（它能把话说得像样、能给出下一步），
+        **纪律留给我们**：用户消息里明确要求"据实说没有找到、不许编造、不许给编号引用"，
+        并附上"平台事实"（他有权限访问的目录 + 他能看到的资源条数）让这类问题答得出具体内容。
+      */
+      const noEvidence = usedChunks.length === 0
       const contextBlock = buildContextBlock(usedChunks, this.config.maxContextChars)
+      const facts = noEvidence
+        ? buildPlatformFacts({
+            directoryNames: await this.accessibleDirectoryNames(user),
+            visibleResourceCount: await this.visibleResourceCount(user),
+          })
+        : undefined
       const citations = citationsOf(usedChunks)
       let completion
       try {
@@ -321,7 +318,7 @@ export class AiChatService {
               { meta },
             ),
             history,
-            question: buildUserMessage(input.question, contextBlock, { meta }),
+            question: buildUserMessage(input.question, contextBlock, { meta, facts }),
           },
           { signal: options.signal },
         )
@@ -353,6 +350,23 @@ export class AiChatService {
     } finally {
       release()
     }
+  }
+
+  /**
+   * 当前账号**看得见**的已发布资源条数（与检索同一套权限策略）。
+   * 用途：没有资料依据时，让"站内有什么"这类问题有一个真实的数字可答。
+   */
+  private async visibleResourceCount(user: AuthUser): Promise<number> {
+    const scope = await this.authz.accessibleDirectoryIds(user, 'resource.view' as PermissionCode)
+    if (Array.isArray(scope) && scope.length === 0) return 0
+    const { othersStatuses, ownerId } = await this.authz.resourceVisibility(user)
+    const [row] = await this.sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM resources r
+      WHERE r.deleted_at IS NULL
+        AND (${scope}::uuid[] IS NULL OR r.directory_id = ANY(${scope}::uuid[]))
+        AND (r.uploader_id = ${ownerId}::uuid OR r.status = ANY(${othersStatuses}::text[]))
+    `
+    return row?.n ?? 0
   }
 
   /**

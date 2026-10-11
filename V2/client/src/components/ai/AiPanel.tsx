@@ -532,6 +532,12 @@ function MessageRow({ message }: { readonly message: LocalMessage }) {
       {message.pending !== true && message.citations.length > 0 && (
         <CitationList citations={message.citations} />
       )}
+      {message.pending !== true && message.model !== null && message.citations.length === 0 && (
+        // 模型答了，但这次没有检索到可引用的站内资料 —— 如实说明，避免被当成"引用漏了"
+        <p className="text-[11px] text-muted-foreground" data-testid="ai-no-evidence-note">
+          本次没有检索到你有权限查看的站内资料，以上依据的是平台使用说明与你的权限范围。
+        </p>
+      )}
     </div>
   )
 }

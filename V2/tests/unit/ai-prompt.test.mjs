@@ -18,7 +18,7 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { aiPrompt } from '../helpers/modules.mjs'
 
-const { isMetaQuestion, buildSelfDescription, buildSystemPrompt, buildNoEvidenceAnswer, buildUserMessage, AI_SYSTEM_PROMPT } =
+const { isMetaQuestion, buildSelfDescription, buildSystemPrompt, buildPlatformFacts, buildUserMessage, AI_SYSTEM_PROMPT } =
   aiPrompt
 
 const CONFIG = {
@@ -106,36 +106,43 @@ describe('② 自我描述：据实、且不含密钥', () => {
   })
 })
 
-describe('③ 没找到时的系统提示：说清身份、带回问题、给出路标', () => {
-  test('明确声明"未调用 AI 模型"，并原样带回用户的问题', () => {
-    const text = buildNoEvidenceAnswer({ question: '体育', directoryNames: ['Pre-K', 'K'] })
-    assert.match(text, /未调用 AI 模型/)
-    assert.match(text, /「体育」/)
-    assert.match(text, /系统提示/)
+describe('③ 没有资料依据时：**交给模型**去说，但纪律写在我们这边', () => {
+  test('给模型的指令里必须有"据实说没找到 + 不许编造 + 不许编号引用"', () => {
+    const message = buildUserMessage('在吗', '', { facts: buildPlatformFacts({ directoryNames: ['教育教学'], visibleResourceCount: 12 }) })
+    assert.match(message, /没有找到/, '要明确要求说没找到')
+    assert.match(message, /不要.{0,4}编造|绝对不要/, '要明确禁止编造')
+    assert.match(message, /不要[^\n]{0,24}编号引用/, '没有来源时不许给 [1][2] 这类引用')
+    assert.match(message, /课程目录|关键词/, '要给出可操作的下一步')
   })
 
-  test('列出**有权访问的目录**当路标', () => {
-    const text = buildNoEvidenceAnswer({ question: '体育', directoryNames: ['Pre-K', 'K', '教师成长'] })
-    assert.match(text, /Pre-K/)
-    assert.match(text, /K/)
-    assert.match(text, /教师成长/)
+  test('平台事实：只含"他有权限访问的目录"与"他能看到的资源条数"', () => {
+    const facts = buildPlatformFacts({ directoryNames: ['Pre-K', 'K'], visibleResourceCount: 37 })
+    assert.match(facts, /Pre-K/)
+    assert.match(facts, /37/)
+    assert.match(facts, /你能看到的资源/, '措辞要准：管理员能看草稿，不能写成"已发布"')
+    assert.match(facts, /平台事实/)
   })
 
-  test('一个目录权限都没有时，明说没有授权（不列空清单）', () => {
-    const text = buildNoEvidenceAnswer({ question: '体育', directoryNames: [] })
-    assert.match(text, /没有任何目录/)
-    assert.doesNotMatch(text, /有权访问的目录包括/)
+  test('一个目录权限都没有时，平台事实据实说"没有任何目录的查看授权"', () => {
+    const facts = buildPlatformFacts({ directoryNames: [], visibleResourceCount: 0 })
+    assert.match(facts, /没有任何目录/)
   })
 
-  test('meta 且资料为空时，用户消息要求"据实回答、不要用没找到来回避"', () => {
+  test('没有给出平台事实时，不会留下空的事实区块（只是指令里提到它）', () => {
+    const message = buildUserMessage('在吗', '', {})
+    assert.doesNotMatch(message, /【平台事实】/, '没有事实就整块不出现')
+  })
+
+  test('meta 且资料为空时，要求"据实回答、不要用没找到来回避"', () => {
     const message = buildUserMessage('你现在是什么模型', '', { meta: true })
     assert.match(message, /关于你自己/)
     assert.match(message, /不要编造/)
-    assert.doesNotMatch(message, /明确说明没有找到/)
+    assert.doesNotMatch(message, /先明确说明"现有资料里没有找到/)
   })
 
-  test('非 meta 且资料为空时，仍然要求"没找到就说没找到"（不许编造）', () => {
-    const message = buildUserMessage('体育', '', {})
-    assert.match(message, /明确说明没有找到/)
+  test('有资料时仍然是老口径：资料区块 + 提问，不带"没找到"指令', () => {
+    const message = buildUserMessage('蓝莓藤蔓主题', '[1] 来源类型：FILE_TEXT｜标题：素材\n内容…', {})
+    assert.match(message, /<<<资料开始>>>/)
+    assert.doesNotMatch(message, /铁律提醒/)
   })
 })

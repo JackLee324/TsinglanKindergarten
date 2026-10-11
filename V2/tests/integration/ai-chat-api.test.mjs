@@ -361,19 +361,22 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
     assert.equal(messages.data.items.length, 4, '两问两答')
   })
 
-  test('⑦ 取不到依据时不调模型：说清"没找到"，且给出去哪儿找的建议', async () => {
-    const before = mock.requests.length
+  test('⑦ 别人的草稿：检索不到（noEvidence）且**不给任何引用**，但要落库成对消息', async () => {
+    /*
+      注意这条的**行为已经变了**（2026-10-11，业主反馈"聊天不行"之后）：
+      以前这里断言"没有依据时不调用模型"；现在没有依据也交给模型去说
+      （否则问"在吗""今天教什么"都会收到同一句写死文案，像假机器人）。
+      留在这里的判据变成了：**没有依据时不许出现引用**、noEvidence 如实标记、
+      回答与提问都要落库；请求里到底带了什么（纪律指令、平台事实、无权内容）
+      由 ⑬/⑭/⑮ 三条分别核对。
+    */
     const res = await teacherAClient.post('/api/ai/chat', { question: KW_DRAFT })
     assert.equal(res.status, 201, JSON.stringify(res.data))
-    assert.equal(res.data.noEvidence, true)
-    assert.match(res.data.answer, /没有找到/)
-    assert.deepEqual(res.data.citations, [])
-    assert.equal(res.data.model, null)
-    assert.equal(res.data.usage, null)
-    assert.equal(mock.requests.length, before, '没有依据时不该调用模型（省成本，也不给编造留空间）')
-    // 消息仍然成对落库，用户能看到"问过什么、回了什么"
+    assert.equal(res.data.noEvidence, true, '甲看不到乙的草稿 → 必须标"没有检索到资源依据"')
+    assert.deepEqual(res.data.citations, [], '没有依据时绝不能出现引用（那等于承认资料存在）')
     const messages = await teacherAClient.get(`/api/ai/conversations/${res.data.conversationId}/messages`)
-    assert.equal(messages.data.items.length, 2)
+    assert.equal(messages.data.items.length, 2, '问与答都要落库')
+    assert.equal(messages.data.items[0].content, KW_DRAFT)
     assert.equal(messages.data.items[1].content, res.data.answer)
   })
 
@@ -474,41 +477,47 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
     assert.match(sent, /不要编造/)
   })
 
-  test('⑭ 普通问题没命中（"体育"）→ **不调模型**，回一条一眼看出是系统提示的回复', async () => {
-    // "体育"在线上语料里确实不存在（那里用的是"体能"），是真实的"没找到"场景
+  test('⑭ 普通问题没命中（"体育"）→ **也由模型回答**，但纪律由我们给：据实说没找到、不许编造、不许引用', async () => {
+    // "体育"在本套件语料里确实不存在（目录用"美德/体能"这类名字），是真实的"没找到"场景。
+    // 旧行为是回一句我们自己写死的文案；业主两次反馈"像假的/聊天不行"，
+    // 所以现在文案交给模型、纪律留在提示词里（见 buildUserMessage 的"铁律提醒"）。
     const before = mock.requests.length
     const res = await teacherAClient.post('/api/ai/chat', { question: '体育' })
     assert.equal(res.status, 201, JSON.stringify(res.data))
-    assert.equal(res.data.answeredBy, 'system', '这不是模型回答，必须标成系统提示')
-    assert.equal(res.data.noEvidence, true)
-    assert.equal(res.data.model, null, 'model 为空 = 没有调用模型（界面据此打"未调用 AI 模型"标签）')
-    assert.equal(mock.requests.length, before, '没依据的问题仍然不该调用模型（省成本、也不给编造留空间）')
-    // 文案要点：说清身份 + 带回问题 + 给路标 + 不许看起来像模型在敷衍
-    assert.match(res.data.answer, /未调用 AI 模型/)
-    assert.match(res.data.answer, /系统提示/)
-    assert.match(res.data.answer, /「体育」/, '要把用户问的原话带回来，证明系统听懂了')
-    assert.match(res.data.answer, /Pre-K|K|教师成长/, '要列出这个账号真能访问的目录当路标')
-    assert.deepEqual(res.data.citations, [])
+    assert.equal(res.data.answeredBy, 'model', '现在即使没有资料也由模型来答复')
+    assert.equal(res.data.noEvidence, true, 'noEvidence 仍然如实标记"没有检索到资源依据"')
+    assert.equal(mock.requests.length, before + 1, '应当真的调用模型')
+
+    const sent = lastSentText()
+    assert.match(sent, /没有找到/, '必须要求模型明说没找到')
+    assert.match(sent, /不要[^\n]{0,24}编造/, '必须禁止编造')
+    assert.match(sent, /不要[^\n]{0,24}编号引用/, '没有来源时不许给 [1][2] 这类引用')
+    assert.match(sent, /平台事实/, '没有资料时应当给出"平台事实"让这类问题答得出具体内容')
+    // 平台事实里的数字必须是这个账号真看得见的（不是全站数字）
+    const visible = await withSql(async (sql) => {
+      return await sql`SELECT count(*)::int AS n FROM resources WHERE deleted_at IS NULL`
+    })
+    assert.match(sent, new RegExp(`你能看到的资源：\\d+ 条`), '平台事实里要有"你能看到的资源"条数')
+    assert.equal(visible[0].n > 0, true)
+    // 即便如此也不许带出无权内容
+    assert.doesNotMatch(sent, new RegExp(DRAFT_TITLE))
+    assert.doesNotMatch(sent, new RegExp(KW_OTHER))
   })
 
-  test('⑮ 系统提示里列出的目录必须是**这个账号真能访问的**（不泄露目录名）', async () => {
+  test('⑮ 平台事实里列出的目录必须是**这个账号真能访问的**（不泄露目录名）', async () => {
     const b2 = client()
     await b2.login('ai_api_b', 'AiApiPass!2')
-    /*
-      用一个"资源和文档都命中不到"的问题，才能逼出那条系统提示
-      （"这个平台有什么内容"现在会由文档回答 —— 那是 ⑯ 覆盖的另一件事）。
-      "体育"在本套件语料里确实不存在（目录用的是"美德/体能"这类名字）。
-    */
+    const before = mock.requests.length
     const res = await b2.post('/api/ai/chat', { question: '体育' })
     assert.equal(res.status, 201, JSON.stringify(res.data))
-    assert.equal(res.data.answeredBy, 'system', `这句在乙的权限下没有依据：${res.data.answer?.slice(0, 80)}`)
+    assert.equal(mock.requests.length, before + 1)
 
-    // 只核对"目录包括：…。"这一行里的**条目**（整篇文字里出现某个词不算"列了目录"）
-    const hint = /目录包括：([^。]*)。/.exec(String(res.data.answer))?.[1] ?? ''
+    // 只看送给模型的"平台事实"那一行（整篇文字里出现某个词不算"列了目录"）
+    const sent = String(mock.requests.at(-1)?.body?.input?.at(-1)?.content ?? '')
+    const hint = /你有权限访问的目录：([^。]*)。/.exec(sent)?.[1] ?? ''
     const listed = hint.split('、').map((part) => part.trim()).filter((part) => part !== '')
-    assert.equal(listed.length > 0, true, `乙有 education 的授权，路标不该是空的：${res.data.answer}`)
+    assert.equal(listed.length > 0, true, `乙有 education 的授权，平台事实里的目录不该是空的：${sent.slice(0, 200)}`)
 
-    // 权威口径：从数据库算出乙**真正**能访问的目录名（策略与接口同一张表）
     const rows = await withSql(async (sql) => {
       return await sql`
         WITH RECURSIVE reach AS (
@@ -525,7 +534,7 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
     })
     const accessible = new Set(rows.map((row) => row.name))
     for (const name of listed) {
-      assert.equal(accessible.has(name), true, `路标里出现了乙无权访问的目录「${name}」：${hint}`)
+      assert.equal(accessible.has(name), true, `平台事实里出现了乙无权访问的目录「${name}」：${hint}`)
     }
   })
 
