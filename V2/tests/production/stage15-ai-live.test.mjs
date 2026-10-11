@@ -209,7 +209,32 @@ describe('线上：AI 助手的真实链路', () => {
     await shot('06-system-reply')
   })
 
-  test('⑦ 业务页面不受影响：目录页照常打开（AI 只是加了一层，没有动原有功能）', async () => {
+  test('⑦ 问「调用Ai」（业主实际问过、当时落到固定文案）：线上必须由模型基于平台文档真答', async () => {
+    await openPanel()
+    await browser.realClick('[data-testid="ai-new"]')
+    await browser.fill('[data-testid="ai-input"]', '调用Ai')
+    await browser.realClick('[data-testid="ai-send"]')
+    await browser.waitFor(
+      `document.querySelectorAll('[data-testid="ai-loading"]').length === 0 &&
+       document.querySelectorAll('[data-testid="ai-message-assistant"]').length > 0`,
+      90000,
+      '「调用Ai」的回答',
+    )
+    assert.equal(
+      await browser.attr('[data-testid="ai-message-assistant"]', 'data-answer-by'),
+      'model',
+      '这类"问平台怎么用"的问题必须由模型回答（旧行为是回固定文案）',
+    )
+    assert.equal(
+      await browser.exists('[data-testid="ai-system-answer-label"]'),
+      false,
+      '不该带"系统提示 · 未调用 AI 模型"标签',
+    )
+    const answer = await browser.text('[data-testid="ai-answer"]')
+    assert.match(answer, /助手|平台/, `回答应当说明这个助手本身：${answer.slice(0, 160)}`)
+  })
+
+  test('⑧ 业务页面不受影响：目录页照常打开（AI 只是加了一层，没有动原有功能）', async () => {
     /*
       ⚠️ 不能写死 `/directory/education/pre-k`：**线上库是从 V1 迁过来的**，
       根节点 slug 是 `edu`，与本地 seed 树的 `education` 不同。
