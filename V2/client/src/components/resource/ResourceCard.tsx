@@ -56,13 +56,28 @@ export function ResourceCard({
       data-testid={testId}
       data-resource-id={resource.id}
       data-resource-status={resource.status}
-      className="transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-lg"
+      /* `relative` + 标题链接上的 `after:inset-0` = "整卡可点"（下面有详细说明） */
+      className="group relative transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-lg"
     >
       <CardContent>
         <div className="flex items-start justify-between gap-3">
+          {/*
+            整卡可点：业主 2026-10-11 的要求 ——"点击这个框框就能打开，不需要点到标题那几个字"。
+            做法是 **stretched link**（拉直链接）：真实 `<a>` 仍然只有一个（标题），
+            用伪元素 `after:inset-0` 把它的**可点区域铺满整张卡片**。
+
+            WHY 不把整个 `Card` 包成 `<Link>`：
+              · 卡片里还有按钮（「我的资源」的提交审核/撤回），把卡片变成链接就会出现
+                `<a>` 里嵌 `<button>` —— HTML 不允许，浏览器会把它拆开，键盘与读屏都会错乱；
+              · 铺满式的伪元素**不参与文档流**，卡片里的按钮只要 `relative z-10` 就会盖在它上面，
+                点按钮仍然是按钮（见下面 actions 那段）。
+
+            仍然只有一个可聚焦元素（标题链接），可访问名称也还是资源标题 ——
+            键盘 Tab 一下、回车即可打开，与点击整卡是同一条路径。
+          */}
           <Link
             to={`/resources/${resource.id}`}
-            className="text-lg font-semibold text-foreground hover:text-primary"
+            className="text-lg font-semibold text-foreground after:absolute after:inset-0 after:content-[''] hover:text-primary group-hover:text-primary"
             data-testid="resource-card-title"
           >
             {resource.title}
@@ -111,7 +126,13 @@ export function ResourceCard({
           <span data-testid="resource-card-updated">{formatDate(resource.updatedAt)}</span>
         </div>
 
-        {actions !== undefined && <div className="mt-3">{actions}</div>}
+        {/*
+          ⚠️ `relative z-10` 不能去掉：整卡的链接是一个铺满卡片的伪元素，
+          按钮必须**盖在它上面**，否则点「提交审核」会被卡片链接抢走 ——
+          表现是"手指点在按钮上，结果跳进了详情页"。
+          `tests/integration/browser.resource-card-click.test.mjs` 第 ② 组用例盯着这件事。
+        */}
+        {actions !== undefined && <div className="relative z-10 mt-3">{actions}</div>}
       </CardContent>
     </Card>
   )

@@ -271,6 +271,40 @@ export class Browser {
   }
 
   /**
+   * **真实鼠标点击**（CDP `Input.dispatchMouseEvent`）—— 会走浏览器的命中测试。
+   *
+   * 为什么必须与 `click()` 并存（2026-10-11 实测踩到）：
+   *   `click()` 是"在元素上 dispatchEvent 合成事件"，而合成事件**绕过命中测试** ——
+   *   元素被别的层盖住时它照样"点成功"。于是它测不出这一类缺陷：
+   *     · 整卡可点（命中区是标题链接铺满卡片的伪元素，卡片 `<div>` 本身不是链接）；
+   *     · 按钮被浮层/铺满式链接盖住（用户点按钮却触发了卡片跳转）。
+   *   这两种情况用 `click()` 都会**假绿**。需要"用户真的按下去"的效果时用这个方法。
+   */
+  async realClick(selector, { timeout = 5000 } = {}) {
+    const deadline = Date.now() + timeout
+    for (;;) {
+      const point = await this.session.eval(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)})
+        if (!el) return null
+        el.scrollIntoView({ block: 'center', inline: 'center' })
+        const r = el.getBoundingClientRect()
+        if (r.width === 0 || r.height === 0) return null
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+      })()`)
+      if (point !== null) {
+        await this.session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
+        await this.session.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 })
+        await this.session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 })
+        return point
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`真实点击失败：找不到或不可见 ${selector}`)
+      }
+      await new Promise((r) => setTimeout(r, 50))
+    }
+  }
+
+  /**
    * 填输入框。
    *
    * ⚠️ 必须用**原型上的 value setter**：React 会劫持 input 的 value 属性，
