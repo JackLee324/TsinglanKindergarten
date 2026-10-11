@@ -248,6 +248,38 @@ describe('ADMIN 绕过只允许一处', () => {
     }
   })
 
+  /*
+    ── 为什么要有这条静态规则（2026-10-11 实测事故）─────────────────────────────
+    Nest 解析构造函数依赖用的是编译期元数据 `design:paramtypes`。
+    当参数类型写成**联合类型**（`X | null`，`@Optional()` 的常见写法）时，
+    SWC 写出来的元数据只能是 `Object` —— 于是 Nest 去找名为 `Object` 的 provider，
+    找不到，`@Optional()` 静默注入 `undefined`。
+
+    症状极难排查：上传照常成功、接口全 200，只是**索引任务永远不排队**
+    （还有一层 try/catch 兜底，连日志都没有），最后表现为"AI 问什么都说没找到"。
+    所以要显式写 `@Inject(真实 token)`：那条路径不经过元数据，永远不会猜错。
+  */
+  test('@Optional() 注入必须显式写 @Inject(真实 token)（联合类型会被编译成 Object）', () => {
+    const files = walk(SERVER, (name) => name.endsWith('.ts'))
+    const offenders = []
+    for (const file of files) {
+      const rel = relative(ROOT, file)
+      const code = stripComments(readFileSync(file, 'utf8'))
+      for (const line of code.split('\n')) {
+        if (!line.includes('@Optional()')) continue
+        if (line.includes('@Inject(')) continue
+        offenders.push(`${rel}: ${line.trim()}`)
+      }
+    }
+    assert.deepEqual(
+      offenders,
+      [],
+      `@Optional() 必须同时写 @Inject(token)：\n  ${offenders.join('\n  ')}\n` +
+        '否则 Nest 会拿 design:paramtypes 去猜，而联合类型只能编译成 Object —— ' +
+        '依赖会被静默注入成 undefined，出错时没有任何提示。',
+    )
+  })
+
   test('server/ 下 ADMIN_ROLE 只出现在 authorization.service.ts（注释与 import 不算）', () => {
     const files = walk(SERVER, (name) => name.endsWith('.ts'))
     const offenders = []

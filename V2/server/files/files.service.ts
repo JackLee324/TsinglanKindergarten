@@ -52,8 +52,16 @@ export class FilesService {
     /**
      * AI 索引（可空）。业主 Stage 15 §八：**上传成功之后**才异步入队，
      * 而且索引侧的任何故障都不得影响上传 —— 所以是 `@Optional()` + 内部兜底。
+     *
+     * ⚠️ `@Inject(AiIndexService)` 这个显式 token **不能省**（实测踩到）：
+     * Nest 解析依赖用的是编译期元数据 `design:paramtypes`，而这里标注的是
+     * 联合类型 `AiIndexService | null` —— SWC 对联合类型只能写出 `Object`，
+     * 于是 Nest 去找一个叫 `Object` 的 provider、找不到，`@Optional()` 就把
+     * `undefined` 注进来。后果是**上传后永远不排索引任务**，而且因为这里有
+     * try/catch 兜底，连报错都没有：表现是"AI 问什么都说没找到"，
+     * 查半天查不到上传这一环（这条由 `ai-pdf-index.test.mjs` ① 钉住）。
      */
-    @Optional() private readonly aiIndex: AiIndexService | null = null,
+    @Optional() @Inject(AiIndexService) private readonly aiIndex: AiIndexService | null = null,
   ) {}
 
   /** 上传地址与票据的有效期（秒）—— 票据与地址必须同寿，否则会出现"地址还能用、票据已过期"。 */
@@ -261,7 +269,7 @@ export class FilesService {
       "这份资料暂时问不到"；而上传失败的最坏后果是"老师白传一次"。
       两者绝不该互相牵连，所以这里既不 await 解析、也不让异常冒出去。
     */
-    if (this.aiIndex !== null) {
+    if (this.aiIndex != null) {
       try {
         await this.aiIndex.enqueueAfterUpload(resourceId, inserted.id)
       } catch {

@@ -14,6 +14,7 @@
  * 这样提取层不依赖任何供应商，也能在没有密钥时明确返回 `OCR_DISABLED`。
  */
 import { unzipSync } from 'fflate'
+import { extractPdfText } from './pdf'
 import type { ExtractOutcome, AiUsage } from './ai.types'
 
 export interface ExtractLimits {
@@ -190,15 +191,19 @@ export async function extractFileText(input: ExtractInput): Promise<ExtractOutco
     return { ok: true, text: text.slice(0, limits.maxChars), kind: 'FILE_TEXT' }
   }
 
-  // ④ 明确不支持 —— 记录原因，不假装成功
+  // ④ PDF：自己解文字层（见 pdf.ts）。扫描件如实记 EMPTY_TEXT，不灌噪声进索引。
   const lower = fileName.toLowerCase()
   if (lower.endsWith('.pdf') || mimeType.toLowerCase() === 'application/pdf') {
+    const pdf = extractPdfText(bytes, { maxChars: limits.maxChars })
+    if (pdf.ok) return { ok: true, text: pdf.text, kind: 'FILE_TEXT' }
     return {
       ok: false,
-      code: 'UNSUPPORTED_FORMAT',
-      reason: 'PDF 文字层解析尚未接入（下一轮），本轮记为待处理 —— 原文件可正常预览与下载',
+      code: 'EMPTY_TEXT',
+      reason: `${pdf.reason ?? 'PDF 文本提取失败'}（原文件可正常预览与下载）`,
     }
   }
+
+  // ⑤ 明确不支持 —— 记录原因，不假装成功
   if (lower.endsWith('.zip') || lower.endsWith('.rar') || lower.endsWith('.7z')) {
     return { ok: false, code: 'UNSUPPORTED_FORMAT', reason: '压缩包不做解压（安全策略）：不索引其内容' }
   }

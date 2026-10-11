@@ -32,6 +32,59 @@ export function docxBytes(tag = 'fixture') {
   ])
 }
 
+/**
+ * 造一个**带文字层**的 PDF（Type0 + Identity-H + ToUnicode CMap），
+ * 正文可以被 `server/ai/pdf.ts` 提取出来 —— 用来测"PDF 能被检索"。
+ *
+ * 为什么自己拼而不是塞一个二进制夹具进仓库：
+ *   · 二进制夹具没人能审、改一个字符就废；
+ *   · 自己拼的可以指定正文（测试里就能用中文关键词）；
+ *   · 顺带验证了"对象 → 字体 → ToUnicode → 内容流"这条链路真的走得通。
+ *
+ * 生成的是**未压缩**内容流（不走 FlateDecode）—— 压缩那条路径由
+ * `tests/unit/ai-pdf.test.mjs` 单独压着。
+ */
+export function pdfWithTextBytes(text) {
+  const codes = new Map()
+  const hex = []
+  for (const char of [...text]) {
+    if (!codes.has(char)) codes.set(char, codes.size + 1)
+    hex.push(codes.get(char).toString(16).padStart(4, '0'))
+  }
+  const cmap = ['beginbfchar']
+  for (const [char, code] of codes) {
+    cmap.push(`<${code.toString(16).padStart(4, '0')}> <${char.codePointAt(0).toString(16).padStart(4, '0')}>`)
+  }
+  cmap.push('endbfchar')
+  const cmapText = cmap.join('\n')
+  const content = `BT /F1 20 Tf 72 700 Td <${hex.join('')}> Tj ET`
+
+  const objects = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+    '<</Type/Font/Subtype/Type0/BaseFont/TestFont/Encoding/Identity-H/DescendantFonts[6 0 R]/ToUnicode 7 0 R>>',
+    '<</Type/Font/Subtype/CIDFontType2/BaseFont/TestFont>>',
+    `<< /Length ${cmapText.length} >>\nstream\n${cmapText}\nendstream`,
+  ]
+  const body = objects.map((object, index) => `${index + 1} 0 obj\n${object}\nendobj\n`).join('')
+  return Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from(body, 'latin1'), Buffer.from('%%EOF\n')])
+}
+
+/** 造一个**没有文字层**的 PDF（模拟扫描件）：只有一张图。 */
+export function scannedPdfBytes() {
+  const content = 'q 612 0 0 792 0 0 cm /Im0 Do Q'
+  const objects = [
+    '<</Type/Catalog/Pages 2 0 R>>',
+    '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+    '<</Type/Page/Parent 2 0 R/Resources<<>>/Contents 4 0 R>>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+  ]
+  const body = objects.map((object, index) => `${index + 1} 0 obj\n${object}\nendobj\n`).join('')
+  return Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.from(body, 'latin1'), Buffer.from('%%EOF\n')])
+}
+
 export const sha256Hex = (buf) => createHash('sha256').update(buf).digest('hex')
 
 /**

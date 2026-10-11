@@ -81,7 +81,8 @@ export class AiIndexService {
     @Inject(SQL) private readonly sql: Sql,
     private readonly storage: StorageService,
     @Optional() @Inject(AI_PROVIDER) private readonly provider: AiProvider | null = null,
-    @Optional() config: AiConfig | null = null,
+    // 显式 token：`AiConfig` 是接口、且参数是联合类型，靠元数据猜只会拿到 Object（见 files.service.ts 的说明）
+    @Optional() @Inject('AI_CONFIG') config: AiConfig | null = null,
   ) {
     this.config = config ?? resolveAiConfig()
   }

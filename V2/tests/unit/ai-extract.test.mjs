@@ -147,11 +147,32 @@ describe('④ Office 家族（zip + 固定 XML 成员，不解压其它内容）
 })
 
 describe('⑤ 明确不支持 / 超限：一律记原因', () => {
-  test('PDF 目前记为待处理（下一轮接入），原因说清且不影响原文件', async () => {
+  /*
+    PDF（Stage 15 的 P5 接入）：文字层能读就读出正文；
+    读不出（扫描件、无 ToUnicode、加密）必须**如实说原因**，而且原文件照常可预览下载。
+    细节算法在 `ai-pdf.test.mjs` 里单独测（CMap/对象流/压缩流），这里只压"接进来了"。
+  */
+  test('PDF 有文字层 → 提到 FILE_TEXT 正文', async () => {
+    const content = 'BT /F1 18 Tf 72 700 Td (Weekly lesson plan: seasons) Tj ET'
+    const pdf = Buffer.concat([
+      Buffer.from('%PDF-1.7\n'),
+      Buffer.from('3 0 obj\n<</Type/Page/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>\nendobj\n'),
+      Buffer.from(`4 0 obj\n<</Length ${content.length}>>\nstream\n${content}\nendstream\nendobj\n`),
+      Buffer.from('5 0 obj\n<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>\nendobj\n'),
+      Buffer.from('%%EOF\n'),
+    ])
+    const outcome = await extractFileText(base({ bytes: pdf, fileName: '教案.pdf', mimeType: 'application/pdf' }))
+    assert.equal(outcome.ok, true, `应当读出正文：${outcome.reason ?? ''}`)
+    assert.equal(outcome.kind, 'FILE_TEXT')
+    assert.match(outcome.text, /Weekly lesson plan: seasons/)
+  })
+
+  test('PDF 读不出文字层（扫描件/加密）→ 记 EMPTY_TEXT，原因说清且不影响原文件', async () => {
     const outcome = await extractFileText(base({ bytes: Buffer.from('%PDF-1.7 x'), fileName: 'a.pdf', mimeType: 'application/pdf' }))
     assert.equal(outcome.ok, false)
-    assert.equal(outcome.code, 'UNSUPPORTED_FORMAT')
-    assert.match(outcome.reason, /PDF/)
+    assert.equal(outcome.code, 'EMPTY_TEXT')
+    assert.match(outcome.reason, /PDF|扫描/)
+    assert.match(outcome.reason, /预览与下载/, '要说清"原文件不受影响"')
   })
 
   test('压缩包不解压（安全策略）', async () => {
