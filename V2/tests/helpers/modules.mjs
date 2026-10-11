@@ -28,6 +28,7 @@ export const auditService = require(join(ROOT, 'dist/server/audit/audit.service.
 export const securityHeaders = require(join(ROOT, 'dist/server/common/security-headers.js'))
 export const loginThrottle = require(join(ROOT, 'dist/server/auth/login-throttle.js'))
 export const appConfig = require(join(ROOT, 'dist/server/config.js'))
+export const aiConfig = require(join(ROOT, 'dist/server/ai/ai.config.js'))
 
 /**
  * 迁移脚本（阶段 9）。

@@ -70,6 +70,14 @@ describe('数据库里只有一个权限真相', () => {
    * 加这两张表是为了满足业主 Stage 9 的"幂等 + 可追溯 + 历史字段不丢"，
    * 不是为了给 V2 添一个业务概念。
    *
+   * 阶段 15 再加 5 张业务表（AI 助手与知识索引），全部是**只新增**：
+   *   · `ai_chunks`        —— 资源/文件的**文本片段**（存片段，不存文件本体、不存 storage key）
+   *   · `ai_index_jobs`    —— 索引任务队列（异步、可重试、按目标幂等）
+   *   · `ai_conversations` / `ai_messages` —— 按用户隔离的对话历史
+   *   · `ai_usage_events`  —— 模型调用用量与异常（成本监控）
+   *   它们**不持有任何授权字段**（下面那条用例逐列检查）：索引不是权限事实源，
+   *   检索时一律回到 `resources` / `directories` / `user_permissions` 现算。
+   *
    * 阶段 14A 再加 1 张业务表（业主的"39 个名额"）：
    *   · `teacher_slots` —— 岗位编制名额（K-01 … PK-08）。**名额 ≠ 账号**：
    *     名额是学校编制，账号要等管理员绑上真实人员才在 `users` 里诞生。
@@ -79,8 +87,13 @@ describe('数据库里只有一个权限真相', () => {
    * 名单是**逐张列出来**的（不是数个数），所以"悄悄多了一张表"会立刻红；
    * 每次加表都必须同时改这份名单 + 上面的说明 —— 这就是这张清单的用处。
    */
-  test('恰好 13 张表（11 张业务 + 2 张迁移记账），名单逐张核对（V1 旧表一张都不许回来）', () => {
+  test('恰好 18 张表（16 张业务 + 2 张迁移记账），名单逐张核对（V1 旧表一张都不许回来）', () => {
     assert.deepEqual(tables.sort(), [
+      'ai_chunks',
+      'ai_conversations',
+      'ai_index_jobs',
+      'ai_messages',
+      'ai_usage_events',
       'audit_logs',
       'directories',
       'resource_files',
@@ -109,13 +122,19 @@ describe('数据库里只有一个权限真相', () => {
     }
   })
 
-  test('阶段 6 / 阶段 9 / 阶段 14A 新增的表都不持有授权信息', () => {
+  test('阶段 6 / 阶段 9 / 阶段 14A / 阶段 15 新增的表都不持有授权信息', () => {
     for (const table of [
       'upload_tickets',
       'storage_orphans',
       'v1_import_runs',
       'v1_migration_map',
       'teacher_slots',
+      // 阶段 15：AI 索引与对话表 —— 索引绝不能变成"第二套权限真相"
+      'ai_chunks',
+      'ai_index_jobs',
+      'ai_conversations',
+      'ai_messages',
+      'ai_usage_events',
     ]) {
       assert.equal(tables.includes(table), true, `${table} 应当存在`)
       /*
