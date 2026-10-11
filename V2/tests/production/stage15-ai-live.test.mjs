@@ -167,7 +167,49 @@ describe('线上：AI 助手的真实链路', () => {
     await browser.session.send('Emulation.setTouchEmulationEnabled', { enabled: false, maxTouchPoints: 1 })
   })
 
-  test('⑤ 业务页面不受影响：目录页照常打开（AI 只是加了一层，没有动原有功能）', async () => {
+  test('⑤ 问助手自己：线上真的用模型回答（不是固定文案）', async () => {
+    await openPanel()
+    await browser.realClick('[data-testid="ai-new"]')
+    await browser.fill('[data-testid="ai-input"]', '你现在是什么模型')
+    await browser.realClick('[data-testid="ai-send"]')
+    await browser.waitFor(
+      `document.querySelectorAll('[data-testid="ai-loading"]').length === 0 &&
+       document.querySelectorAll('[data-testid="ai-message-assistant"]').length > 0`,
+      90000,
+      '问助手自己的回答',
+    )
+    assert.equal(
+      await browser.attr('[data-testid="ai-message-assistant"]', 'data-answer-by'),
+      'model',
+      '线上这一句必须由模型回答（业主就是在这里看到固定文案而以为 AI 是假的）',
+    )
+    const answer = await browser.text('[data-testid="ai-answer"]')
+    assert.match(answer, /deepseek-flash/, `回答应当据实说出服务端配置的模型名：${answer.slice(0, 160)}`)
+    await shot('05-meta-question')
+  })
+
+  test('⑥ 没找到时：线上显示为"系统提示 · 未调用 AI 模型"，并给出可访问目录当路标', async () => {
+    await browser.realClick('[data-testid="ai-new"]')
+    await browser.fill('[data-testid="ai-input"]', '体育')
+    await browser.realClick('[data-testid="ai-send"]')
+    await browser.waitFor(
+      `!!document.querySelector('[data-testid="ai-system-answer-label"]')`,
+      30000,
+      '系统提示标签',
+    )
+    assert.equal(
+      await browser.attr('[data-testid="ai-message-assistant"]', 'data-answer-by'),
+      'system',
+      '未命中资料且不是问助手自己时，应当是系统提示',
+    )
+    const answer = await browser.text('[data-testid="ai-answer"]')
+    assert.match(answer, /未调用 AI 模型/)
+    assert.match(answer, /「体育」/, '要把用户问的原话带回来')
+    assert.match(answer, /教育教学|教师成长|目录包括/, `要给出路标：${answer.slice(0, 200)}`)
+    await shot('06-system-reply')
+  })
+
+  test('⑦ 业务页面不受影响：目录页照常打开（AI 只是加了一层，没有动原有功能）', async () => {
     /*
       ⚠️ 不能写死 `/directory/education/pre-k`：**线上库是从 V1 迁过来的**，
       根节点 slug 是 `edu`，与本地 seed 树的 `education` 不同。
