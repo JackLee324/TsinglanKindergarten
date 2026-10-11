@@ -33,6 +33,7 @@ export const aiChunk = require(join(ROOT, 'dist/server/ai/chunk.js'))
 export const aiExtract = require(join(ROOT, 'dist/server/ai/extract.js'))
 export const aiProvider = require(join(ROOT, 'dist/server/ai/provider.js'))
 export const aiSiteRules = require(join(ROOT, 'dist/server/ai/site-rules.js'))
+export const aiQueryTerms = require(join(ROOT, 'dist/server/ai/query-terms.js'))
 
 /**
  * 迁移脚本（阶段 9）。

@@ -10,6 +10,11 @@
  */
 
 export const AUDIT_ACTIONS = {
+  // AI 助手提问（Stage 15）。只记"谁问了、花了多久、有没有依据"，
+  // **不记问题原文与回答正文** —— 教师问的东西可能包含学生信息，
+  // 会话历史本身已经在 ai_messages 里按用户隔离存放。
+  'ai.chat': 'AI 助手提问',
+
   'auth.login': '登录',
   'auth.logout': '退出登录',
   'auth.change_password': '修改密码',

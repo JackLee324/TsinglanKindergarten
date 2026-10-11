@@ -19,6 +19,8 @@ export class AiIndexWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('AiIndexWorker')
   private timer: NodeJS.Timeout | null = null
   private running = false
+  /** 站点知识只在进程内补一次（幂等 upsert，但不能每轮都重算 69 条目录文本）。 */
+  private seededStatic = false
 
   constructor(private readonly index: AiIndexService) {}
 
@@ -47,6 +49,19 @@ export class AiIndexWorker implements OnModuleInit, OnModuleDestroy {
     if (this.running) return
     this.running = true
     try {
+      /*
+        先补一次"站点知识"（站规 + 目录说明）。
+        为什么放在这里、而不是只留给 CLI：这部分内容**不在数据库里**，是代码里的手工快照；
+        如果只靠人工执行 `ai-index.mjs seed-static`，那么一次新部署（或换库）之后
+        AI 问什么都会答"没找到" —— 而界面上的建议问题恰好全都在问这些规则。
+        幂等（按 source_sha256 upsert），每次启动补一遍的成本是几十次 upsert，可忽略；
+        失败只记日志，绝不阻塞启动。
+      */
+      if (!this.seededStatic) {
+        const seeded = await this.index.seedStaticChunks()
+        this.seededStatic = true
+        this.logger.log(`站点知识已就绪：站规片段 ${seeded.siteRules} 条、目录说明片段 ${seeded.directories} 条`)
+      }
       const result = await this.index.runOnce()
       if (result.claimed > 0) {
         this.logger.log(

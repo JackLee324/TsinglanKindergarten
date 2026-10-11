@@ -29,6 +29,7 @@ import type { AuthUser } from '../common/auth-user'
 import { AuthorizationService } from '../authz/authorization.service'
 import type { PermissionCode } from '../../shared/permissions'
 import type { ChunkSourceKind, RetrievedChunk } from './ai.types'
+import { likePattern, queryTerms } from './query-terms'
 
 interface RetrievalScope {
   /** null = 全平台（管理员/全平台授权）；[] = 一个目录都没有。 */
@@ -67,8 +68,23 @@ export class AiRetrievalService {
     // 一个目录都没有 → 只能看到"无资源归属"的站点规则/目录说明
     const scope = directoryIds ?? null
     const minScore = options.minScore ?? 0.08
-    const pattern = `%${q.replace(/[%_\\]/g, (m) => `\\${m}`)}%`
     const limit = Math.max(1, Math.min(options.limit, 50))
+
+    const { raw, terms } = queryTerms(q)
+    const pattern = likePattern(raw)
+    const termCount = Math.max(1, terms.length)
+
+    /*
+      逐词元计数：把"提问里有多少个词元出现在这段文字里"算成一个数，
+      再用它算覆盖率。放在 LATERAL 里算一次，避免在打分表达式里重复写 24 个 ILIKE
+      （重复写会被 Postgres 求值两遍，白花 CPU）。
+    */
+    const hitSum =
+      terms.length === 0
+        ? this.sql`0`
+        : terms
+            .map((term) => this.sql`(CASE WHEN c.text ILIKE ${likePattern(term)} ESCAPE '\\' THEN 1 ELSE 0 END)`)
+            .reduce((acc, fragment) => this.sql`${acc} + ${fragment}`)
 
     const rows = await this.sql<
       {
@@ -88,44 +104,55 @@ export class AiRetrievalService {
         SELECT id, slug AS path FROM directories WHERE parent_id IS NULL
         UNION ALL
         SELECT d.id, dp.path || '/' || d.slug FROM directories d JOIN dir_path dp ON d.parent_id = dp.id
-      ), resource_chunks AS (
-        SELECT c.id AS chunk_id, c.resource_id, c.file_id, c.directory_id, c.source_kind, c.text,
-               r.title, r.status, dp.path AS directory_path,
-               GREATEST(
-                 similarity(c.text, ${q}),
-                 CASE WHEN c.text ILIKE ${pattern} ESCAPE '\\' THEN 1.0 ELSE 0 END,
-                 ts_rank(to_tsvector('simple', c.text), plainto_tsquery('simple', ${q}))
-               ) AS score
-        FROM ai_chunks c
-        JOIN resources r ON r.id = c.resource_id
-        JOIN dir_path dp ON dp.id = r.directory_id
-        WHERE c.status = 'READY'
-          AND r.deleted_at IS NULL
-          -- ① 目录范围（权限策略来自 AuthorizationService）
-          AND (${scope}::uuid[] IS NULL OR r.directory_id = ANY(${scope}::uuid[]))
-          -- ② 状态可见性：自己上传的全可见，别人上传的按策略集合
-          AND (r.uploader_id = ${ownerId}::uuid OR r.status = ANY(${statuses}::text[]))
-      ), plain_chunks AS (
-        -- 无资源归属的片段：站点规则 / 目录说明（本来就对所有登录用户可见）
-        SELECT c.id AS chunk_id, NULL::uuid AS resource_id, c.file_id, c.directory_id, c.source_kind, c.text,
-               COALESCE(d.name, '平台使用说明') AS title, NULL::text AS status,
-               d.slug AS directory_path,
-               GREATEST(
-                 similarity(c.text, ${q}),
-                 CASE WHEN c.text ILIKE ${pattern} ESCAPE '\\' THEN 1.0 ELSE 0 END,
-                 ts_rank(to_tsvector('simple', c.text), plainto_tsquery('simple', ${q}))
-               ) AS score
-        FROM ai_chunks c
-        LEFT JOIN directories d ON d.id = c.directory_id
-        WHERE c.status = 'READY'
-          AND c.resource_id IS NULL
-          AND (c.source_kind <> 'DIRECTORY_META' OR d.enabled = true)
-      ), merged AS (
-        SELECT * FROM resource_chunks UNION ALL SELECT * FROM plain_chunks
       )
-      SELECT * FROM merged
-      WHERE score >= ${minScore}
-      ORDER BY score DESC, chunk_id
+      SELECT * FROM (
+        SELECT c.id::text AS chunk_id,
+               c.resource_id::text AS resource_id,
+               c.file_id::text AS file_id,
+               c.directory_id::text AS directory_id,
+               c.source_kind,
+               c.text,
+               CASE WHEN c.resource_id IS NULL THEN COALESCE(d.name, '平台使用说明') ELSE r.title END AS title,
+               CASE WHEN c.resource_id IS NULL THEN NULL::text ELSE r.status END AS status,
+               CASE WHEN c.resource_id IS NULL THEN COALESCE(d.slug, '') ELSE COALESCE(dp.path, '') END AS directory_path,
+               GREATEST(
+                 -- ① 字面量整句命中（老师直接搜关键词时最准）
+                 CASE WHEN c.text ILIKE ${pattern} ESCAPE '\\' THEN 1.0 ELSE 0 END,
+                 -- ② 与整句的模糊相似度
+                 similarity(c.text, ${raw}),
+                 -- ③ 全文检索（英文/数字有效；中文整段成词，作用有限）
+                 ts_rank(to_tsvector('simple', c.text), plainto_tsquery('simple', ${raw})),
+                 -- ④ 词元覆盖：至少命中 2 个词元、且覆盖 ≥20% 才算"相关"，映射到 0.6~1.0
+                 CASE
+                   WHEN h.hits >= 2 AND h.hits::numeric / ${termCount}::numeric >= 0.2
+                   THEN 0.5 + 0.5 * (h.hits::numeric / ${termCount}::numeric)
+                   ELSE 0
+                 END
+               ) AS score
+        FROM ai_chunks c
+        LEFT JOIN resources r ON r.id = c.resource_id
+        LEFT JOIN directories d ON d.id = c.directory_id
+        LEFT JOIN dir_path dp ON dp.id = r.directory_id
+        CROSS JOIN LATERAL (SELECT (${hitSum})::numeric AS hits) h
+        WHERE c.status = 'READY'
+          AND (
+            -- ① 资源片段：目录范围 + 状态可见性（策略同样来自 AuthorizationService）
+            (
+              c.resource_id IS NOT NULL
+              AND r.id IS NOT NULL
+              AND r.deleted_at IS NULL
+              AND (${scope}::uuid[] IS NULL OR r.directory_id = ANY(${scope}::uuid[]))
+              AND (r.uploader_id = ${ownerId}::uuid OR r.status = ANY(${statuses}::text[]))
+            )
+            -- ② 无资源归属的片段：站点规则 / 目录说明（本来就对所有登录用户可见）
+            OR (
+              c.resource_id IS NULL
+              AND (c.source_kind <> 'DIRECTORY_META' OR d.enabled = true)
+            )
+          )
+      ) ranked
+      WHERE ranked.score >= ${minScore}
+      ORDER BY ranked.score DESC, ranked.chunk_id
       LIMIT ${limit}
     `
 

@@ -14,6 +14,8 @@ import { createAiProvider } from './provider'
 import { AiIndexService } from './index.service'
 import { AiIndexWorker } from './index.worker'
 import { AiRetrievalService } from './retrieval.service'
+import { AiChatService } from './ai-chat.service'
+import { AiController } from './ai.controller'
 
 @Module({
   imports: [AuthorizationModule, StorageModule],
@@ -26,7 +28,9 @@ import { AiRetrievalService } from './retrieval.service'
     AiIndexService,
     AiIndexWorker,
     AiRetrievalService,
+    AiChatService,
   ],
-  exports: [AiIndexService, AiRetrievalService, AI_PROVIDER, 'AI_CONFIG'],
+  controllers: [AiController],
+  exports: [AiIndexService, AiRetrievalService, AiChatService, AI_PROVIDER, 'AI_CONFIG'],
 })
 export class AiModule {}
