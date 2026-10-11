@@ -83,6 +83,18 @@
 * 密钥只从服务端环境变量读；只出现在请求头；不进日志、不进错误信息、不进状态接口。
 * 模型名、检索条数、限流额度全部来自服务端配置，前端一行不写死。
 
+### 4.1 两个开关的确切语义（"AI 可独立关闭"到哪一步）
+
+| 开关 | 问答 | 图片 OCR（**唯一会花钱的索引进程**） | 文本/Office/PDF 索引 | 上传 / 预览 / 下载 / 审核 |
+| --- | --- | --- | --- | --- |
+| `AI_ENABLED=0` | 关闭（状态禁用、提问 503） | 关闭（**一次上游请求都不发**） | **继续**（纯本地解析，不花钱） | 完全不受影响 |
+| `AI_INDEX_ENABLED=0` | 照常（用已有索引回答） | 关闭 | 停止（任务只排队不处理） | 完全不受影响 |
+| 两个都开（默认） | 开 | 开 | 开 | 完全不受影响 |
+
+设计取舍：`AI_ENABLED=0` 是**止损开关** —— 关掉问答与 OCR 这两条会产生费用的路径，
+但让纯本地解析的文本索引继续跑（这样再打开时知识库是最新的，且期间零成本）。
+要彻底停掉后台活动用 `AI_INDEX_ENABLED=0`。三者都有 `tests/integration/ai-lifecycle.test.mjs` 压着。
+
 ## 5. 检索与权限（本阶段最关键的安全属性）
 
 ### 5.1 权限是 `WHERE` 的一部分，不是事后过滤
@@ -178,7 +190,7 @@ OR (c.resource_id IS NULL AND (c.source_kind <> 'DIRECTORY_META' OR d.enabled))
 | `AI_MODEL` | `deepseek-flash` | 模型名（前端不写死） |
 | `AI_BASE_URL` | `https://api.deepseek.com` | 供应商地址（换供应商只改这里） |
 | `AI_API` | `responses` | `responses`（默认）或 `chat`（OpenAI 兼容 `/chat/completions`） |
-| `AI_ENABLED` | 有密钥即启用 | 写 `0` 可显式关闭 |
+| `AI_ENABLED` | 有密钥即启用 | 写 `0` 显式关闭问答与 OCR（见 §4.1），文本索引继续 |
 | `AI_VISION_OCR` | `1` | 图片用模型视觉转写 |
 | `AI_EMBEDDINGS` | `0` | 默认关（DeepSeek 无 embeddings 端点、生产库无 pgvector） |
 
@@ -186,7 +198,8 @@ OR (c.resource_id IS NULL AND (c.source_kind <> 'DIRECTORY_META' OR d.enabled))
 `AI_TOP_K`(8) / `AI_MAX_OUTPUT_TOKENS`(1200) / `AI_MAX_CONTEXT_CHARS`(12000) / `AI_MAX_CHUNK_CHARS`(800) /
 `AI_MAX_FILE_CHARS`(400000)。
 
-**索引**：`AI_INDEX_ENABLED`(1) / `AI_INDEX_INTERVAL_MS`(15000) / `AI_INDEX_BATCH`(5) / `AI_MAX_INDEX_ATTEMPTS`(3)。
+**索引**：`AI_INDEX_ENABLED`(1，写 `0` 停掉整个后台索引) / `AI_INDEX_INTERVAL_MS`(15000) /
+`AI_INDEX_BATCH`(5) / `AI_MAX_INDEX_ATTEMPTS`(3，失败按 15s×2ⁿ 退避重试，到上限记 `FAILED` 并留原因)。
 
 ### 8.1 诊断命令（只读）
 
@@ -224,6 +237,10 @@ node scripts/ai-index.mjs seed-static       # 补站规 + 目录说明（worker 
   * `tests/unit/ai-query-terms.test.mjs`（11）、`ai-pdf.test.mjs`（11）
   * `tests/integration/ai-chat-api.test.mjs`（17，含**出口审计**：送给模型的请求体里没有无权内容）
   * `tests/integration/ai-pdf-index.test.mjs`（6：真实上传链路 → 异步索引 → 检索 → 引用）
+  * `tests/integration/ai-lifecycle.test.mjs`（8：**失败路径与开关** —— 对象缺失 → 任务回 PENDING
+    并记退避，放回字节后重跑成功；到上限 → `FAILED` 且业务侧照常；
+    `AI_ENABLED=0` 时问答 503、**零上游请求**、文本索引继续、图片记 SKIPPED；
+    `AI_INDEX_ENABLED=0` 时任务只排队不处理）
   * `tests/integration/browser.stage15-ai-panel.test.mjs`（12，真实 Chrome/CDP）
   * `tests/production/stage15-ai-live.test.mjs`（5，**线上环境 + 真实 DeepSeek**）
 * 线上实测（部署 `08ec89b`）：
@@ -257,7 +274,9 @@ node scripts/ai-index.mjs seed-static       # 补站规 + 目录说明（worker 
 * AI **没有任何写操作**（不能发布/审核/改权限），也没有工具调用。
 
 **未验证**
-* `AI_ENABLED=0` 在**生产**环境的表现（本地测试覆盖，线上未实测——线上当前是启用的）。
+* `AI_ENABLED=0` / `AI_INDEX_ENABLED=0` 在**生产**环境的表现：应用层已有集成测试覆盖
+  （禁用状态、零模型调用、上传与文本索引照常），但**线上没有实测**（线上是启用状态，
+  且 Zeabur 的令牌在本项目里是只读的，改环境变量需要业主在控制台操作）。
 * 多实例部署下的 worker 与限流行为。
 * 并发 >10 位老师同时提问时的排队与 429 比例。
 * 换供应商（只改 `AI_BASE_URL`）时的 `chat` 模式线上实测（本地单测覆盖两种模式）。
