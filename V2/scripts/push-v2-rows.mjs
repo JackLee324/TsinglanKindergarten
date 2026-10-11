@@ -20,6 +20,7 @@
  *   node scripts/push-v2-rows.mjs
  */
 import postgres from 'postgres'
+import { repairSequenceLag } from './lib/sequences.mjs'
 
 const LOCAL = process.env.LOCAL_DB
 const REMOTE = process.env.REMOTE_DB
@@ -104,6 +105,22 @@ try {
            (SELECT count(*) FROM user_permissions)::int AS user_permissions,
            (SELECT count(*) FROM users WHERE role='ADMIN' AND status='active')::int AS admins`)
   console.log('远端核对：', JSON.stringify(c))
+
+  /*
+    序列修复（2026-10-11 线上事故的根因）：
+      `import-v1.mjs` 写审计**不带显式 id**，序列会自己前进；
+      而这个脚本是"把已经导入好的行按批搬过去"，**id 原样带着走** ——
+      显式插入不会推进序列。结果：audit_logs 序列停在 5、表里最大 621，
+      此后每一次审计写入都主键冲突；而审计服务刻意"不让业务失败"，
+      表现就是**静默丢审计**（登录成功但查不到记录）。
+      所以搬完必须把序列推到表内最大值。
+  */
+  const lagging = await repairSequenceLag(remote)
+  if (lagging.length === 0) {
+    console.log('序列：无需修复（没有落后的）')
+  } else {
+    for (const row of lagging) console.log(`序列修复：${row.table}.${row.column} → ${row.maxValue}`)
+  }
 } finally {
   await local.end({ timeout: 5 }).catch(() => {})
   await remote.end({ timeout: 5 }).catch(() => {})

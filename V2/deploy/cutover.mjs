@@ -40,6 +40,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postgres from 'postgres'
+import { compareSequenceLag, listSequenceState } from '../scripts/lib/sequences.mjs'
 import { announceDatabaseTarget, resolveDatabaseTarget } from '../scripts/lib/db-target.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -405,6 +406,18 @@ async function checkInvariants(url) {
         (SELECT count(*) FROM audit_logs)                         AS audit_logs,
         (SELECT count(*) FROM user_permissions)                   AS user_permissions
     `
+    /*
+      序列不落后 —— 2026-10-11 加。
+      落后不会报错，只会让"带自增主键的写入"主键冲突；审计服务又刻意不让业务失败，
+      于是**静默丢审计**。搬运型导入（带显式 id）必然会踩到，所以它是切换的硬不变量。
+    */
+    const behind = compareSequenceLag(await listSequenceState(sql))
+    rows.push({
+      label: '落后的自增序列（会让审计静默丢失）',
+      value: behind.length === 0 ? '0' : behind.map((b) => `${b.table}.${b.column}`).join(','),
+      expected: '0',
+      ok: behind.length === 0,
+    })
     for (const [key, value] of Object.entries(counts)) {
       const expected = EXPECTED[key] === undefined ? null : Number(EXPECTED[key])
       rows.push({
