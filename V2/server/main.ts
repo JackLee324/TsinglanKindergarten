@@ -118,7 +118,9 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.listen(config.port)
-  logger.log(`V2 backend listening on http://127.0.0.1:${config.port}`)
+  logger.log(
+    `V2 backend listening on http://127.0.0.1:${config.port}（端口来源：${config.portSource}）`,
+  )
   logger.log(`environment: NODE_ENV=${process.env.NODE_ENV ?? 'development'}`)
   logger.log(`storage provider: ${config.storage.provider}`)
   logger.log(

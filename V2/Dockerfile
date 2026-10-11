@@ -96,8 +96,13 @@ EXPOSE 3300
 
 # readiness 会真的查数据库：数据库不可达时它返回非 200（业主 §15）。
 # 用 node 内置 fetch，不依赖 curl（slim 镜像里没有）。
+#
+# ⚠️ 端口**问应用自己**（`loadConfig().port`），不在这里重算一遍：
+#    2026-10-11 线上故障就是"平台路由 8080、应用只听 3300"导致 502 ——
+#    如果健康检查再自己算一次端口，就可能出现"应用活着但被判定不健康"的二次故障
+#    （探 3300、实听 8080）。单一真相 = 应用配置。
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.SERVER_PORT||3300)+'/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const {loadConfig}=require('/app/dist/server/config.js');fetch('http://127.0.0.1:'+loadConfig().port+'/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # tini 当 PID 1：正确转发信号、回收僵尸进程（Node 不该同时干这两件事）
 ENTRYPOINT ["/usr/bin/tini", "--"]

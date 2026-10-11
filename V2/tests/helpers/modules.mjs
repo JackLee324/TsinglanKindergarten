@@ -27,6 +27,7 @@ export const password = require(join(ROOT, 'dist/server/auth/password.js'))
 export const auditService = require(join(ROOT, 'dist/server/audit/audit.service.js'))
 export const securityHeaders = require(join(ROOT, 'dist/server/common/security-headers.js'))
 export const loginThrottle = require(join(ROOT, 'dist/server/auth/login-throttle.js'))
+export const appConfig = require(join(ROOT, 'dist/server/config.js'))
 
 /**
  * 迁移脚本（阶段 9）。
