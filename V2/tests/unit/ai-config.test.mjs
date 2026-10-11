@@ -65,6 +65,13 @@ describe('② 默认值符合业主的决定（DeepSeek）', () => {
     assert.equal(resolveAiConfig({ AI_API_KEY: 'k', AI_EMBEDDINGS: 'on' }).embeddingsEnabled, true)
   })
 
+  test('API 格式默认 responses（业主原始要求），可用 AI_API=chat 切到兼容端点', () => {
+    assert.equal(resolveAiConfig({ AI_API_KEY: 'k' }).api, 'responses')
+    assert.equal(resolveAiConfig({ AI_API_KEY: 'k', AI_API: 'chat' }).api, 'chat')
+    assert.equal(resolveAiConfig({ AI_API_KEY: 'k', AI_API: 'CHAT' }).api, 'chat')
+    assert.equal(resolveAiConfig({ AI_API_KEY: 'k', AI_API: '瞎写' }).api, 'responses')
+  })
+
   test('base_url 末尾斜杠会被去掉（避免拼出 //responses）', () => {
     assert.equal(resolveAiConfig({ AI_API_KEY: 'k', AI_BASE_URL: 'https://x.example.com///' }).baseUrl, 'https://x.example.com')
   })

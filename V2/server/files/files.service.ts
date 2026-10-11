@@ -1,8 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common'
+import { Inject, Injectable, Optional } from '@nestjs/common'
 import type { Sql } from 'postgres'
 import { SQL } from '../db/database.module'
 import { AuditService } from '../audit/audit.service'
 import { AuthorizationService } from '../authz/authorization.service'
+import { AiIndexService } from '../ai/index.service'
 import {
   StorageService,
   isValidStorageKey,
@@ -48,6 +49,11 @@ export class FilesService {
     private readonly storage: StorageService,
     private readonly audit: AuditService,
     private readonly authz: AuthorizationService,
+    /**
+     * AI 索引（可空）。业主 Stage 15 §八：**上传成功之后**才异步入队，
+     * 而且索引侧的任何故障都不得影响上传 —— 所以是 `@Optional()` + 内部兜底。
+     */
+    @Optional() private readonly aiIndex: AiIndexService | null = null,
   ) {}
 
   /** 上传地址与票据的有效期（秒）—— 票据与地址必须同寿，否则会出现"地址还能用、票据已过期"。 */
@@ -248,6 +254,20 @@ export class FilesService {
         // 有意不记录 storageKey / 签名 URL（见 audit 的 forbidden detail keys）。
       },
     })
+
+    /*
+      索引入队：放在**登记与审计都完成之后**，而且吞掉一切异常。
+      顺序理由（业主 §八）：索引只是"让文件可被 AI 检索"，它失败的最坏后果是
+      "这份资料暂时问不到"；而上传失败的最坏后果是"老师白传一次"。
+      两者绝不该互相牵连，所以这里既不 await 解析、也不让异常冒出去。
+    */
+    if (this.aiIndex !== null) {
+      try {
+        await this.aiIndex.enqueueAfterUpload(resourceId, inserted.id)
+      } catch {
+        // enqueue 内部已经记日志；这里再兜一层，确保上传路径绝不因索引失败而失败
+      }
+    }
 
     return toFileView(inserted)
   }

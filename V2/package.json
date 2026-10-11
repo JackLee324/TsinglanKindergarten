@@ -43,6 +43,7 @@
     "dotenv": "^17.2.2",
     "drizzle-orm": "0.45.3",
     "express": "4.22.3",
+    "fflate": "0.8.3",
     "lucide-react": "0.577.0",
     "postgres": "3.4.9",
     "react": "^19.2.0",

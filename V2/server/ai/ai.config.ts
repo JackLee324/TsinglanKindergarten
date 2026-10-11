@@ -20,6 +20,11 @@ export interface AiConfig {
   /** 未启用时的人话原因（缺哪个变量 / 显式关闭）；已启用时为 null。 */
   readonly disabledReason: string | null
   readonly provider: string
+  /**
+   * 线上 API 格式：`responses`（默认 —— 业主原始要求"以官方 Responses API 为基础"）
+   * 或 `chat`（OpenAI 兼容的 `/chat/completions`，几乎所有兼容端点都支持，作为退路）。
+   */
+  readonly api: 'responses' | 'chat'
   readonly baseUrl: string
   readonly apiKey: string
   readonly model: string
@@ -89,6 +94,7 @@ export function resolveAiConfig(env: Record<string, string | undefined> = proces
 
   const base: Omit<AiConfig, 'enabled' | 'disabledReason'> = {
     provider: String(env.AI_PROVIDER ?? '').trim() || DEFAULTS.provider,
+    api: String(env.AI_API ?? '').trim().toLowerCase() === 'chat' ? 'chat' : 'responses',
     baseUrl: baseUrl.replace(/\/+$/, ''),
     apiKey,
     model,

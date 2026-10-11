@@ -12,7 +12,7 @@
 --
 -- 为什么把"幂等"做进数据库：业主 §五 要求"同一文件重复入队时必须幂等，
 -- 不得反复生成相同内容或无限增加索引记录"。所以：
---   · `ai_chunks` 用 UNIQUE NULLS NOT DISTINCT (来源键, chunk_index) 去重；
+--   · `ai_chunks` 用 UNIQUE NULLS NOT DISTINCT (来源种类, 资源, 文件, 目录, 下标) 去重；
 --   · `ai_index_jobs` 对"同一目标 + 未结束状态"只允许一条（部分唯一索引）。
 -- PG15+ 的 `NULLS NOT DISTINCT` 正好解决"resource_id 为空时唯一性失效"这个老问题
 -- （唯一索引默认把 NULL 当作互不相同，于是同一文件的元数据片段会被重复插入）。
@@ -46,9 +46,17 @@ CREATE TABLE ai_chunks (
   CONSTRAINT ai_chunks_status_check CHECK (status IN ('READY', 'STALE')),
   CONSTRAINT ai_chunks_chunk_index_check CHECK (chunk_index >= 0),
   CONSTRAINT ai_chunks_text_not_blank CHECK (btrim(text) <> ''),
-  -- 幂等：同一来源的同一下标只能有一条（NULL 也参与判等，见文件头注释）
+  /*
+    幂等：同一来源的同一下标只能有一条（NULL 也参与判等，见文件头注释）。
+
+    ⚠️ `directory_id` **必须**在这组键里 —— 2026-10-11 本机端到端跑出来的真实缺陷：
+    目录说明（DIRECTORY_META）的 resource_id/file_id 都是 NULL，
+    如果不带 directory_id，69 个目录会共用同一个键 (DIRECTORY_META, NULL, NULL, 0)，
+    于是互相覆盖，最后只剩 1 条 —— 而 `seed-static` 还报告"写了 69 条"，
+    表面成功、实际丢数据（正是这个项目最忌讳的那种失败）。
+  */
   CONSTRAINT ai_chunks_source_unique UNIQUE NULLS NOT DISTINCT
-    (source_kind, resource_id, file_id, chunk_index)
+    (source_kind, resource_id, file_id, directory_id, chunk_index)
 );
 
 CREATE INDEX ai_chunks_resource_idx  ON ai_chunks (resource_id);

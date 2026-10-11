@@ -11,6 +11,7 @@ import { UsersModule } from './users/users.module'
 import { DirectoriesModule } from './directories/directories.module'
 import { ResourcesModule } from './resources/resources.module'
 import { ReviewsModule } from './reviews/reviews.module'
+import { AiModule } from './ai/ai.module'
 import { HealthController } from './health.controller'
 import { AuthzGuard } from './common/authz.guard'
 import { AppExceptionFilter } from './common/exception-filter'
@@ -36,6 +37,7 @@ import { AppExceptionFilter } from './common/exception-filter'
     DirectoriesModule,
     ResourcesModule,
     ReviewsModule,
+    AiModule,
   ],
   controllers: [HealthController],
   providers: [

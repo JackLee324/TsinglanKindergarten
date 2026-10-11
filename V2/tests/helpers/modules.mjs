@@ -29,6 +29,10 @@ export const securityHeaders = require(join(ROOT, 'dist/server/common/security-h
 export const loginThrottle = require(join(ROOT, 'dist/server/auth/login-throttle.js'))
 export const appConfig = require(join(ROOT, 'dist/server/config.js'))
 export const aiConfig = require(join(ROOT, 'dist/server/ai/ai.config.js'))
+export const aiChunk = require(join(ROOT, 'dist/server/ai/chunk.js'))
+export const aiExtract = require(join(ROOT, 'dist/server/ai/extract.js'))
+export const aiProvider = require(join(ROOT, 'dist/server/ai/provider.js'))
+export const aiSiteRules = require(join(ROOT, 'dist/server/ai/site-rules.js'))
 
 /**
  * 迁移脚本（阶段 9）。
