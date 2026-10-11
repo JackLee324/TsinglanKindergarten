@@ -9,8 +9,8 @@
  *   · 会话接口一律按 user_id 过滤：别人的会话返回 404（不暴露存在性）。
  *   · 取消：客户端断开连接时中止模型请求（AbortController），不留下继续烧钱的调用。
  */
-import { Body, Controller, Delete, Get, Param, Post, Req } from '@nestjs/common'
-import type { Request } from 'express'
+import { Body, Controller, Delete, Get, Param, Post, Res } from '@nestjs/common'
+import type { Response } from 'express'
 import { AiChatDto, CreateConversationDto } from './ai.dto'
 import { AiChatService } from './ai-chat.service'
 import { AuthenticatedOnly, CurrentUser } from '../common/decorators'
@@ -57,10 +57,28 @@ export class AiController {
    */
   @Post('chat')
   @AuthenticatedOnly()
-  async ask(@CurrentUser() user: AuthUser, @Body() dto: AiChatDto, @Req() req: Request) {
+  async ask(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: AiChatDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const controller = new AbortController()
-    // 客户端断开（用户点了取消、或关掉抽屉）→ 中止上游请求
-    req.on('close', () => controller.abort())
+    /*
+      取消：客户端断开（用户点「取消」、或关掉面板）→ **中止上游模型请求**。
+      只让界面停止转圈是不够的：连接还挂着，模型那边照样在算、账单照样在涨，
+      而用户点取消的本意正是止损。
+
+      ⚠️ 这里用 `res.on('close')` + `writableEnded`，**不要**换成 `req.on('close')`：
+      实测（临时探针 + 假供应商）在 Express 5 + `express.json()` 之下，
+      请求体解析完之后 `req` 的 'close' 在本进程里不再触发 ——
+      而"不触发"不会报错，表现就是"用户以为取消了、模型还在算"，
+      属于最难发现的一类问题。正常响应结束时 'close' 也会来，那时 writableEnded
+      已经是 true，跳过即可。这条有测试压着：`browser.stage15-ai-panel.test.mjs` ③
+      会点「取消」，并让假供应商确认连接**真的**被中断。
+    */
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort()
+    })
     return await this.chat.chat(user, { question: dto.question, conversationId: dto.conversationId }, { signal: controller.signal })
   }
 }

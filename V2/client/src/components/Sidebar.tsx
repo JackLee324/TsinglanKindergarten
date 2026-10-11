@@ -10,6 +10,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  Sparkles,
   Users,
 } from 'lucide-react'
 import { useDirectory } from '../directory/DirectoryProvider'
@@ -17,6 +18,7 @@ import { directoryUrl, isWithinPath } from '../directory/path'
 import { useAuth } from '../auth/useAuth'
 import type { DirectoryNode } from '../api/types'
 import { cn } from './ui/cn'
+import { useAiAssistant } from './ai/AiAssistantContext'
 
 /**
  * 侧边栏（**桌面**）。
@@ -61,6 +63,7 @@ export function SidebarBrand() {
 export function SidebarNav({ onNavigate }: { readonly onNavigate?: () => void } = {}) {
   const { roots, loading, ready } = useDirectory()
   const { capabilities } = useAuth()
+  const { open: openAi } = useAiAssistant()
 
   /**
    * 管理分组要不要出现。
@@ -95,6 +98,25 @@ export function SidebarNav({ onNavigate }: { readonly onNavigate?: () => void } 
           icon={<Layers className="size-5" />}
           testId="nav-my-resources"
         />
+        {/*
+          AI 助手（Stage 15）。**所有登录用户**都能打开 —— 它是"问平台怎么用"
+          的入口，不是某个角色的特权；能问到哪些**资料**由服务端的目录权限决定
+          （检索在 SQL 里就过滤了），所以这里不做任何权限判断。
+          它不导航：点它打开右侧面板，`onNavigate` 让移动端把导航抽屉先收起来。
+        */}
+        <button
+          type="button"
+          data-testid="nav-ai"
+          onClick={() => {
+            onNavigate?.()
+            openAi()
+          }}
+          className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-white/90 transition-colors hover:bg-white/10 sm:min-h-0"
+        >
+          <Sparkles className="size-5" />
+          <span data-testid="nav-ai-label">AI 助手</span>
+        </button>
+
         {/* 审核工作台只对有审核权限的人显示（能力位来自服务端，前端不判断角色）。 */}
         {capabilities?.canReview === true && (
           <NavItem

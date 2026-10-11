@@ -292,3 +292,64 @@ export interface FilePolicySummary {
   readonly allowedTypesLabel: string
   readonly previewUnsupportedMessage: string
 }
+
+// ── AI 助手（Stage 15）─────────────────────────────────────────────────────────
+// 形状与后端 `server/ai/ai-chat.service.ts` 的返回一一对应。
+// 前端**不推断**能不能用：一律看 `AiStatus.enabled` 与 `disabledReason`。
+
+/** 一条引用（回答里的 [1][2] 就指向它）。资源类才有站内链接。 */
+export interface AiCitation {
+  readonly index: number
+  readonly resourceId: string
+  readonly title: string
+  readonly directoryPath: string
+  readonly sourceKind: string
+  readonly fileId: string | null
+  readonly url: string | null
+}
+
+export interface AiStatus {
+  readonly enabled: boolean
+  /** `enabled=false` 时说清**缺哪个环境变量**（只点名，不回显值）。 */
+  readonly disabledReason: string | null
+  readonly provider: string
+  readonly model: string
+  readonly api: string
+  readonly visionOcr: boolean
+  readonly suggestedQuestions: readonly string[]
+  readonly limits: {
+    readonly perMinute: number
+    readonly maxConcurrent: number
+    readonly topK: number
+  }
+  readonly index: {
+    readonly jobs: Record<string, number>
+    readonly chunks: Record<string, number>
+  }
+}
+
+export interface AiConversationSummary {
+  readonly id: string
+  readonly title: string | null
+  readonly updatedAt: string
+}
+
+export interface AiMessage {
+  readonly id: string
+  readonly role: 'user' | 'assistant'
+  readonly content: string
+  readonly citations: readonly AiCitation[]
+  readonly model: string | null
+  readonly usage: { readonly inputTokens: number; readonly outputTokens: number } | null
+  readonly createdAt: string
+}
+
+export interface AiChatResult {
+  readonly conversationId: string
+  readonly answer: string
+  readonly citations: readonly AiCitation[]
+  readonly model: string | null
+  readonly usage: { readonly inputTokens: number; readonly outputTokens: number } | null
+  /** true = 没检索到依据（回答是确定性文案，没有调用模型）。 */
+  readonly noEvidence: boolean
+}

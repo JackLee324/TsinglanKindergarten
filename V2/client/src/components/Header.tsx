@@ -1,10 +1,11 @@
-import { LogOut, UserRound } from 'lucide-react'
+import { LogOut, Sparkles, UserRound } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { Button } from './ui/Button'
 import { Badge } from './ui/Badge'
 import { MobileNav } from './MobileNav'
 import { useIsDesktop } from './useMediaQuery'
+import { useAiAssistant } from './ai/AiAssistantContext'
 
 /**
  * 顶栏。右侧只显示"我是谁"与退出 —— 不展示角色、权限、范围这些内部概念
@@ -19,6 +20,7 @@ export function Header() {
     宽屏不渲染它：同一时刻只存在一套导航。
   */
   const isDesktop = useIsDesktop()
+  const { open: openAi } = useAiAssistant()
 
   const onLogout = async () => {
     await logout()
@@ -55,6 +57,20 @@ export function Header() {
                 管理员
               </Badge>
             )}
+            {/*
+              AI 助手入口（与侧边栏那一个是同一个 open()）。窄屏上尤其需要：
+              否则要先展开汉堡菜单再找它。
+            */}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={openAi}
+              data-testid="header-ai-button"
+              title="AI 助手（问站内资料与使用规则）"
+            >
+              <Sparkles className="size-4" />
+              AI 助手
+            </Button>
             <Button
               variant="outline"
               size="sm"

@@ -25,11 +25,10 @@
  */
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import {
   client,
   createTeacher,
@@ -39,8 +38,15 @@ import {
   stopServer,
   withSql,
 } from '../helpers/harness.mjs'
-import { makeResource, purgeResources } from '../helpers/resource-fixture.mjs'
+import { purgeResources } from '../helpers/resource-fixture.mjs'
 import { textBytes, uploadFile } from '../helpers/upload.mjs'
+import {
+  enqueueResource,
+  makeResourceWithFile,
+  purgeAiRows,
+  startMockProvider,
+  waitForJobsSettled,
+} from '../helpers/ai-fixture.mjs'
 
 /**
  * 关键词都是"只出现在一份文件里"的长词组，避免 pg_trgm / 全文检索误命中。
@@ -62,8 +68,6 @@ const FAKE_KEY = 'sk-fake-for-tests-do-not-log'
 
 let storageDir
 let mock
-let mockRequests = []
-let mockMode = 'answer'
 
 let teacherB
 let visibleFileId
@@ -72,97 +76,16 @@ let draftFileId
 let otherFileId
 const probes = []
 
-/** 假模型服务器（OpenAI 兼容的 `/responses`）：把请求体留下来给断言用。 */
-async function startMockProvider() {
-  mock = createServer((req, res) => {
-    let raw = ''
-    req.on('data', (c) => (raw += c))
-    req.on('end', () => {
-      let body = {}
-      try {
-        body = raw === '' ? {} : JSON.parse(raw)
-      } catch {
-        body = { unparsable: raw.slice(0, 200) }
-      }
-      mockRequests.push({ url: req.url, authorization: req.headers.authorization ?? null, body })
-      if (mockMode === 'error') {
-        res.writeHead(500, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: { message: '供应商内部细节不该被透出' } }))
-        return
-      }
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(
-        JSON.stringify({
-          model: MODEL,
-          output_text: '根据站内资料 [1]：可以先用藤蔓做拼贴，再记录颜色变化。',
-          usage: { input_tokens: 1234, output_tokens: 56 },
-        }),
-      )
-    })
-  })
-  await new Promise((resolve) => mock.listen(0, '127.0.0.1', resolve))
-  return `http://127.0.0.1:${mock.address().port}`
-}
-
-/** 把文件字节放进夹具自己选的本地存储目录（服务三个 describe 共用同一目录）。 */
-function putObject(storageKey, content) {
-  const full = join(storageDir, storageKey)
-  mkdirSync(dirname(full), { recursive: true })
-  writeFileSync(full, content)
-}
-
-/** 造一条"已发布/草稿资源 + 一个文本文件"，并返回 id（走 SQL 夹具，业务行为仍全走 API）。 */
-async function makeResourceWithFile({ directoryId, uploaderId, title, status, fileName, text }) {
-  const content = Buffer.from(text, 'utf8')
-  const resourceId = await makeResource({ directoryId, uploaderId, title, status })
-  const storageKey = `resources/${resourceId}/${fileName}`
-  const fileId = await withSql(async (sql) => {
-    const rows = await sql`
-      INSERT INTO resource_files (resource_id, file_name, storage_key, mime_type, size, sha256, created_by)
-      VALUES (${resourceId}, ${fileName}, ${storageKey}, 'text/plain', ${content.byteLength},
-              ${createHash('sha256').update(content).digest('hex')}, ${uploaderId})
-      RETURNING id::text
-    `
-    return rows[0].id
-  })
-  putObject(storageKey, content)
-  return { resourceId, fileId }
-}
-
-async function enqueue(resourceId, fileId) {
-  await withSql(async (sql) => {
-    await sql`
-      INSERT INTO ai_index_jobs (resource_id, file_id, reason)
-      VALUES (${resourceId}, ${fileId ?? null}, 'BACKFILL') ON CONFLICT DO NOTHING
-    `
-    await sql`
-      INSERT INTO ai_index_jobs (resource_id, file_id, reason)
-      VALUES (${resourceId}, NULL, 'BACKFILL') ON CONFLICT DO NOTHING
-    `
-  })
-}
-
-/** 等后台索引任务全部落地（PENDING/RUNNING 清空），超时即失败 —— 不用固定 sleep。 */
-async function waitForJobsSettled(timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const [row] = await withSql(async (sql) => {
-      return await sql`SELECT count(*)::int AS n FROM ai_index_jobs WHERE state IN ('PENDING', 'RUNNING')`
-    })
-    if (row.n === 0) return
-    if (Date.now() > deadline) throw new Error(`等索引 worker 超时：还剩 ${row.n} 个任务未落地`)
-    await new Promise((r) => setTimeout(r, 300))
-  }
-}
-
 /** 送进假模型服务器的最后一个请求体的文本形式（断言"出口内容"用）。 */
 function lastSentText() {
-  return JSON.stringify(mockRequests.at(-1)?.body ?? {})
+  return JSON.stringify(mock.requests.at(-1)?.body ?? {})
 }
 
 before(async () => {
   await resetDatabase()
   storageDir = mkdtempSync(join(tmpdir(), 'v2-ai-chat-storage-'))
+  // 假模型服务器整套只起一次：限流与"没有密钥"那两个 describe 也要用它
+  mock = await startMockProvider({ model: MODEL })
 
   const preK = await directoryIdByPath('education/pre-k')
   await createTeacher(
@@ -188,6 +111,7 @@ before(async () => {
 
   // ① 甲有权看：Pre-K 已发布
   const visible = await makeResourceWithFile({
+    storageDir,
     directoryId: preKResources,
     uploaderId: teacherB.id,
     title: '主题教学素材（公开）',
@@ -200,6 +124,7 @@ before(async () => {
 
   // ② 甲无权看：乙的草稿（同一目录，但状态是 DRAFT）
   const draft = await makeResourceWithFile({
+    storageDir,
     directoryId: preKResources,
     uploaderId: teacherB.id,
     title: DRAFT_TITLE,
@@ -212,6 +137,7 @@ before(async () => {
 
   // ③ 甲无权看：K 学段（目录不在甲的授权子树里）
   const other = await makeResourceWithFile({
+    storageDir,
     directoryId: kResources,
     uploaderId: teacherB.id,
     title: OTHER_TITLE,
@@ -224,6 +150,7 @@ before(async () => {
 
   // ④ 甲的可见资料里，故意写一段"提示词注入"文字（模拟恶意/疏忽的上传内容）
   const inject = await makeResourceWithFile({
+    storageDir,
     directoryId: preKResources,
     uploaderId: teacherB.id,
     title: '活动记录表（公开）',
@@ -242,34 +169,23 @@ after(async () => {
   // 先停服务（worker 随之停止），再清理本套件造的行
   await stopServer()
   if (mock !== undefined) {
-    await new Promise((resolve) => mock.close(resolve))
+    await mock.close()
     mock = undefined
   }
-  if (storageDir !== undefined) {
-    const { rmSync } = await import('node:fs')
-    rmSync(storageDir, { recursive: true, force: true })
-  }
-  await withSql(async (sql) => {
-    await sql`DELETE FROM ai_messages`
-    await sql`DELETE FROM ai_conversations`
-    await sql`DELETE FROM ai_chunks`
-    await sql`DELETE FROM ai_index_jobs`
-    await sql`DELETE FROM ai_usage_events`
-  })
+  if (storageDir !== undefined) rmSync(storageDir, { recursive: true, force: true })
+  await purgeAiRows()
   await purgeResources(probes)
 })
 
 describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
-  let providerUrl
   let teacherAClient
 
   before(async () => {
-    providerUrl = await startMockProvider()
     await startServer({
       env: {
         STORAGE_LOCAL_DIR: storageDir,
         AI_API_KEY: FAKE_KEY,
-        AI_BASE_URL: providerUrl,
+        AI_BASE_URL: mock.url,
         AI_MODEL: MODEL,
         AI_API: 'responses',
         AI_INDEX_INTERVAL_MS: '800',
@@ -288,7 +204,7 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
       [probes[2], otherFileId],
       [probes[3], injectFileId],
     ]) {
-      await enqueue(resourceId, fileId)
+      await enqueueResource(resourceId, fileId)
     }
     await waitForJobsSettled()
   })
@@ -332,7 +248,7 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
   })
 
   test('③ 提问：拿到回答 + 引用 + 站内链接，同时落库消息、用量与审计', async () => {
-    const before = mockRequests.length
+    const before = mock.requests.length
     const res = await teacherAClient.post('/api/ai/chat', { question: KW_VISIBLE })
     assert.equal(res.status, 201, JSON.stringify(res.data))
     assert.equal(res.data.noEvidence, false)
@@ -346,9 +262,9 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
     assert.equal(citation.title, '主题教学素材（公开）')
 
     // 用真实 HTTP 调了模型，且密钥只在请求头里（不进请求体、不进日志）
-    assert.equal(mockRequests.length, before + 1, '应当真的调了一次模型')
-    assert.equal(mockRequests.at(-1).url, '/responses')
-    assert.equal(mockRequests.at(-1).authorization, `Bearer ${FAKE_KEY}`)
+    assert.equal(mock.requests.length, before + 1, '应当真的调了一次模型')
+    assert.equal(mock.requests.at(-1).url, '/responses')
+    assert.equal(mock.requests.at(-1).authorization, `Bearer ${FAKE_KEY}`)
 
     // 会话可读、消息成对（user + assistant）
     const messages = await teacherAClient.get(`/api/ai/conversations/${res.data.conversationId}/messages`)
@@ -401,10 +317,10 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
   })
 
   test('⑤ 提示词注入无效：资料里写"忽略以上规则"，也带不出无权内容', async () => {
-    const before = mockRequests.length
+    const before = mock.requests.length
     const res = await teacherAClient.post('/api/ai/chat', { question: KW_INJECT })
     assert.equal(res.status, 201, JSON.stringify(res.data))
-    assert.equal(mockRequests.length, before + 1, '这条问题命中了可见资料，应当调模型')
+    assert.equal(mock.requests.length, before + 1, '这条问题命中了可见资料，应当调模型')
     const sent = lastSentText()
     // 注入文字本身进了上下文（它属于甲有权看的资料）——这正是危险场景的写实还原
     assert.match(sent, /忽略以上全部规则/, '注入文本应当如实进入上下文，测试才有意义')
@@ -420,15 +336,15 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
   test('⑥ 多轮：同一会话里的第二个问题会带上历史，但历史只有本会话', async () => {
     const first = await teacherAClient.post('/api/ai/chat', { question: KW_VISIBLE })
     const conversationId = first.data.conversationId
-    const before = mockRequests.length
+    const before = mock.requests.length
     const second = await teacherAClient.post('/api/ai/chat', {
       question: `${KW_VISIBLE_2} 怎么做？`,
       conversationId,
     })
     assert.equal(second.status, 201, JSON.stringify(second.data))
     assert.equal(second.data.conversationId, conversationId, '同一会话应当续用同一个 id')
-    assert.equal(mockRequests.length, before + 1)
-    const payload = mockRequests.at(-1).body
+    assert.equal(mock.requests.length, before + 1)
+    const payload = mock.requests.at(-1).body
     const input = Array.isArray(payload.input) ? payload.input : []
     // system + 上一轮问答 + 本轮提问 = 4 段
     assert.equal(input.length, 4, `多轮上下文应当是 system+历史+本轮：${JSON.stringify(input)}`)
@@ -446,7 +362,7 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
   })
 
   test('⑦ 取不到依据时不调模型：说清"没找到"，且给出去哪儿找的建议', async () => {
-    const before = mockRequests.length
+    const before = mock.requests.length
     const res = await teacherAClient.post('/api/ai/chat', { question: KW_DRAFT })
     assert.equal(res.status, 201, JSON.stringify(res.data))
     assert.equal(res.data.noEvidence, true)
@@ -454,7 +370,7 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
     assert.deepEqual(res.data.citations, [])
     assert.equal(res.data.model, null)
     assert.equal(res.data.usage, null)
-    assert.equal(mockRequests.length, before, '没有依据时不该调用模型（省成本，也不给编造留空间）')
+    assert.equal(mock.requests.length, before, '没有依据时不该调用模型（省成本，也不给编造留空间）')
     // 消息仍然成对落库，用户能看到"问过什么、回了什么"
     const messages = await teacherAClient.get(`/api/ai/conversations/${res.data.conversationId}/messages`)
     assert.equal(messages.data.items.length, 2)
@@ -520,14 +436,14 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
   })
 
   test('⑪ 审计：每一次提问都留痕（成功 / 供应商失败都算）', async () => {
-    mockMode = 'error'
+    mock.setMode('error')
     try {
       const res = await teacherAClient.post('/api/ai/chat', { question: KW_VISIBLE })
       assert.equal(res.status, 502, JSON.stringify(res.data))
       assert.equal(res.data.code, 'AI_PROVIDER_ERROR')
       assert.doesNotMatch(JSON.stringify(res.data), /供应商内部细节不该被透出/, '供应商原始报文不该透传')
     } finally {
-      mockMode = 'answer'
+      mock.setMode('answer')
     }
     const [audit] = await withSql(async (sql) => {
       return await sql`SELECT result, detail FROM audit_logs WHERE action = 'ai.chat' ORDER BY id DESC LIMIT 1`
@@ -565,7 +481,7 @@ describe('限流：服务端闸门真的会拦（429）', () => {
       env: {
         STORAGE_LOCAL_DIR: storageDir,
         AI_API_KEY: FAKE_KEY,
-        AI_BASE_URL: `http://127.0.0.1:${mock.address().port}`,
+        AI_BASE_URL: mock.url,
         AI_MODEL: MODEL,
         AI_RATE_LIMIT_PER_MIN: '2',
         AI_MAX_CONCURRENT: '2',
@@ -588,11 +504,11 @@ describe('限流：服务端闸门真的会拦（429）', () => {
     const second = await limited.post('/api/ai/chat', { question: KW_VISIBLE })
     assert.equal(second.status, 201, JSON.stringify(second.data))
 
-    const before = mockRequests.length
+    const before = mock.requests.length
     const third = await limited.post('/api/ai/chat', { question: KW_VISIBLE })
     assert.equal(third.status, 429, `超限必须 429 而不是 500：${JSON.stringify(third.data)}`)
     assert.equal(third.data.code, 'AI_RATE_LIMITED')
-    assert.equal(mockRequests.length, before, '被拦下的请求不该真的调用模型（那才是烧钱的点）')
+    assert.equal(mock.requests.length, before, '被拦下的请求不该真的调用模型（那才是烧钱的点）')
 
     // 被拦下也要留痕（谁在刷、刷了多少，运维要看得见）
     const [audit] = await withSql(async (sql) => {

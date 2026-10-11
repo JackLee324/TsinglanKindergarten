@@ -30,7 +30,7 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -190,6 +190,17 @@ describe('ADMIN 绕过只允许一处', () => {
     )
   })
 
+  /*
+    ⚠️ 这条规则**只针对 RBAC 角色**（ADMIN / TEACHER / principal …）。
+    不能写成"任何 `role ===` 都算"：消息、任务、日志里都有 `role` 字段
+    （AI 助手的对话消息就是 `role === 'user' | 'assistant'`），
+    一刀切会逼着后来的人把字段改名来绕过规则 —— 那是把规则改坏了，不是遵守它。
+    判定标准落在这里：**右侧是 RBAC 角色字面量**，或**左侧来自 user/actor/capabilities**。
+  */
+  const RBAC_ROLE_LITERAL =
+    /['"](ADMIN|TEACHER|principal|curriculum_director|prek_head|k_head|pe_specialist|prek_assistant|visitor)['"]/
+  const RBAC_ROLE_SOURCE = /\b(user|actor|currentUser|me|self|capabilities|session)\s*\.\s*roles?\b/
+
   test('client/src 里不比较角色（用服务端给的 capabilities）', () => {
     const files = walk(join(ROOT, 'client', 'src'), (name) => /\.(ts|tsx)$/.test(name))
     const offenders = []
@@ -198,7 +209,8 @@ describe('ADMIN 绕过只允许一处', () => {
       const code = stripComments(readFileSync(file, 'utf8'))
       const hits = code
         .split('\n')
-        .filter((l) => /(role\s*===|roles\s*\.includes)/.test(l) && l.trim() !== '')
+        .filter((l) => /(roles?\s*===|roles\s*\.includes)/.test(l) && l.trim() !== '')
+        .filter((l) => RBAC_ROLE_LITERAL.test(l) || RBAC_ROLE_SOURCE.test(l))
       if (hits.length > 0) offenders.push(`${rel}: ${hits[0].trim()}`)
     }
     assert.deepEqual(
@@ -207,6 +219,33 @@ describe('ADMIN 绕过只允许一处', () => {
       `前端不得比较角色：\n  ${offenders.join('\n  ')}\n` +
         '能不能做某件事由服务端的 capabilities 决定；"是不是管理员"也是服务端算好的。',
     )
+  })
+
+  /*
+    变异验证：把一条真实的违规写法放进 `client/src`，上面那条必须变红。
+    没有这一步，"不比较角色"就只是一句口号 —— 规则写松了没人会知道。
+    （探针用完立刻删除；即便断言失败也走 finally 清理。）
+  */
+  test('变异验证：写一条 `user.role === \'principal\'` 进去，上面那条必须红', () => {
+    const probe = join(ROOT, 'client', 'src', '__role_guard_probe.ts')
+    writeFileSync(probe, "export const bad = (user: { role: string }) => user.role === 'principal'\n")
+    try {
+      const code = stripComments(readFileSync(probe, 'utf8'))
+      const hits = code
+        .split('\n')
+        .filter((l) => /(roles?\s*===|roles\s*\.includes)/.test(l) && l.trim() !== '')
+        .filter((l) => RBAC_ROLE_LITERAL.test(l) || RBAC_ROLE_SOURCE.test(l))
+      assert.equal(hits.length, 1, '违规写法必须被规则抓到（否则规则形同虚设）')
+      // 反向：对话消息的 role 不能被误伤（这是本轮加 AI 助手时踩到的误报）
+      const chatLine = "if (message.role === 'user') {"
+      assert.equal(
+        RBAC_ROLE_LITERAL.test(chatLine) || RBAC_ROLE_SOURCE.test(chatLine),
+        false,
+        '消息的 role 字段不该被当成 RBAC 角色（否则会逼着后来的人改字段名来绕过规则）',
+      )
+    } finally {
+      rmSync(probe, { force: true })
+    }
   })
 
   test('server/ 下 ADMIN_ROLE 只出现在 authorization.service.ts（注释与 import 不算）', () => {

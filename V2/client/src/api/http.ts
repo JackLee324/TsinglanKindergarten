@@ -37,6 +37,12 @@ interface RequestOptions {
   readonly body?: unknown
   /** 401 时不要自动跳登录页（例如启动时的"我是谁"探测）。 */
   readonly skipAuthRedirect?: boolean
+  /**
+   * 取消信号。AI 提问是唯一需要它的调用点：模型可能要跑十几秒，
+   * 用户点「取消」或关掉面板时**必须真的断开** —— 服务端据此中止上游请求，
+   * 否则用户以为停了、账单还在涨。
+   */
+  readonly signal?: AbortSignal
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -53,6 +59,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     headers,
     credentials: 'include',
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    signal: options.signal,
   })
 
   if (res.status === 204) return undefined as T
@@ -81,7 +88,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 export const api = {
   get: <T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>) =>
     request<T>(path, { ...options, method: 'GET' }),
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
+  post: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'method' | 'body'>) =>
+    request<T>(path, { ...options, method: 'POST', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
