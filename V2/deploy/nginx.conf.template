@@ -1,27 +1,21 @@
 # V2 反向代理（Nginx）—— 业主 Stage 12 §10/§11/§13/§14
 # ============================================================================
 # 这个文件是**模板**：官方 nginx 镜像的 entrypoint 会用 envsubst 把
-# ${V2_PUBLIC_ORIGIN} / ${STORAGE_ORIGIN} / ${LOGIN_RATE_LIMIT_RPM} / ${LOGIN_RATE_LIMIT_BURST}
-# 替换掉，再落到 /etc/nginx/conf.d/default.conf。
+# ${STORAGE_UPSTREAM} 之类的变量替换掉，再落到 /etc/nginx/conf.d/default.conf。
 #
-# 四件事在这里定死：
+# 两件事在这里定死：
 #   1. 80 端口**只做跳转**，不留任何明文入口（应用不允许 HTTP 登录）；
-#   2. 安全响应头（HSTS / XCTO / Referrer-Policy / X-Frame-Options / CSP / Permissions-Policy）；
-#   3. 代理头**覆盖**而不是追加：`X-Forwarded-For` / `X-Forwarded-Proto` 由本机重写，
-#      客户端自己塞的值一律丢弃（否则"真实 client IP"就是攻击者说了算，限流形同虚设）；
-#   4. 登录接口按客户端 IP 限流，超阈值直接 **429**（业务层不加复杂限流器）。
-
-# 限流的键取**真实客户端 IP**（$binary_remote_addr 在覆盖完 XFF 后由 nginx 决定，
-# 见下面 real_ip 的配置）。
-limit_req_zone $binary_remote_addr zone=login_zone:10m rate=${LOGIN_RATE_LIMIT_RPM}r/m;
-limit_req_status 429;
-limit_req_log_level warn;
-
-# 登录失败的返回也要在这里能写出 429 的 JSON，前端才看得懂
-map $status $rate_limited_body {
-  default '';
-  429 '{"statusCode":429,"code":"TOO_MANY_REQUESTS","message":"登录尝试过于频繁，请稍后再试。"}';
-}
+#   2. 代理头**覆盖**而不是追加：`X-Forwarded-For` / `X-Forwarded-Proto` 由本机重写，
+#      客户端自己塞的值一律丢弃（否则"真实 client IP"就是攻击者说了算，审计与限流都失准）。
+#
+# ⚠️ 安全响应头与登录失败限流**已经搬到应用里**（`server/common/security-headers.ts`、
+#    `server/auth/login-throttle.ts`），这里不再重复：
+#      · 2026-10-11 实测发现这两件事以前只由本文件提供，而正式环境（Zeabur）
+#        是容器直接对外、没有 Nginx —— 安全头一个都没有、登录没有暴力破解防护，
+#        项目自己的 `deploy/verify.mjs` 第 4、7 项必然失败；
+#      · 两处同时加 CSP 还有害：浏览器对重复的 CSP 取**交集**，一处放行了对象存储、
+#        另一处没放行，就会变成"图片和上传突然都不通"。
+#    单一真相放在应用里 —— 前面是 Nginx、Zeabur 网关还是直连，行为都一致。
 
 server {
     listen 80;
@@ -51,17 +45,8 @@ server {
     ssl_session_timeout 1d;
 
     # ── 安全响应头（业主 §13）─────────────────────────────────────────────
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-    # CSP：脚本/样式只允许同源；预览要嵌对象存储的 PDF、显示它的图片，所以放行 ${STORAGE_ORIGIN}。
-    # 不用 unsafe-inline 放行 script（Vite 产物是外链文件）；style 允许 inline 是因为
-    # React 组件的 style 属性（进度条宽度）会生成内联样式。
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: ${STORAGE_ORIGIN}; frame-src 'self' ${STORAGE_ORIGIN}; connect-src 'self' ${STORAGE_ORIGIN}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'" always;
-
-    # 代理自己不要泄露版本号（应用侧也关了 x-powered-by）
+    # 由**应用**设置（`server/common/security-headers.ts`）—— 这里不再 add_header，
+    # 理由见文件头注释（单一真相 + 避免重复 CSP 取交集）。代理侧只保留不泄露版本号。
     server_tokens off;
 
     client_max_body_size 64m;   # 直传走对象存储，这里只兜底小请求
@@ -74,21 +59,9 @@ server {
     proxy_set_header X-Forwarded-Host $host;
     proxy_set_header X-Forwarded-Port $server_port;
 
-    # ── 登录限流（业主 §14：暴力尝试 → 429）──────────────────────────────
-    location = /api/auth/login {
-        limit_req zone=login_zone burst=${LOGIN_RATE_LIMIT_BURST} nodelay;
-        limit_req_status 429;
-        error_page 429 = @too_many;
-        proxy_pass http://app:3300;
-    }
-
-    location @too_many {
-        default_type application/json;
-        add_header Retry-After 60 always;
-        return 429 '{"statusCode":429,"code":"TOO_MANY_REQUESTS","message":"登录尝试过于频繁，请稍后再试。"}';
-    }
-
     # ── 应用本体 ───────────────────────────────────────────────────────────
+    # 登录限流由应用负责（`server/auth/login-throttle.ts`，生产默认 5 次/分钟、
+    # 突发 3，**只数失败**）—— 这里不再 limit_req：不重复实现同一件事。
     location / {
         # 健康检查与静态资源都直通应用（同源部署，不需要拆静态站）
         proxy_pass http://app:3300;

@@ -7,6 +7,12 @@ import type { NestExpressApplication } from '@nestjs/platform-express'
 import { static as expressStatic } from 'express'
 import { AppModule } from './app.module'
 import { buildValidationPipe } from './common/validation'
+import { securityHeadersMiddleware, securityOriginOf } from './common/security-headers'
+import {
+  createLoginThrottle,
+  loginThrottleMiddleware,
+  resolveLoginThrottleLimits,
+} from './auth/login-throttle'
 import { loadConfig } from './config'
 
 async function bootstrap(): Promise<void> {
@@ -18,6 +24,24 @@ async function bootstrap(): Promise<void> {
   // Express 适配器的实例方法（Nest 自己的 INestApplication 类型上没有）
   const express = app.getHttpAdapter().getInstance()
   express.disable('x-powered-by')
+
+  /*
+    安全响应头 + 登录失败限流：**应用自己出**，不依赖前面有没有反向代理。
+
+    2026-10-11 实测：这两件事以前只由演练栈的 Nginx 提供，而正式环境（Zeabur）
+    是容器直接对外 —— 结果安全头一个都没有、登录也没有暴力破解防护，
+    项目自己的部署自检 `deploy/verify.mjs` 第 4、7 项必然失败。
+    详见 `common/security-headers.ts` 与 `auth/login-throttle.ts` 的文件头注释。
+  */
+  app.use(
+    securityHeadersMiddleware(
+      config.storage.provider === 's3' ? securityOriginOf(config.storage.endpoint) : null,
+    ),
+  )
+  const loginThrottle = createLoginThrottle(
+    resolveLoginThrottleLimits(process.env, config.isProduction),
+  )
+  app.use('/api/auth/login', loginThrottleMiddleware(loginThrottle))
 
   /*
     反向代理：只信任**我们自己的那一跳**（业主 Stage 12 §11）。
@@ -97,6 +121,11 @@ async function bootstrap(): Promise<void> {
   logger.log(`V2 backend listening on http://127.0.0.1:${config.port}`)
   logger.log(`environment: NODE_ENV=${process.env.NODE_ENV ?? 'development'}`)
   logger.log(`storage provider: ${config.storage.provider}`)
+  logger.log(
+    loginThrottle.enabled
+      ? `登录失败限流：${loginThrottle.limits.rpm} 次/分钟（突发 ${loginThrottle.limits.burst}），按客户端 IP —— 只有失败才计数`
+      : '登录失败限流：未启用（非生产环境默认关闭；用 LOGIN_RATE_LIMIT_RPM 显式开启）',
+  )
 }
 
 void bootstrap()

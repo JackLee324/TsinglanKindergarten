@@ -40,8 +40,10 @@ const ADMIN_PASSWORD = process.env.MIGRATED_ADMIN_PASSWORD ?? ''
 const WORK = mkdtempSync(join(tmpdir(), 'v2-migrated-'))
 
 let browser
-/** 已经登录过的账号 —— 同一个浏览器只登录一次（代理的登录限流是 5r/m，
- *  测试自己反复登录会被 429 挡住，那是"测试把门撞上"，不是产品问题）。 */
+/** 已经登录过的账号 —— 同一个浏览器只登录一次。
+ *  限流由应用自己做（`server/auth/login-throttle.ts`，生产默认 5 次/分钟、突发 3），
+ *  而且**只数失败的登录** —— 成功登录不消耗配额，所以"只登一次"主要是省时间；
+ *  真正会撞门的是**错口令**（那是"测试把门撞上"，不是产品问题）。 */
 let loggedInAs = null
 
 before(async () => {

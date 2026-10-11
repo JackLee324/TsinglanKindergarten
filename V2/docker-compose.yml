@@ -61,6 +61,11 @@ services:
       STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-1}
       # 只信任**代理容器**这一跳（业主 §11：不许写 true，也不许直接信客户端给的 XFF）
       TRUST_PROXY: ${TRUST_PROXY:-1}
+      # 登录**失败**限流（业主 §14：暴力尝试 → 429）。
+      # 2026-10-11 从 proxy 挪到这里：限流改由应用自己做（server/auth/login-throttle.ts）
+      # —— 否则正式环境没有 Nginx，就等于完全没有限流（实测连打 10 次错口令全是 401）。
+      LOGIN_RATE_LIMIT_RPM: ${LOGIN_RATE_LIMIT_RPM:-5}
+      LOGIN_RATE_LIMIT_BURST: ${LOGIN_RATE_LIMIT_BURST:-3}
       # ⚠️ 绝不设置 V2_ALLOW_DEV_SECRETS —— 生产用它等于把公开的默认密钥放上公网
     healthcheck:
       test:
@@ -91,10 +96,9 @@ services:
     environment:
       # 模板里的变量由官方 entrypoint 的 envsubst 替换（/etc/nginx/templates/*.template）
       V2_PUBLIC_ORIGIN: ${V2_PUBLIC_ORIGIN:?必填}
-      STORAGE_ORIGIN: ${STORAGE_ORIGIN:?必填（对象存储的 origin）}
-      LOGIN_RATE_LIMIT_RPM: ${LOGIN_RATE_LIMIT_RPM:-5}
-      LOGIN_RATE_LIMIT_BURST: ${LOGIN_RATE_LIMIT_BURST:-3}
-      # 对象存储的上游（演练：宿主机上的 SeaweedFS；生产没有这一项，因为 R2 是公网域名）
+      # ⚠️ STORAGE_ORIGIN 与 LOGIN_RATE_LIMIT_* 已不再由代理使用：安全响应头
+      #    （含 CSP 里的存储 origin）与登录失败限流都搬进应用了，见模板文件头注释。
+      # 对象存储的上游（演练：宿主机上的 SeaweedFS；生产 R2 是公网域名，不走这里）
       STORAGE_UPSTREAM: ${STORAGE_UPSTREAM:-host.docker.internal:18443}
     volumes:
       - ./deploy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
