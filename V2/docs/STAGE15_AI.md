@@ -243,12 +243,20 @@ node scripts/ai-index.mjs seed-static       # 补站规 + 目录说明（worker 
     `AI_INDEX_ENABLED=0` 时任务只排队不处理）
   * `tests/integration/browser.stage15-ai-panel.test.mjs`（12，真实 Chrome/CDP）
   * `tests/production/stage15-ai-live.test.mjs`（5，**线上环境 + 真实 DeepSeek**）
-* 线上实测（部署 `08ec89b`）：
+* 线上实测（部署 `84271d2`，2026-10-11 08:37 起 RUNNING）：
   * 真实提问（禁用假数据）：`deepseek-flash` 返回 3481→608 token、耗时 3.6s，8 条引用（站规 + 真实资源）；
   * `ai_usage_events` / `audit_logs(ai.chat)` 均有对应行；
   * 浏览器（桌面 + 390×844 移动）走通：入口 → 提问 → 真实回答 → 引用可点 → 刷新后会话还在；
   * PDF 探针：上传 → 自动排队 → 中文正文入库 → 提问命中引用；**探针已硬删**，计数回到基线；
-  * `file-integrity-baseline --compare`：**新增 0 / 删除 0 / 改写 0**。
+  * `file-integrity-baseline --compare`：**新增 0 / 删除 0 / 改写 0**（本轮跑了两次：
+    一次在 PDF 探针之前、一次在探针清理之后）。
+
+> ⚠️ **域名变化（不是本项目代码改的，记录在案）**：2026-10-11 约 08:40 起，
+> `https://tsinglankindergarten.com` 指向 **V2**（`/api/health` → `v2-stage2`），
+> 而 `v2-app` 服务上原来那个 `tsinglan.zeabur.app` 生成域名已不再路由（边缘返回 404）。
+> V1 仍在自己域名 `https://tsinglankindergarten.zeabur.app` 上正常 200，未被动过。
+> 这个域名的挂接是在 Zeabur 控制台做的（本项目令牌对这些设置是只读的），
+> 本文只如实记录：**现在的线上验收跑在 `tsinglankindergarten.com` 上**。
 
 ## 11. 诚实清单（限制与未验证项）
 
@@ -274,6 +282,8 @@ node scripts/ai-index.mjs seed-static       # 补站规 + 目录说明（worker 
 * AI **没有任何写操作**（不能发布/审核/改权限），也没有工具调用。
 
 **未验证**
+* 域名切换本身的验收清单（教师课时管理界面、费用/账单/发票、G7 备份与恢复演练等）
+  在 `tsinglankindergarten.com` 指向 V2 之后**仍是未完成项** —— 详见 §11 末尾。
 * `AI_ENABLED=0` / `AI_INDEX_ENABLED=0` 在**生产**环境的表现：应用层已有集成测试覆盖
   （禁用状态、零模型调用、上传与文本索引照常），但**线上没有实测**（线上是启用状态，
   且 Zeabur 的令牌在本项目里是只读的，改环境变量需要业主在控制台操作）。
