@@ -42,6 +42,14 @@ export interface RetrievalOptions {
   readonly limit: number
   /** 相似度下限：低于它的片段不进上下文（宁缺毋滥，避免把无关内容喂给模型）。 */
   readonly minScore?: number
+  /**
+   * 只检索**平台文档**（站规 SITE_RULE + 目录说明 DIRECTORY_META），不碰任何资源片段。
+   * 用途：问"助手自己能做什么"这类问题时，答案在平台文档里而不在资料库里；
+   * 只查文档也顺带保证这条通路**不可能**碰到用户资料。
+   */
+  readonly docsOnly?: boolean
+  /** 词元命中数下限（默认 2）。文档语料小且是精编的，允许放宽到 1。 */
+  readonly minHits?: number
 }
 
 @Injectable()
@@ -73,6 +81,8 @@ export class AiRetrievalService {
     const { raw, terms } = queryTerms(q)
     const pattern = likePattern(raw)
     const termCount = Math.max(1, terms.length)
+    const minHits = Math.max(1, options.minHits ?? 2)
+    const docsOnly = options.docsOnly === true
 
     /*
       逐词元计数：把"提问里有多少个词元出现在这段文字里"算成一个数，
@@ -122,9 +132,9 @@ export class AiRetrievalService {
                  similarity(c.text, ${raw}),
                  -- ③ 全文检索（英文/数字有效；中文整段成词，作用有限）
                  ts_rank(to_tsvector('simple', c.text), plainto_tsquery('simple', ${raw})),
-                 -- ④ 词元覆盖：至少命中 2 个词元、且覆盖 ≥20% 才算"相关"，映射到 0.6~1.0
+                 -- ④ 词元覆盖：至少命中 minHits 个词元、且覆盖 ≥20% 才算"相关"，映射到 0.6~1.0
                  CASE
-                   WHEN h.hits >= 2 AND h.hits::numeric / ${termCount}::numeric >= 0.2
+                   WHEN h.hits >= ${minHits} AND h.hits::numeric / ${termCount}::numeric >= 0.2
                    THEN 0.5 + 0.5 * (h.hits::numeric / ${termCount}::numeric)
                    ELSE 0
                  END
@@ -135,6 +145,8 @@ export class AiRetrievalService {
         LEFT JOIN dir_path dp ON dp.id = r.directory_id
         CROSS JOIN LATERAL (SELECT (${hitSum})::numeric AS hits) h
         WHERE c.status = 'READY'
+          -- 只查平台文档时，资源片段一律不进候选集（这条通路碰不到用户资料）
+          AND (${docsOnly} = false OR c.source_kind IN ('SITE_RULE', 'DIRECTORY_META'))
           AND (
             -- ① 资源片段：目录范围 + 状态可见性（策略同样来自 AuthorizationService）
             (

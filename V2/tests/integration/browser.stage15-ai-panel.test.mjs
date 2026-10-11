@@ -358,18 +358,47 @@ describe('② 提问、引用链接与多轮', () => {
     )
   })
 
-  test('没有依据时：明确说"没找到"，且不给假引用', async () => {
+  test('没有依据时：明确说"没找到"，界面上**一眼看出是系统提示**，且不给假引用', async () => {
     await browser.realClick('[data-testid="ai-new"]')
     await ask(KW_DRAFT)
     const answer = await browser.text('[data-testid="ai-answer"]')
     assert.match(answer, /没有找到/, `应当明确说没找到：${answer}`)
-    assert.equal(await browser.exists('[data-testid="ai-no-evidence-note"]'), true, '要说清"没有调用模型"')
+    assert.match(answer, /未调用 AI 模型/, '文案要说清这次没有调用模型（不是模型在敷衍）')
+    // 界面上必须能分得清"模型回答"与"系统提示"——业主就是被这两者长得一样误导的
+    assert.equal(
+      await browser.attr('[data-testid="ai-message-assistant"]', 'data-answer-by'),
+      'system',
+      '系统提示要带 data-answer-by="system"',
+    )
+    assert.match(
+      await browser.text('[data-testid="ai-system-answer-label"]'),
+      /未调用 AI 模型/,
+      '要有"系统提示 · 未调用 AI 模型"的标签',
+    )
     assert.equal(
       await browser.exists('[data-testid="ai-citations"]'),
       false,
       '没有依据时不该出现参考来源',
     )
     assert.doesNotMatch(answer, new RegExp(DRAFT_TITLE), '别人的草稿标题绝不能出现在回答里')
+  })
+
+  test('**问助手自己**（"你现在是什么模型"）：真的调模型、按服务端配置回答，且不显示系统标签', async () => {
+    await browser.realClick('[data-testid="ai-new"]')
+    // 这一句在检索里命中 0 条资料，但属于"问助手自己"，必须由模型回答
+    const before = mock.requests.length
+    await ask('你现在是什么模型')
+    assert.equal(mock.requests.length > before, true, '这一句必须真的调用模型')
+    assert.equal(
+      await browser.attr('[data-testid="ai-message-assistant"]', 'data-answer-by'),
+      'model',
+      '不是系统提示，而是模型回答',
+    )
+    assert.equal(
+      await browser.exists('[data-testid="ai-system-answer-label"]'),
+      false,
+      '模型回答不该带"系统提示"标签',
+    )
   })
 })
 

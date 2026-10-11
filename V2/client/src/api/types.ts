@@ -350,6 +350,12 @@ export interface AiChatResult {
   readonly citations: readonly AiCitation[]
   readonly model: string | null
   readonly usage: { readonly inputTokens: number; readonly outputTokens: number } | null
-  /** true = 没检索到依据（回答是确定性文案，没有调用模型）。 */
+  /** true = 没检索到**资源**依据（站内资料层面）。 */
   readonly noEvidence: boolean
+  /**
+   * 这条回答是谁写的：`model` = 真实模型回答；`system` = 系统提示（**没调模型**）。
+   * 界面必须把两者明显区分 —— 否则用户会把系统提示当成"AI 在敷衍"
+   * （2026-10-11 业主就是这么误判的）。
+   */
+  readonly answeredBy: 'model' | 'system'
 }

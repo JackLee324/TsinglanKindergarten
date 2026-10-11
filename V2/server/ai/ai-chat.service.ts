@@ -21,6 +21,8 @@ import { Inject, Injectable, Logger, Optional } from '@nestjs/common'
 import type { Sql } from 'postgres'
 import { SQL } from '../db/database.module'
 import { AuditService } from '../audit/audit.service'
+import { AuthorizationService } from '../authz/authorization.service'
+import type { PermissionCode } from '../../shared/permissions'
 import { AppError } from '../common/http-error'
 import type { AuthUser } from '../common/auth-user'
 import { resolveAiConfig, type AiConfig } from './ai.config'
@@ -28,7 +30,14 @@ import { AI_PROVIDER, type AiProvider } from './ai.provider.token'
 import { AiProviderError, type RetrievedChunk } from './ai.types'
 import { AiRetrievalService } from './retrieval.service'
 import { AiRateLimiter } from './ai-rate-limit'
-import { AI_SYSTEM_PROMPT, SUGGESTED_QUESTIONS, buildContextBlock, buildUserMessage } from './prompt'
+import {
+  SUGGESTED_QUESTIONS,
+  buildContextBlock,
+  buildNoEvidenceAnswer,
+  buildSystemPrompt,
+  buildUserMessage,
+  isMetaQuestion,
+} from './prompt'
 
 export interface AiCitation {
   readonly index: number
@@ -47,8 +56,15 @@ export interface AiChatResult {
   readonly citations: readonly AiCitation[]
   readonly model: string | null
   readonly usage: { inputTokens: number; outputTokens: number } | null
-  /** true = 没有检索到任何依据（回答是确定性文案，没调模型）。 */
+  /** true = 没有检索到任何**资源**依据（站内资料层面）。 */
   readonly noEvidence: boolean
+  /**
+   * 这条回答是谁写的：
+   *   · `model`  —— 真实模型回答（含"问助手自己"那一类，它依据服务端配置事实回答）；
+   *   · `system` —— 系统提示（**没有调用模型**）。界面必须明显区分，
+   *                 否则用户会把它当成"AI 在敷衍"，实测就是这样被误判成"假的"。
+   */
+  readonly answeredBy: 'model' | 'system'
 }
 
 export interface AiStatus {
@@ -80,11 +96,6 @@ interface MessageRow {
   created_at: Date
 }
 
-const NO_EVIDENCE_ANSWER =
-  '现有资料里没有找到相关内容。\n\n' +
-  '可能的原因：这条资料还没被索引、或者你当前的目录权限里看不到它。' +
-  '可以换个说法再问一次，或者直接去「课程目录」里找；如果确实应该有这份资料，请联系管理员确认你的目录权限。'
-
 @Injectable()
 export class AiChatService {
   private readonly logger = new Logger('AiChat')
@@ -95,6 +106,11 @@ export class AiChatService {
     @Inject(SQL) private readonly sql: Sql,
     private readonly retrieval: AiRetrievalService,
     private readonly audit: AuditService,
+    /**
+     * 权限策略的唯一来源。这里只用它算"这个人能看哪些目录"，
+     * 为"没找到"时的系统回复提供路标（列出的目录必须是他真能访问的）。
+     */
+    private readonly authz: AuthorizationService,
     @Optional() @Inject(AI_PROVIDER) private readonly provider: AiProvider | null = null,
     @Optional() @Inject('AI_CONFIG') config: AiConfig | null = null,
   ) {
@@ -224,7 +240,6 @@ export class AiChatService {
       // ③ 检索（权限在 SQL 里）→ 再复核一次可引用性 → 拼上下文
       const candidates = await this.retrieval.retrieve(user, input.question, { limit: this.config.topK })
       const chunks = await this.retrieval.filterCitable(user, candidates)
-      const citations = citationsOf(chunks)
 
       /*
         多轮上下文要在**写入本轮提问之前**取。
@@ -237,25 +252,70 @@ export class AiChatService {
         INSERT INTO ai_messages (conversation_id, role, content) VALUES (${conversationId}, 'user', ${input.question})
       `
 
-      if (chunks.length === 0) {
-        // 没有依据：**不调模型**，给确定性回答（省成本、也不给编造留空间）
-        await this.persistAssistant(conversationId, NO_EVIDENCE_ANSWER, [], null, null)
+      /*
+        ── 没有资源依据时怎么办（2026-10-11 业主反馈"回答好像是假的"之后改的）──────
+        旧行为：一律不调模型，回一句固定文案。省成本、绝不可能编造，但有两个硬伤：
+          · 「你现在是什么模型」这种**问助手自己**的问题，答案不在资料里，
+            用户收到的却是一句与问题无关的"没有找到" —— 看起来就是个假机器人；
+          · 固定文案不区分问题，用户也看不出"这不是模型在敷衍，而是系统根本没调模型"。
+
+        新行为分两条路：
+          · 问助手自己的（`isMetaQuestion`）：**照常调模型**，系统提示里附上
+            服务端配置的事实（供应商/模型名/能做与不能做），并允许它只依据这些事实回答；
+            同时用"只查平台文档"的检索把站规里"AI 助手能做什么、不能做什么"一节带进去。
+            这些都不是资料内容，不存在越权问题。
+          · 其它问题：仍然是**确定性系统回复**（不调模型），但文案改成
+            带着用户的问题原样回话 + 明说"未调用 AI 模型" + 列出他有权限访问的目录当路标。
+      */
+      const meta = isMetaQuestion(input.question)
+      let usedChunks = chunks
+      if (meta && usedChunks.length === 0) {
+        // 文档语料小且是精编的，放宽到"命中 1 个词元"；且这条路**碰不到任何用户资料**
+        const docs = await this.retrieval.retrieve(user, input.question, {
+          limit: 3,
+          docsOnly: true,
+          minHits: 1,
+        })
+        usedChunks = await this.retrieval.filterCitable(user, docs)
+      }
+
+      if (usedChunks.length === 0 && !meta) {
+        const answer = buildNoEvidenceAnswer({
+          question: input.question,
+          directoryNames: await this.accessibleDirectoryNames(user),
+        })
+        await this.persistAssistant(conversationId, answer, [], null, null)
         await this.finishTurn({ user, conversationId, outcome: 'ok', model: null, usage: null, started, noEvidence: true })
         return {
           conversationId,
-          answer: NO_EVIDENCE_ANSWER,
+          answer,
           citations: [],
           model: null,
           usage: null,
           noEvidence: true,
+          answeredBy: 'system',
         }
       }
 
-      const contextBlock = buildContextBlock(chunks, this.config.maxContextChars)
+      const contextBlock = buildContextBlock(usedChunks, this.config.maxContextChars)
+      const citations = citationsOf(usedChunks)
       let completion
       try {
         completion = await this.provider.complete(
-          { system: AI_SYSTEM_PROMPT, history, question: buildUserMessage(input.question, contextBlock) },
+          {
+            system: buildSystemPrompt(
+              {
+                provider: this.config.provider,
+                model: this.config.model,
+                visionOcrEnabled: this.config.visionOcrEnabled,
+                topK: this.config.topK,
+                rateLimitPerMin: this.config.rateLimitPerMin,
+              },
+              { meta },
+            ),
+            history,
+            question: buildUserMessage(input.question, contextBlock, { meta }),
+          },
           { signal: options.signal },
         )
       } catch (error) {
@@ -272,7 +332,7 @@ export class AiChatService {
         model: completion.model,
         usage: completion.usage,
         started,
-        noEvidence: false,
+        noEvidence: chunks.length === 0,
       })
       return {
         conversationId,
@@ -280,11 +340,43 @@ export class AiChatService {
         citations,
         model: completion.model,
         usage: completion.usage,
-        noEvidence: false,
+        noEvidence: chunks.length === 0,
+        answeredBy: 'model',
       }
     } finally {
       release()
     }
+  }
+
+  /**
+   * 当前账号**有权限访问**的目录名（最多 8 个，取他能触达的最浅一层）。
+   *
+   * 用途：没检索到依据时给用户路标 —— "你其实能看这些目录"。
+   * 边界：只列他确实授权的目录（策略来自 AuthorizationService，与检索同一份），
+   * 所以这条提示**不会**泄露任何他没有权限的目录名。
+   */
+  private async accessibleDirectoryNames(user: AuthUser): Promise<string[]> {
+    const scope = await this.authz.accessibleDirectoryIds(user, 'resource.view' as PermissionCode)
+    if (Array.isArray(scope) && scope.length === 0) return []
+    const rows = await this.sql<{ name: string }[]>`
+      WITH RECURSIVE dir_path AS (
+        SELECT id, slug AS path FROM directories WHERE parent_id IS NULL
+        UNION ALL
+        SELECT d.id, dp.path || '/' || d.slug FROM directories d JOIN dir_path dp ON d.parent_id = dp.id
+      )
+      SELECT d.name
+      FROM directories d JOIN dir_path dp ON dp.id = d.id
+      WHERE d.enabled
+        AND (${scope}::uuid[] IS NULL OR d.id = ANY(${scope}::uuid[]))
+        AND array_length(string_to_array(dp.path, '/'), 1) = (
+          SELECT min(array_length(string_to_array(dp2.path, '/'), 1))
+          FROM directories d2 JOIN dir_path dp2 ON dp2.id = d2.id
+          WHERE d2.enabled AND (${scope}::uuid[] IS NULL OR d2.id = ANY(${scope}::uuid[]))
+        )
+      ORDER BY dp.path
+      LIMIT 8
+    `
+    return rows.map((row) => row.name)
   }
 
   /** 最近几轮对话作为多轮上下文（只取本会话，且只取文本，不带引用）。 */

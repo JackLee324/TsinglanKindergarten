@@ -455,6 +455,75 @@ describe('AI 已配置：状态 / 提问 / 引用 / 落库', () => {
     assert.equal(usage.outcome, 'provider_error', '失败也要记用量（排查成本与故障都要用）')
   })
 
+  test('⑬ **问助手自己**（"你现在是什么模型"）→ 真的调模型，并据服务端配置回答', async () => {
+    // 业主实测问过这一句：旧行为下检索命中 0 条 → 回一句固定文案 → 看起来像假的机器人
+    const before = mock.requests.length
+    const res = await teacherAClient.post('/api/ai/chat', { question: '你现在是什么模型' })
+    assert.equal(res.status, 201, JSON.stringify(res.data))
+    assert.equal(res.data.answeredBy, 'model', '问助手自己的问题必须由模型回答，不能落进固定文案')
+    assert.equal(mock.requests.length, before + 1, '这一句必须真的调用模型')
+    assert.equal(res.data.model, MODEL, '模型列要有值（界面据此区分"系统提示"与"模型回答"）')
+
+    // 送给模型的请求里要有**服务端配置的事实**，且不能因此把无权内容带出去
+    const sent = lastSentText()
+    assert.match(sent, /关于你自己/, '系统提示里应当附上"关于你自己"的事实')
+    assert.match(sent, new RegExp(MODEL), '模型名来自服务端配置，应当据实交给模型')
+    assert.doesNotMatch(sent, new RegExp(DRAFT_TITLE), '即便如此也不能带出别人的草稿')
+    assert.doesNotMatch(sent, new RegExp(KW_DRAFT), '草稿正文同样不许出现')
+    // 用户消息里还要明确"据实回答、不要用没找到来回避"
+    assert.match(sent, /不要编造/)
+  })
+
+  test('⑭ 普通问题没命中（"体育"）→ **不调模型**，回一条一眼看出是系统提示的回复', async () => {
+    // "体育"在线上语料里确实不存在（那里用的是"体能"），是真实的"没找到"场景
+    const before = mock.requests.length
+    const res = await teacherAClient.post('/api/ai/chat', { question: '体育' })
+    assert.equal(res.status, 201, JSON.stringify(res.data))
+    assert.equal(res.data.answeredBy, 'system', '这不是模型回答，必须标成系统提示')
+    assert.equal(res.data.noEvidence, true)
+    assert.equal(res.data.model, null, 'model 为空 = 没有调用模型（界面据此打"未调用 AI 模型"标签）')
+    assert.equal(mock.requests.length, before, '没依据的问题仍然不该调用模型（省成本、也不给编造留空间）')
+    // 文案要点：说清身份 + 带回问题 + 给路标 + 不许看起来像模型在敷衍
+    assert.match(res.data.answer, /未调用 AI 模型/)
+    assert.match(res.data.answer, /系统提示/)
+    assert.match(res.data.answer, /「体育」/, '要把用户问的原话带回来，证明系统听懂了')
+    assert.match(res.data.answer, /Pre-K|K|教师成长/, '要列出这个账号真能访问的目录当路标')
+    assert.deepEqual(res.data.citations, [])
+  })
+
+  test('⑮ 系统提示里列出的目录必须是**这个账号真能访问的**（不泄露目录名）', async () => {
+    const b2 = client()
+    await b2.login('ai_api_b', 'AiApiPass!2')
+    const res = await b2.post('/api/ai/chat', { question: '这个平台有什么内容' })
+    assert.equal(res.status, 201, JSON.stringify(res.data))
+    assert.equal(res.data.answeredBy, 'system', `这句在乙的权限下没有依据：${res.data.answer?.slice(0, 80)}`)
+
+    // 只核对"目录包括：…。"这一行里的**条目**（整篇文字里出现某个词不算"列了目录"）
+    const hint = /目录包括：([^。]*)。/.exec(String(res.data.answer))?.[1] ?? ''
+    const listed = hint.split('、').map((part) => part.trim()).filter((part) => part !== '')
+    assert.equal(listed.length > 0, true, `乙有 education 的授权，路标不该是空的：${res.data.answer}`)
+
+    // 权威口径：从数据库算出乙**真正**能访问的目录名（策略与接口同一张表）
+    const rows = await withSql(async (sql) => {
+      return await sql`
+        WITH RECURSIVE reach AS (
+          SELECT id FROM directories WHERE id = ANY(
+            ARRAY(SELECT directory_id FROM user_permissions
+                  WHERE user_id = (SELECT id FROM users WHERE username = 'ai_api_b')
+                    AND permission = 'resource.view' AND directory_id IS NOT NULL)
+          )
+          UNION ALL
+          SELECT d.id FROM directories d JOIN reach r ON d.parent_id = r.id
+        )
+        SELECT name FROM directories WHERE id IN (SELECT id FROM reach)
+      `
+    })
+    const accessible = new Set(rows.map((row) => row.name))
+    for (const name of listed) {
+      assert.equal(accessible.has(name), true, `路标里出现了乙无权访问的目录「${name}」：${hint}`)
+    }
+  })
+
   test('⑫ **建议问题必须真的问得出东西**（否则界面上那几个按钮就是几个"没找到"）', async () => {
     const status = await teacherAClient.get('/api/ai/status')
     const questions = status.data.suggestedQuestions

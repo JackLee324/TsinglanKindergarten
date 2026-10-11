@@ -143,8 +143,16 @@ OR (c.resource_id IS NULL AND (c.source_kind <> 'DIRECTORY_META' OR d.enabled))
  → 消息 + 引用快照 + 用量 + 审计 落库
 ```
 
-* **取不到依据时不调模型**：给确定性回答"现有资料里没有找到…"，并提示换说法或去目录里找 ——
-  省成本，也不给模型用通用知识编造"站内有哪些资料"的空间。
+* **问助手自己的问题**（"你现在是什么模型 / 你能做什么 / 你会不会泄露别人的草稿"）：
+  这类问题的答案**不在资料库里**，在服务端配置里。所以命中
+  `isMetaQuestion()` 时**照常调模型**，并在系统提示里附一段"关于你自己"的
+  **配置事实**（供应商、模型名、能做什么不能做什么、限流与索引范围），
+  另用"只查平台文档"的检索把站规里"AI 助手能做什么、不能做什么"带进去。
+  这段事实里**没有资料内容、没有密钥**，模型名本来也显示在面板头部。
+* **普通问题取不到依据时不调模型**：给一条**系统提示**（不是模型回答）——
+  文案自带用户的问题原话、明写"未调用 AI 模型"、并列出他**有权限访问**的目录当路标。
+  API 用 `answeredBy: 'model' | 'system'` 区分，界面用虚线气泡 + "系统提示 · 未调用 AI 模型"
+  标签区分。省成本、不给编造留空间，但用户不会再把它当成"AI 敷衍"。
 * **取消是真的取消**：客户端断开 → 中止上游请求（否则用户以为停了、账单还在涨）。
   这一条实测踩过坑：`req.on('close')` 在 Express 5 + `express.json()` 之下**不触发**，
   改用 `res.on('close')` + `writableEnded` 判断，并由测试让假供应商确认连接**真的**被中断。
@@ -235,13 +243,17 @@ node scripts/ai-index.mjs seed-static       # 补站规 + 目录说明（worker 
 * 门禁：build 0 / typecheck 0 / lint 0 / unit **479-479** / integration **661-661**（本次提交实测）。
 * 新增测试：
   * `tests/unit/ai-query-terms.test.mjs`（11）、`ai-pdf.test.mjs`（11）
-  * `tests/integration/ai-chat-api.test.mjs`（17，含**出口审计**：送给模型的请求体里没有无权内容）
+  * `tests/integration/ai-chat-api.test.mjs`（20，含**出口审计**：送给模型的请求体里没有无权内容；
+    以及"问助手自己 → 真调模型""普通问题没命中 → 系统提示且不调模型""路标目录不越权"）
   * `tests/integration/ai-pdf-index.test.mjs`（6：真实上传链路 → 异步索引 → 检索 → 引用）
+  * `tests/unit/ai-prompt.test.mjs`（13：问助手自己的识别要准且不误判、自我描述据实且不含密钥、
+    系统提示的文案要点）
   * `tests/integration/ai-lifecycle.test.mjs`（8：**失败路径与开关** —— 对象缺失 → 任务回 PENDING
     并记退避，放回字节后重跑成功；到上限 → `FAILED` 且业务侧照常；
     `AI_ENABLED=0` 时问答 503、**零上游请求**、文本索引继续、图片记 SKIPPED；
     `AI_INDEX_ENABLED=0` 时任务只排队不处理）
-  * `tests/integration/browser.stage15-ai-panel.test.mjs`（12，真实 Chrome/CDP）
+  * `tests/integration/browser.stage15-ai-panel.test.mjs`（13，真实 Chrome/CDP；
+    含"系统提示要带标签、模型回答不带标签"的界面区分）
   * `tests/production/stage15-ai-live.test.mjs`（5，**线上环境 + 真实 DeepSeek**）
 * 线上实测（部署 `84271d2`，2026-10-11 08:37 起 RUNNING）：
   * 真实提问（禁用假数据）：`deepseek-flash` 返回 3481→608 token、耗时 3.6s，8 条引用（站规 + 真实资源）；

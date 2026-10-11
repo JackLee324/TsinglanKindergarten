@@ -496,9 +496,30 @@ function MessageRow({ message }: { readonly message: LocalMessage }) {
     )
   }
 
+  /*
+    系统提示（没有调用模型）与模型回答必须一眼分得开：
+    系统提示用虚线边框 + 灰底 + 标签，模型回答用普通气泡。
+    2026-10-11 业主把系统提示当成了"AI 敷衍"，就是因为两者长得一样。
+  */
+  const isSystem = message.pending !== true && message.model === null
+
   return (
-    <div className="flex flex-col gap-1" data-testid="ai-message-assistant">
-      <div className="max-w-[95%] rounded-xl rounded-bl-sm border border-border bg-secondary/40 px-3 py-2">
+    <div className="flex flex-col gap-1" data-testid="ai-message-assistant" data-answer-by={isSystem ? 'system' : 'model'}>
+      {isSystem && (
+        <span
+          className="flex w-fit items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+          data-testid="ai-system-answer-label"
+        >
+          <AlertTriangle className="size-3" />
+          系统提示 · 未调用 AI 模型
+        </span>
+      )}
+      <div
+        className={cn(
+          'max-w-[95%] rounded-xl rounded-bl-sm border px-3 py-2',
+          isSystem ? 'border-dashed border-border bg-muted/40' : 'border-border bg-secondary/40',
+        )}
+      >
         {message.pending === true ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground" data-testid="ai-loading">
             <Loader2 className="size-4 animate-spin" />
@@ -510,12 +531,6 @@ function MessageRow({ message }: { readonly message: LocalMessage }) {
       </div>
       {message.pending !== true && message.citations.length > 0 && (
         <CitationList citations={message.citations} />
-      )}
-      {message.pending !== true && message.model === null && (
-        // 无依据的确定性回答：模型没参与，界面上说清楚（不要假装是模型答的）
-        <p className="text-[11px] text-muted-foreground" data-testid="ai-no-evidence-note">
-          本次没有检索到你有权限查看的相关资料，因此没有调用模型。
-        </p>
       )}
     </div>
   )
