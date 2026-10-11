@@ -115,7 +115,10 @@ title='test' 残留 = 0
 | 生产配置块能否启动 | **通过**：用最终生产环境变量在本机起进程，`/api/health` 200、`/api/health/ready` 200（`database:ok`，即生产库连接串可用）、`/` 200（SPA） | 端口 3399 本地冒烟，跑完即停 |
 | 桶 CORS | **已配置并回读确认** | `V2_PUBLIC_ORIGIN=https://tsinglan.zeabur.app node scripts/configure-bucket-cors.mjs` → 回读 `GetBucketCors`：`AllowedOrigins=[https://tsinglan.zeabur.app]`，方法 `PUT/GET/HEAD`，无通配符；`scripts/check-storage.mjs` 退出码 **0** |
 | 浏览器直传链路 | **通过（对生产桶实测）** | 用 `dist` 里的 `S3StorageProvider.presignPut` 签名 → `OPTIONS` 预检 **204** 且 `allow-origin=https://tsinglan.zeabur.app`、`allow-methods=PUT, GET, HEAD` → 带 `Origin` 真发 `PUT` **200** → 读回 sha256 与上传一致 → 删除探针，桶回到 0 对象 |
-| 部署后的应用 | **BLOCKED（502）** | `https://tsinglan.zeabur.app/` 与 `/api/health` 连续 3 次探测均 **502 Bad Gateway**（`http://` 会 302 到 https）。同一时刻 V1 站点 200、未受影响。待查：部署是否仍在构建、服务端口是否为 3300、环境变量是否保存成功 |
+| 部署后的应用 | **BLOCKED（502）** | `https://tsinglan.zeabur.app/` 与 `/api/health` 连续探测均 **502 Bad Gateway**（`http://` 会 302 到 https）；`deploy/verify.mjs --base … --skip-compose --skip-db` 退出码 **1**（7/9 未通过，全部由 502 引起）。同一时刻 V1 站点 200、未受影响 |
+| 部署触发 | **BLOCKED（无人可点）** | 本机没有 Zeabur CLI 登录态、没有可用 API token（此前那个 `zat_…` 无写环境变量权限，且未留存全文）→ **我无法触发 Redeploy 或读构建/运行日志**；Git 上 `main = f487146` 已就绪，等服务上一次 Redeploy |
+| 构建失败根因（已修） | **修好并本机复现** | 平台把 `NODE_ENV=production` 带进 Docker 构建 → deps 阶段 `npm ci` 静默跳过 devDeps → `nest`/`vite` 不存在 → `npm run build` **exit 127**。复现：`NODE_ENV=production npm ci` = 166 包、无 `.bin/nest`；加 `--include=dev` = 624 包、`.bin/nest` 在。Dockerfile 已显式 `--include=dev`，并新增构建前自检把 127 变人话（5 条单测锁住） |
+| 安全响应头 / 登录限流（已修） | **搬进应用并本机实测通过** | 这两件事以前只由演练栈 Nginx 提供，正式环境没有 Nginx → 六个头全缺、错口令 10 次无 429。现由 `server/common/security-headers.ts` + `server/auth/login-throttle.ts` 提供：本机生产配置实测六头齐全、CSP 放行生产 R2 origin、错口令序列 `401,401,401,429,…`；成功登录不消耗配额 |
 
 ### V1 的历史文件要不要搬？——**不需要**（这就是 `resource_files=0` 是对的）
 
