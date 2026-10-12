@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { ArrowLeft } from 'lucide-react'
 import { useAuth } from '../auth/useAuth'
 import { Button } from '../components/ui/Button'
 import { Card, CardContent } from '../components/ui/Card'
 import { Input, Label } from '../components/ui/Input'
+import { OFFICIAL_SITE_URL } from '../links'
 
 /**
  * 登录页。
@@ -43,7 +45,10 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4" data-testid="login-page">
+    <div
+      className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-4"
+      data-testid="login-page"
+    >
       <Card className="w-full max-w-sm">
         <CardContent>
           <div className="mb-6 text-center">
@@ -97,6 +102,21 @@ export function LoginPage() {
           </form>
         </CardContent>
       </Card>
+
+      {/*
+        「返回官网」。访客是从官网点进来的，落到登录页之后如果没有这条路，
+        就只能靠浏览器后退 —— 学校网站的访客未必知道要这么做。
+        同一标签页返回（不用 target="_blank"）：官网那边的入口是**新开标签**进来的，
+        原来的标签还停在官网上，这里再开一个只会越点越多。
+      */}
+      <a
+        href={OFFICIAL_SITE_URL}
+        className="inline-flex min-h-10 items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        data-testid="login-back-to-site"
+      >
+        <ArrowLeft className="size-4" />
+        返回官网
+      </a>
     </div>
   )
 }

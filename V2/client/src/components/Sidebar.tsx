@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
+  ExternalLink,
   FolderTree,
   Home,
   Layers,
@@ -19,6 +20,7 @@ import { useAuth } from '../auth/useAuth'
 import type { DirectoryNode } from '../api/types'
 import { cn } from './ui/cn'
 import { useAiAssistant } from './ai/AiAssistantContext'
+import { OFFICIAL_SITE_URL } from '../links'
 
 /**
  * 侧边栏（**桌面**）。
@@ -126,6 +128,30 @@ export function SidebarNav({ onNavigate }: { readonly onNavigate?: () => void } 
             testId="nav-review"
           />
         )}
+
+        {/*
+          「返回官网」——**站外**链接。
+
+          两条与站内导航项不同的地方，都是有意的：
+            · 用原生 <a> 而不是 NavLink：NavLink 会把站外地址当成路由，
+              点下去由 react-router 接手（而不是真的离开站点）。
+            · **不带 `data-nav`**：那个属性是「站内导航节点」的标记，
+              browser.stage11 用它统计"抽屉里是不是唯一一套导航"，
+              多一个就会被判成第二份真相。
+
+          位置放在目录树**之前**：目录可以有几十个一级栏目，放树后面会被滚出视野，
+          等于没有这个入口。桌面侧边栏与移动抽屉共用这一个定义。
+        */}
+        <div className="mt-2 border-t border-white/15 pt-2">
+          <a
+            href={OFFICIAL_SITE_URL}
+            data-testid="nav-official-site"
+            className="flex min-h-10 w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-white/90 transition-colors hover:bg-white/10 sm:min-h-0"
+          >
+            <ExternalLink className="size-5" />
+            <span data-testid="nav-official-site-label">返回官网</span>
+          </a>
+        </div>
 
         {/*
           目录区：一级栏目全部来自数据库。
