@@ -304,6 +304,22 @@ if (!has('skip-rate-limit')) {
 
 const failed = results.filter((r) => !r.ok)
 console.log()
+
+/*
+  ── 划清边界：本脚本**证明不了**浏览器能不能直传 ────────────────────────────
+  上面那条"服务端可访问对象存储"走的是 `/api/health/storage`，即**服务端 → 桶**。
+  浏览器直传还要多过一道 CORS 预检，而那是**桶上的配置**，跟服务端通不通没关系。
+
+  2026-10-12 的线上故障正是卡在这里：教师平台换了域名、桶的 CORS 还停在旧域名，
+  服务端到桶一直通、本脚本全绿，浏览器却被预检 403 挡掉，老师看到「网络中断，上传没有完成」。
+
+  所以这里明确说一句：CORS 与当前域名的匹配要**另外**跑一次只读检查，
+  并把本次的 --base 原样传过去（它就是当前实际部署的地址）。
+*/
+console.log('ℹ 本脚本不校验桶 CORS 与当前部署域名的匹配（它只证明服务端到桶可达）。')
+console.log('  域名改过、或出现"上传失败/预览失败"时，补跑这一条只读检查：')
+console.log(`    npm run storage:check -- --base ${BASE}`)
+
 if (skipped.length > 0) {
   console.log(`⏭ 未验证 ${skipped.length} 项（不算通过，也不判失败）：`)
   for (const s of skipped) console.log(`   · ${s.name} —— ${s.why}`)

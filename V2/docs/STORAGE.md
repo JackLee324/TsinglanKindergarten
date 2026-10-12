@@ -128,12 +128,58 @@ getSignedUrl(client, command, {
 # 2) 配置环境变量（见 .env.example），生产必须 STORAGE_PROVIDER=s3
 # 3) 让 bucket 接受来自正式域名的跨域 PUT（绝不要用 *）
 V2_PUBLIC_ORIGIN=https://v2.example.com npm run storage:cors
-# 4) 自检：配置齐不齐、桶连不连得上、CORS 是不是通配符
-npm run storage:check
+# 4) 自检（只读）：配置齐不齐、桶连不连得上、CORS 与当前域名是否一致
+npm run storage:check -- --base https://当前实际部署的域名
 ```
 
 `npm run storage:check` 输出的是**结论**（configured / reachable / CORS），
 不会打印 bucket、endpoint 或任何密钥。
+
+退出码：`0` 通过 · `1` 检查未通过 · `2` BLOCKED（没给期望 Origin，没法判断）。
+
+### 6.1 域名漂移：CORS 与当前部署域名的匹配
+
+**2026-10-12 的真实故障**：教师平台换到 `tsinglanteachers.zeabur.app`，
+但桶的 CORS 还停在旧域名 `tsinglan.zeabur.app`。跨域预检返回 403 →
+浏览器拦掉 PUT → 老师看到「网络中断，上传没有完成」。
+当时的自检只查通配符，**看不出"过期的具体域名"**，于是报「正常」。
+
+所以检查的第 4 条是：**当前实际部署的 Origin 在不在桶的 `AllowedOrigins` 里**。
+
+```bash
+# 只读。--base 与 deploy/verify.mjs 的 --base 同义（当前实际部署地址）
+npm run storage:check -- --base https://tsinglanteachers.zeabur.app
+
+# 也可以直接给 Origin；可重复或用逗号分隔
+npm run storage:check -- --expected-origin https://tsinglanteachers.zeabur.app
+```
+
+**期望 Origin 必须由操作者显式给出**，脚本不从桶里读、也不用 `V2_PUBLIC_ORIGIN` 反推。
+原因：那两个来源都可能**同时**停在旧域名上，比对下来一致地"通过" ——
+那正是这次故障的形状。没有给期望 Origin 时脚本报 `BLOCKED` 并以退出码 2 结束，
+**不会静默判过**（有一条用例专门把这个陷阱钉住了）。
+
+它同时检查浏览器直传需要的 `AllowedMethods`（`PUT` / `GET` / `HEAD`）与
+`AllowedHeaders`（`content-type` / `x-amz-checksum-sha256` / `x-amz-date` / `authorization`）——
+少任何一个，预检都会整体失败。
+
+**排查顺序**：
+
+1. 先核实期望域名确实是当前在用的那个（看部署平台绑定的域名 / 浏览器地址栏）；
+2. 确认后**单独授权**再改配置（写操作不在检查脚本里）：
+   `V2_PUBLIC_ORIGIN=<当前域名>[,<其他仍在用的域名>] npm run storage:cors`
+3. 再跑一次只读检查确认通过。
+
+允许列表里若还留着历史域名，检查**只报告不判失败** —— 它可能仍被别的环境依赖，
+擅自判失败会逼人删掉还在用的来源。
+
+> `deploy/verify.mjs` 那条"服务端可访问对象存储"走的是 `/api/health/storage`，
+> 证明的是**服务端 → 桶**；浏览器直传还要多过一道 CORS 预检，那是**桶上的配置**。
+> 两者不是一回事 —— 这次故障正是服务端一直通、浏览器被预检挡掉。
+> `verify.mjs` 结束时会把该补的那条 `storage:check` 命令连同 `--base` 打出来。
+
+**域名改动后必须重跑**。改 DNS / 换域名 / 改部署平台自定义域之后，
+第 4 条检查是唯一能自动发现这个问题的门禁。
 
 ### 孤儿对象
 
@@ -156,6 +202,8 @@ npm run storage:cleanup -- --dry-run    # 只报告，不删
 |---|---|
 | `tests/unit/file-policy.test.mjs` | 允许清单、双扩展名、路径穿越、三者综合判定、大小上限 |
 | `tests/unit/storage-rules.test.mjs` | key 形状、令牌签了哪些字段、Content-Disposition 注入、CORS 不许通配符 |
+| `tests/unit/cors-drift.test.mjs` | Origin 规范化（协议/主机/端口/路径）、缺期望 Origin 不判过、方法头缺失、多来源场景 |
+| `tests/integration/cors-drift-check.integration.test.mjs` | **真桶 + 真子进程**：`check-storage.mjs` 在 10 种策略下的**真实退出码**（0/1/2），以及"检查确实只读" |
 | `tests/integration/upload.integration.test.mjs` | 四步链路、存储层拒绝坏字节、票据只能一次、magic 验真、多文件、状态锁、删除顺序、孤儿清理 |
 | `tests/integration/download-preview.integration.test.mjs` | 各类型的 viewer、响应头由服务端定、过期 / 篡改 / 换 key、审计 |
 | `tests/integration/file.integration.test.mjs` | 文件访问控制（目录授权 + 所有权 + 草稿不可见） |
