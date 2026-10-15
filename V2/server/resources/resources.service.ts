@@ -16,6 +16,9 @@ import {
 import {
   ACTION_AUDIT_NAME,
   DELETABLE_STATUSES,
+  FORCE_STATUS_COMMENT_PREFIX,
+  FORCE_STATUS_REQUIRES_COMMENT,
+  FORCE_STATUS_REVIEW_ACTION,
   RESOURCE_STATUS_LABEL,
   RESOURCE_STATUSES,
   editOutcomeFor,
@@ -127,6 +130,34 @@ export interface BulkDeleteResult {
   readonly skipped: number
   readonly failed: number
   readonly items: readonly BulkDeleteItemResult[]
+}
+
+/**
+ * 批量**强制改状态**里单条的结果。
+ *
+ * 与删除那一份同构（三种结局、`reason` 给程序、`message` 给人），
+ * 只是成功那一档叫 `updated` 而不是 `deleted` ——
+ * 名字混用会让"我到底删了还是改了"在类型层面就分不清。
+ */
+export interface BulkStatusItemResult {
+  readonly id: string
+  readonly outcome: 'updated' | 'skipped' | 'failed'
+  readonly reason: string | null
+  readonly message: string
+  /** 改动前后的状态（跳过的条目为 null）。给界面显示「草稿 → 已发布」用。 */
+  readonly from: string | null
+  readonly to: string | null
+}
+
+export interface BulkStatusResult {
+  readonly requested: number
+  readonly unique: number
+  readonly duplicated: number
+  readonly updated: number
+  readonly skipped: number
+  readonly failed: number
+  readonly status: string
+  readonly items: readonly BulkStatusItemResult[]
 }
 
 /**
@@ -820,11 +851,15 @@ export class ResourcesService {
   async softDelete(actor: AuthUser, id: string) {
     const row = await this.requireResource(id)
     await this.assertCanActOn(actor, 'resource.delete.own', row)
-    if (!DELETABLE_STATUSES.includes(row.status as ResourceStatus)) {
-      throw AppError.conflict(
-        `已发布的资源不能直接删除，请先撤回（当前状态：${row.status}）`,
-        'ILLEGAL_TRANSITION',
-      )
+    /*
+      ⚠️ 这里**必须**检查返回值。第一版写成 `await this.assertDeletable(...)` 就直接往下删了 ——
+      于是"普通教师不能删已发布的"这条规则在单条 `DELETE` 这条路上**完全失效**
+      （集成测试抓到了：老师删自己那条已发布的资源返回了 200）。
+      "名字带 assert、实际只返回原因"是最容易被读漏的一种形状，所以这里把原因显式抛出去。
+    */
+    const blocked = await this.assertDeletable(actor, row, id)
+    if (blocked !== null) {
+      throw AppError.conflict(blocked.message, blocked.reason)
     }
     const updated = await this.sql<{ id: string }[]>`
       UPDATE resources SET deleted_at = now(), updated_at = now()
@@ -841,9 +876,85 @@ export class ResourcesService {
       targetType: 'resource',
       targetId: id,
       result: 'success',
-      detail: { status: row.status },
+      detail: { status: row.status, forcedPublished: row.status === 'PUBLISHED' },
     })
     return { ok: true, id }
+  }
+
+  /**
+   * 这条资源现在能不能被软删除？不能的话抛 409（单个）或返回 null（批量）。
+   *
+   * 规则（业主 2026-10-15 的决定）：
+   *   · `DELETABLE_STATUSES` 里的状态 —— 上传者本人（或管理员）直接删；
+   *   · **已发布** —— 普通角色仍然必须先撤回（照旧）；
+   *     但**超级管理员可以直接删**，代价是先把这条记为「已撤回」再进回收站
+   *     （见 `recallForForcedDelete`）。
+   *
+   * 为什么超管这条路要"先记为已撤回"而不是只写 `deleted_at`：
+   *   1. 审核时间线里留下"这东西为什么下线了"；
+   *   2. 从回收站**恢复之后是「已撤回」**，不会一恢复就重新对全园可见 ——
+   *      恢复一个被下线的已发布内容，本来就不该等于重新发布。
+   *
+   * @returns 给批量路径用的失败原因（成功返回 null）
+   */
+  private async assertDeletable(
+    actor: AuthUser,
+    row: ResourceRow,
+    id: string,
+  ): Promise<{ reason: string; message: string } | null> {
+    const status = row.status as ResourceStatus
+    if (DELETABLE_STATUSES.includes(status)) return null
+
+    if (status !== 'PUBLISHED') {
+      // 理论上到不了：DELETABLE_STATUSES 之外只有 PUBLISHED。
+      // 留着是为了将来加状态时**默认拒绝**，而不是默认放行。
+      return {
+        reason: 'ILLEGAL_TRANSITION',
+        message: `这个状态不能直接删除（当前状态：${status}）`,
+      }
+    }
+
+    if (!this.authz.isSuperAdmin(actor)) {
+      return { reason: 'ILLEGAL_TRANSITION', message: '已发布的资源不能直接删除，请先撤回' }
+    }
+
+    const recalled = await this.recallForForcedDelete(actor, id)
+    if (!recalled) {
+      return { reason: 'CONFLICT', message: '资源状态刚刚被别人改过，请刷新后重试' }
+    }
+    return null
+  }
+
+  /**
+   * 把一条**已发布**的资源记为「已撤回」—— 超级管理员直接删除已发布内容时的第一步。
+   *
+   * 条件更新（`WHERE status = 'PUBLISHED'`）保证并发下只有一个人能记上；
+   * 记不上就返回 false，由调用方如实报"跳过"，绝不硬删。
+   */
+  private async recallForForcedDelete(actor: AuthUser, id: string): Promise<boolean> {
+    const updated = await this.sql<{ id: string }[]>`
+      UPDATE resources
+      SET status = 'RECALLED', updated_at = now()
+      WHERE id = ${id} AND status = 'PUBLISHED' AND deleted_at IS NULL
+      RETURNING id
+    `
+    if (updated.length === 0) return false
+
+    await this.sql`
+      INSERT INTO resource_reviews (resource_id, actor_id, action, from_status, to_status, comment)
+      VALUES (${id}, ${actor.id}, 'review.recall', 'PUBLISHED', 'RECALLED',
+              ${'超级管理员直接删除已发布资源（自动记为已撤回）'})
+    `
+    await this.audit.write({
+      actorId: actor.id,
+      actorName: actor.name,
+      action: 'resource.recall',
+      targetType: 'resource',
+      targetId: id,
+      result: 'success',
+      detail: { from: 'PUBLISHED', to: 'RECALLED', via: 'force-delete' },
+    })
+    return true
   }
 
   /**
@@ -911,16 +1022,18 @@ export class ResourcesService {
       if (row.deleted_at !== null) {
         return { id, outcome: 'skipped', reason: 'ALREADY_DELETED', message: '资源已在回收站中' }
       }
-      if (!DELETABLE_STATUSES.includes(row.status as ResourceStatus)) {
-        return {
-          id,
-          outcome: 'skipped',
-          reason: 'ILLEGAL_TRANSITION',
-          message: `已发布的资源不能直接删除，请先撤回（当前状态：${row.status}）`,
-        }
-      }
       // 唯一授权入口：所有权 / 目录范围 / 管理员绕过都在 AuthorizationService 里判。
       await this.assertCanActOn(actor, 'resource.delete.own', row)
+
+      /*
+        能不能删由 `assertDeletable()` 一处判定（单个与批量共用）——
+        已发布的资源：普通角色跳过，超级管理员**先记为已撤回**再删。
+        判定失败返回原因而不是抛异常：批量要逐条如实。
+      */
+      const blocked = await this.assertDeletable(actor, row, id)
+      if (blocked !== null) {
+        return { id, outcome: 'skipped', reason: blocked.reason, message: blocked.message }
+      }
 
       /*
         条件更新是**并发安全**的关键：`WHERE deleted_at IS NULL` 保证两个同时到达的
@@ -943,9 +1056,15 @@ export class ResourcesService {
         targetType: 'resource',
         targetId: id,
         result: 'success',
-        detail: { status: row.status, via: 'bulk' },
+        detail: { status: row.status, via: 'bulk', forcedPublished: row.status === 'PUBLISHED' },
       })
-      return { id, outcome: 'deleted', reason: null, message: '已移入回收站' }
+      return {
+        id,
+        outcome: 'deleted',
+        reason: null,
+        // 已发布的那条要如实说明"先记成了已撤回"，否则管理员会以为删完还能原样恢复上线
+        message: row.status === 'PUBLISHED' ? '已记为「已撤回」并移入回收站' : '已移入回收站',
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '未知错误'
       // 失败也留痕：批量里"这一条为什么没删掉"必须能从审计里查得到。
@@ -960,6 +1079,162 @@ export class ResourcesService {
         detail: { via: 'bulk', reason: message },
       })
       return { id, outcome: 'failed', reason: 'ERROR', message }
+    }
+  }
+
+  /**
+   * 批量**强制修改状态**（超级管理员专用，业主 2026-10-15 新增）。
+   *
+   * ── 它和六条合法转换是什么关系 ────────────────────────────────────────────
+   * **完全不同的两条路**。`submit / approve / reject / recall` 那六条是**流程**：
+   * 每条都有前置状态、有权限码、有所有权要求，只能一格一格走。
+   * 这里是**管理员的强制覆盖**：不查 `TRANSITIONS`，五个状态里任何一个都能设。
+   *
+   * 之所以敢开这个口子，是因为它被三件事围住：
+   *   1. **身份**：控制器与 service 双层 `assertSuperAdmin()`；普通角色连门都进不来，
+   *      他们走的仍然是原来的六条转换（一个字没改）；
+   *   2. **留痕**：审计写 `resource.status.force`（与流程动作分开的独立动作名），
+   *      并写进 `resource_reviews` 时间线 —— "这一步是走流程还是有人直接改的"一眼可辨；
+   *   3. **代价明确**：退回必须写原因（否则教师端只看到"已退回"不知道为什么），
+   *      改成已发布在界面上要**二次确认**（那一步绕过审核）。
+   *
+   * 逐条如实：与批量删除同一套结果语义（成功 / 跳过 / 失败），
+   * 一条不合法不让整批看起来全失败，一条成功也不让整批看起来全成功。
+   */
+  async bulkForceStatus(
+    actor: AuthUser,
+    ids: readonly string[],
+    status: ResourceStatus,
+    comment: string | null,
+  ): Promise<BulkStatusResult> {
+    this.authz.assertSuperAdmin(actor, '批量修改资源状态')
+
+    if (!RESOURCE_STATUSES.includes(status)) {
+      throw AppError.badRequest('目标状态不合法', 'VALIDATION_FAILED')
+    }
+
+    const unique = [...new Set(ids)]
+    const items: BulkStatusItemResult[] = []
+    for (const id of unique) {
+      items.push(await this.forceStatusOne(actor, id, status, comment))
+    }
+
+    const count = (outcome: BulkStatusItemResult['outcome']) =>
+      items.filter((i) => i.outcome === outcome).length
+
+    return {
+      requested: ids.length,
+      unique: unique.length,
+      duplicated: ids.length - unique.length,
+      updated: count('updated'),
+      skipped: count('skipped'),
+      failed: count('failed'),
+      status,
+      items,
+    }
+  }
+
+  /**
+   * 强制改状态里的**单条**。
+   *
+   * 与 `softDeleteOne()` 同构：不抛异常，把结局翻译成结果对象。
+   */
+  private async forceStatusOne(
+    actor: AuthUser,
+    id: string,
+    to: ResourceStatus,
+    commentFromCaller: string | null,
+  ): Promise<BulkStatusItemResult> {
+    const skip = (reason: string, message: string): BulkStatusItemResult => ({
+      id,
+      outcome: 'skipped',
+      reason,
+      message,
+      from: null,
+      to: null,
+    })
+    try {
+      const rows = await this.sql<ResourceRow[]>`SELECT * FROM resources WHERE id = ${id}`
+      if (rows.length === 0) return skip('NOT_FOUND', '资源不存在')
+      const row = rows[0]
+      if (row.deleted_at !== null) {
+        return skip('ALREADY_DELETED', '资源已在回收站中，请先恢复再改状态')
+      }
+
+      const from = row.status as ResourceStatus
+      if (from === to) return skip('NO_CHANGE', `已经是「${RESOURCE_STATUS_LABEL[to]}」`)
+
+      // 授权仍然走唯一入口（超级管理员在 AuthorizationService 里被放行，
+      // 但这条调用保证了"将来放开给别的角色"时不会绕开判定）。
+      await this.assertCanActOn(actor, 'resource.update.own', row)
+
+      const trimmed = commentFromCaller?.trim() ?? ''
+      if (FORCE_STATUS_REQUIRES_COMMENT.includes(to) && trimmed === '') {
+        // 数据库上也有同名 CHECK 约束（resource_reviews_reject_needs_comment）
+        // —— 这里先挡住是为了给出**可读**的逐条结果，而不是让整条 insert 报错。
+        return skip('COMMENT_REQUIRED', '退回必须写原因（教师端要能看到）')
+      }
+      const comment =
+        trimmed !== ''
+          ? trimmed
+          : `${FORCE_STATUS_COMMENT_PREFIX}：${RESOURCE_STATUS_LABEL[from]} → ${RESOURCE_STATUS_LABEL[to]}`
+
+      const reviewAction = FORCE_STATUS_REVIEW_ACTION[to]
+      const publishedAt = to === 'PUBLISHED' ? new Date() : row.published_at
+
+      // 条件更新：并发下只有一个人能改到这一行，另一个如实报"跳过"。
+      const updated = await this.sql<ResourceRow[]>`
+        UPDATE resources
+        SET status = ${to}, published_at = ${publishedAt}, updated_at = now()
+        WHERE id = ${id} AND status = ${from} AND deleted_at IS NULL
+        RETURNING *
+      `
+      if (updated.length === 0) return skip('CONFLICT', '状态刚刚被别人改过，请刷新后重试')
+
+      /*
+        写审核时间线。
+        `resource_reviews.action` 有 CHECK 约束，只接受
+        submit / review.approve / review.reject / review.recall 四种，
+        所以"改成草稿"没有对应的流程动作（`FORCE_STATUS_REVIEW_ACTION.DRAFT === null`）
+        —— 那一步本来就只该留在审计里（教师编辑回草稿走的也是 resource.update 审计）。
+      */
+      if (reviewAction !== null) {
+        await this.sql`
+          INSERT INTO resource_reviews (resource_id, actor_id, action, from_status, to_status, comment)
+          VALUES (${id}, ${actor.id}, ${reviewAction}, ${from}, ${to}, ${comment})
+        `
+      }
+
+      await this.audit.write({
+        actorId: actor.id,
+        actorName: actor.name,
+        action: 'resource.status.force',
+        targetType: 'resource',
+        targetId: id,
+        result: 'success',
+        detail: { from, to, comment, via: 'bulk', reviewAction },
+      })
+
+      return {
+        id,
+        outcome: 'updated',
+        reason: null,
+        message: `${RESOURCE_STATUS_LABEL[from]} → ${RESOURCE_STATUS_LABEL[to]}`,
+        from,
+        to,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误'
+      await this.audit.write({
+        actorId: actor.id,
+        actorName: actor.name,
+        action: 'resource.status.force',
+        targetType: 'resource',
+        targetId: id,
+        result: 'failed',
+        detail: { to, via: 'bulk', reason: message },
+      })
+      return { id, outcome: 'failed', reason: 'ERROR', message, from: null, to: null }
     }
   }
 

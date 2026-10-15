@@ -40,6 +40,36 @@ export class BulkDeleteResourcesDto {
   ids!: string[]
 }
 
+/**
+ * 批量**强制修改状态**的上限。与删除用同一个数，理由也同一个：**超限报错不截断**。
+ */
+export const MAX_BULK_STATUS = 100
+
+/**
+ * 批量强制修改状态的入参（超级管理员专用，见 `ResourcesService.bulkForceStatus`）。
+ *
+ * 与批量删除的入参规则完全一致（数组 / 非空 / 上限 / 逐条 UUID / 重复交给 service），
+ * 只是多了一个目标状态与可选的原因：
+ *   · `status` 必须是五个状态之一（`@IsIn`，写错一个字就 400）；
+ *   · `comment` 对**退回**是必填的 —— 但那一层判定放在 service（它要看每条资源的
+ *     当前状态才知道要不要原因），DTO 这里只管长度上限。
+ */
+export class BulkUpdateStatusDto {
+  @IsArray({ message: 'ids 必须是数组' })
+  @ArrayNotEmpty({ message: '请至少选择一条资源' })
+  @ArrayMaxSize(MAX_BULK_STATUS, { message: `单次最多修改 ${MAX_BULK_STATUS} 条资源` })
+  @IsUUID('4', { each: true, message: '资源 ID 不合法' })
+  ids!: string[]
+
+  @IsIn(RESOURCE_STATUSES as unknown as string[], { message: '目标状态不合法' })
+  status!: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string | null
+}
+
 export class CreateResourceDto {
   /**
    * 必填。业主的硬要求：「系统已经知道 directoryId，教师不再选择班型/科目/目录」。

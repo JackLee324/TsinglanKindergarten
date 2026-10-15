@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Trash2, Upload } from 'lucide-react'
+import { Search, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
 import { ApiError } from '../api/http'
 import type { DirectoryNode, ResourceListItem, ResourceStatus } from '../api/types'
 import { RESOURCE_STATUSES, RESOURCE_STATUS_LABEL } from '@shared/resource-status'
 import { useDirectory } from '../directory/DirectoryProvider'
 import { useAuth } from '../auth/useAuth'
-import { MAX_BULK_DELETE, resourcesApi, type BulkDeleteResult } from '../api/resources'
+import {
+  MAX_BULK_DELETE,
+  MAX_BULK_STATUS,
+  resourcesApi,
+  type BulkDeleteResult,
+  type BulkStatusResult,
+} from '../api/resources'
 import { humanMessage } from '../components/resource/errors'
 import { Button } from '../components/ui/Button'
 import { Badge } from '../components/ui/Badge'
@@ -15,6 +21,8 @@ import { Input } from '../components/ui/Input'
 import { Spinner } from '../components/ui/Spinner'
 import { EmptyState } from '../components/ui/EmptyState'
 import { UploadResourceDialog } from '../components/resource/UploadResourceDialog'
+import { BulkResultDialog, type BulkResultRow } from '../components/resource/BulkResultDialog'
+import { BulkStatusDialog } from '../components/resource/BulkStatusDialog'
 
 /** 状态 → 徽标样式。与列表其余部分共用同一套语义色。 */
 const STATUS_VARIANT: Readonly<
@@ -94,6 +102,11 @@ export function AdminResourcesPage() {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [bulkResult, setBulkResult] = useState<BulkDeleteResult | null>(null)
+  /** 批量改状态（超级管理员强制覆盖）。 */
+  const [statusOpen, setStatusOpen] = useState(false)
+  const [statusBusy, setStatusBusy] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const [statusResult, setStatusResult] = useState<BulkStatusResult | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   /** 全局上传入口的目录选择（初始为空 = 必须由管理员选）。 */
   const [uploadTarget, setUploadTarget] = useState<{ id: string; path: string }>({ id: '', path: '' })
@@ -205,6 +218,34 @@ export function AdminResourcesPage() {
       setBusy(false)
     }
   }
+
+  async function runBulkStatus(status: ResourceStatus, comment: string) {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    setStatusBusy(true)
+    setStatusError(null)
+    try {
+      const result = await resourcesApi.bulkUpdateStatus(ids, status, comment === '' ? null : comment)
+      setStatusResult(result)
+      setStatusOpen(false)
+      // 与服务端结果对齐：真的改掉的从勾选里移除；跳过的留着手动决定。
+      const done = new Set(result.items.filter((i) => i.outcome === 'updated').map((i) => i.id))
+      setSelected((prev) => new Set([...prev].filter((id) => !done.has(id))))
+      reload()
+    } catch (e) {
+      setStatusError(humanMessage(e, '批量修改状态失败'))
+    } finally {
+      setStatusBusy(false)
+    }
+  }
+
+  /** 把两种批量结果统一成逐条展示用的形状（弹窗组件只有一份）。 */
+  const toRows = (items: readonly { id: string; outcome: string; message: string }[]): BulkResultRow[] =>
+    items.map((i) => ({
+      id: i.id,
+      outcome: i.outcome === 'deleted' || i.outcome === 'updated' ? 'ok' : (i.outcome as 'skipped' | 'failed'),
+      message: i.message,
+    }))
 
   return (
     <div data-testid="admin-resources-page">
@@ -337,7 +378,20 @@ export function AdminResourcesPage() {
             清空选择
           </button>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={selected.size === 0 || selected.size > MAX_BULK_STATUS}
+            onClick={() => {
+              setStatusError(null)
+              setStatusOpen(true)
+            }}
+            data-testid="admin-resources-bulk-status"
+          >
+            <SlidersHorizontal className="size-4" /> 批量修改状态
+          </Button>
           <Button
             type="button"
             variant="danger"
@@ -500,7 +554,10 @@ export function AdminResourcesPage() {
           )}
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          已发布的资源不会被删除，会逐条告诉你原因（需先撤回）。
+          <strong className="text-foreground">已发布的资源也可以直接删除</strong>
+          ：会先记为「已撤回」再进回收站 —— 审核时间线里留下"为什么下线"，
+          而且从回收站恢复之后是「已撤回」而不是「已发布」，
+          不会一恢复就重新对全园可见。
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <Button
@@ -525,49 +582,43 @@ export function AdminResourcesPage() {
       </Dialog>
 
       {/* ── 批量删除结果（逐条如实）──────────────────────────────────── */}
-      <Dialog
+      <BulkResultDialog
         open={bulkResult !== null}
         title="批量删除结果"
-        onClose={() => setBulkResult(null)}
         testId="admin-bulk-delete-result"
-      >
-        {bulkResult !== null && (
-          <div data-testid="admin-bulk-result-body">
-            <p className="text-sm text-foreground">
-              成功 <strong data-testid="admin-bulk-deleted">{bulkResult.deleted}</strong> 条 ·
-              跳过 <strong data-testid="admin-bulk-skipped">{bulkResult.skipped}</strong> 条 ·
-              失败 <strong data-testid="admin-bulk-failed">{bulkResult.failed}</strong> 条
-              {bulkResult.duplicated > 0 && `（已忽略 ${bulkResult.duplicated} 个重复 ID）`}
-            </p>
-            <ul className="mt-3 max-h-64 space-y-1 overflow-y-auto text-sm" data-testid="admin-bulk-items">
-              {bulkResult.items.map((it) => (
-                <li key={it.id} className="flex items-start gap-2">
-                  <span
-                    className={
-                      it.outcome === 'deleted'
-                        ? 'text-success'
-                        : it.outcome === 'skipped'
-                          ? 'text-muted-foreground'
-                          : 'text-destructive'
-                    }
-                  >
-                    {it.outcome === 'deleted' ? '已删除' : it.outcome === 'skipped' ? '已跳过' : '失败'}
-                  </span>
-                  <span className="text-muted-foreground">{it.message}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-sm text-muted-foreground" data-testid="admin-bulk-recover-hint">
-              删除是可恢复的：到「我的资源 → 回收站」就能看到并恢复它们。
-            </p>
-            <div className="mt-5 flex justify-end">
-              <Button type="button" onClick={() => setBulkResult(null)} data-testid="admin-bulk-result-close">
-                知道了
-              </Button>
-            </div>
-          </div>
-        )}
-      </Dialog>
+        okLabel="已删除"
+        rows={bulkResult === null ? [] : toRows(bulkResult.items)}
+        onClose={() => setBulkResult(null)}
+        footer={
+          <p className="text-sm text-muted-foreground" data-testid="admin-bulk-delete-result-recover-hint">
+            删除是可恢复的：到「我的资源 → 回收站」就能看到并恢复它们。
+          </p>
+        }
+      />
+
+      {/* ── 批量修改状态（超级管理员强制覆盖）────────────────────────── */}
+      <BulkStatusDialog
+        open={statusOpen}
+        count={selected.size}
+        busy={statusBusy}
+        error={statusError}
+        onSubmit={(status, comment) => void runBulkStatus(status, comment)}
+        onClose={() => setStatusOpen(false)}
+      />
+
+      <BulkResultDialog
+        open={statusResult !== null}
+        title="批量修改状态结果"
+        testId="admin-bulk-status-result"
+        okLabel="已修改"
+        rows={statusResult === null ? [] : toRows(statusResult.items)}
+        onClose={() => setStatusResult(null)}
+        footer={
+          <p className="text-sm text-muted-foreground" data-testid="admin-bulk-status-result-hint">
+            跳过的通常是"状态本来就一样""已在回收站"或"退回没写原因"—— 每条后面都写了原因。
+          </p>
+        }
+      />
 
       {/* ── 全局上传入口 ─────────────────────────────────────────────── */}
       <UploadResourceDialog

@@ -45,6 +45,9 @@ export const AUDIT_ACTIONS = {
   'resource.reject': '审核退回',
   'resource.recall': '资源撤回',
   'resource.delete': '资源删除',
+  // 超级管理员的**强制**改状态（2026-10-15 新增）。与上面四个流程动作分开记：
+  // "这一步是走流程走出来的，还是有人直接改的"是审计里最该一眼看出来的区别。
+  'resource.status.force': '强制修改状态',
   'resource.restore': '资源恢复',
   'resource.purge': '永久删除',
   'resource.download': '资源下载',

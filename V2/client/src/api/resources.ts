@@ -34,6 +34,36 @@ export interface BulkDeleteResult {
   readonly items: readonly BulkDeleteItemResult[]
 }
 
+/** 单次批量**强制改状态**的上限 —— 与后端 `MAX_BULK_STATUS` 同一个数。 */
+export const MAX_BULK_STATUS = 100
+
+/**
+ * 批量强制改状态里单条的结果。
+ *
+ * 与删除那一份同构（三种结局、`reason` 给程序、`message` 给人），
+ * 成功那一档叫 `updated`；另外多带 `from` / `to`，
+ * 界面才能显示「草稿 → 已发布」这种一眼看懂的变化。
+ */
+export interface BulkStatusItemResult {
+  readonly id: string
+  readonly outcome: 'updated' | 'skipped' | 'failed'
+  readonly reason: string | null
+  readonly message: string
+  readonly from: string | null
+  readonly to: string | null
+}
+
+export interface BulkStatusResult {
+  readonly requested: number
+  readonly unique: number
+  readonly duplicated: number
+  readonly updated: number
+  readonly skipped: number
+  readonly failed: number
+  readonly status: string
+  readonly items: readonly BulkStatusItemResult[]
+}
+
 export interface ResourceListQuery {
   readonly directoryId?: string | null
   readonly includeSubtree?: boolean
@@ -131,6 +161,20 @@ export const resourcesApi = {
    */
   bulkDelete: (ids: readonly string[]) =>
     api.post<BulkDeleteResult>('/api/resources/bulk-delete', { ids: [...ids] }),
+
+  /**
+   * 批量**强制修改状态**（超级管理员）。
+   *
+   * 这是一次绕过状态机的覆盖：五个状态里任何一个都能设。
+   * 服务端的代价与约束（退回必须带原因、改成已发布要二次确认）都在界面之外
+   * **再判一次** —— 前端只是不摆必然失败的入口。
+   */
+  bulkUpdateStatus: (ids: readonly string[], status: ResourceStatus, comment?: string | null) =>
+    api.post<BulkStatusResult>('/api/resources/bulk-status', {
+      ids: [...ids],
+      status,
+      comment: comment ?? null,
+    }),
 
   /** 回收站：教师看自己的，管理员看全部（服务端决定范围）。 */
   recycleBin: (query: { page?: number; pageSize?: number } = {}) => {

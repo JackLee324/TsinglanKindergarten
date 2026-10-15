@@ -63,16 +63,32 @@ export function bodyOf(source, signature) {
                              ^ 这里就被切断了
 
     表现是 bodyOf 返回 347 个字符（只有参数声明），后面所有断言都在错的地盘上求值。
+
+    ⚠️ 还**不能**只取第一个深度为 0 的 `{`：返回值类型里也有花括号 ——
+
+      private async assertDeletable(...): Promise<{ reason: string } | null> {
+                                                      ^ 会被误当成方法体
+
+    这里只跟踪圆括号，看不到尖括号。所以把候选都收起来，
+    优先取"后面紧跟换行"的那个（方法体的写法），没有就退回第一个。
+    （这个坑是 2026-10-15 写 `assertDeletable` 的结构断言时踩到的：
+      bodyOf 只截到 138 个字符，断言报"状态名单必须引用共享的那一份"，
+      而真实原因是切错了地方 —— 又一次假红的形状。）
   */
+  const candidates = []
   for (let i = start; i < source.length; i += 1) {
     const ch = source[i]
     if (ch === '(') paren += 1
     else if (ch === ')') paren = Math.max(0, paren - 1)
     else if (ch === '{' && paren === 0) {
-      open = i
-      break
+      candidates.push(i)
+      if (/^\s*\n/.test(source.slice(i + 1, i + 40))) {
+        open = i
+        break
+      }
     }
   }
+  if (open === -1) open = candidates[0] ?? -1
   if (open === -1) throw new Error(`「${signature}」后面找不到方法体的 {`)
 
   let depth = 0

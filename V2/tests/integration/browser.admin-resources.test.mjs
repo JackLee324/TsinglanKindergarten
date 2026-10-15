@@ -332,22 +332,22 @@ async function runBulkDelete() {
   }
   await browser.click('[data-testid="admin-bulk-delete-confirm"]')
   await browser.waitFor(
-    `!!document.querySelector('[data-testid="admin-bulk-result-body"]')`,
+    `!!document.querySelector('[data-testid="admin-bulk-delete-result-body"]')`,
     25000,
     '批量删除结果弹窗',
   )
   return {
-    deleted: Number(await browser.text('[data-testid="admin-bulk-deleted"]')),
-    skipped: Number(await browser.text('[data-testid="admin-bulk-skipped"]')),
-    failed: Number(await browser.text('[data-testid="admin-bulk-failed"]')),
-    items: await browser.allTexts('[data-testid="admin-bulk-items"] li'),
+    deleted: Number(await browser.text('[data-testid="admin-bulk-delete-result-ok"]')),
+    skipped: Number(await browser.text('[data-testid="admin-bulk-delete-result-skipped"]')),
+    failed: Number(await browser.text('[data-testid="admin-bulk-delete-result-failed"]')),
+    items: await browser.allTexts('[data-testid="admin-bulk-delete-result-items"] li'),
   }
 }
 
 async function closeBulkResult() {
-  await browser.click('[data-testid="admin-bulk-result-close"]')
+  await browser.click('[data-testid="admin-bulk-delete-result-close"]')
   await browser.waitFor(
-    `!document.querySelector('[data-testid="admin-bulk-result-body"]')`,
+    `!document.querySelector('[data-testid="admin-bulk-delete-result-body"]')`,
     15000,
     '关闭结果弹窗',
   )
@@ -658,18 +658,21 @@ describe('④ 批量软删除：进回收站、可恢复、已发布被跳过', 
     )
     const dialogText = String(await browser.text('[data-testid="admin-bulk-delete-dialog"]'))
     assert.match(dialogText, /可恢复|回收站/, '确认弹窗必须说明这是可恢复的操作')
-    assert.match(dialogText, /已发布/, '确认弹窗必须提醒已发布的要先撤回')
+    assert.match(dialogText, /已发布/, '确认弹窗必须说明已发布的会怎么处理')
+    // 2026-10-15 起：超管可以直接删已发布的，但会先记为已撤回 —— 弹窗必须说清楚
+    assert.match(dialogText, /已撤回/, '确认弹窗必须说明"已发布的会先记为已撤回"')
 
     const result = await runBulkDelete()
     assert.equal(result.failed, 0, `不该有失败的：${result.items.join(' | ')}`)
     assert.equal(result.deleted, 2, `应当删掉 2 条：${result.items.join(' | ')}`)
     assert.equal(result.skipped, 0, `不该有跳过的：${result.items.join(' | ')}`)
     assert.equal(result.items.length, 2, '结果必须逐条如实（条数 = 提交条数）')
-    for (const line of result.items) assert.match(String(line), /已删除/)
+    // 逐条那一行的首列是通用档位（成功 / 已跳过 / 失败），摘要行才是「已删除 N 条」
+    for (const line of result.items) assert.match(String(line), /成功/)
 
     // 结果弹窗里要告诉管理员去哪儿恢复
     assert.match(
-      String(await browser.text('[data-testid="admin-bulk-recover-hint"]')),
+      String(await browser.text('[data-testid="admin-bulk-delete-result-recover-hint"]')),
       /回收站/,
       '结果弹窗必须给出恢复入口',
     )
@@ -677,7 +680,14 @@ describe('④ 批量软删除：进回收站、可恢复、已发布被跳过', 
     ids.bulkDeleted = [ids.draftWithFile, ids.draftPlain]
   })
 
-  test('已发布的资源：跳过而不是删掉，而且说明原因', async () => {
+  /**
+   * 业主 2026-10-15 的决定：超级管理员可以**直接删除已发布**的资源，
+   * 不必先撤回。代价是"先记为已撤回再进回收站"。
+   *
+   * 这条用例把整个代价走一遍：界面如实说明 → 数据库里状态确实变了 →
+   * 时间线里留下痕迹 → **恢复之后不是已发布**。
+   */
+  test('已发布的资源：超管可以直接删（先记为已撤回），恢复后不会重新上线', async () => {
     await applyFilters({ q: '', status: 'PUBLISHED' }, PUBLISHED, '只看已发布')
     await clearSelection()
 
@@ -685,26 +695,38 @@ describe('④ 批量软删除：进回收站、可恢复、已发布被跳过', 
     await waitForSelectedTotal(1)
     const result = await runBulkDelete()
 
-    assert.equal(result.deleted, 0, '已发布的资源不该被删掉')
-    assert.equal(result.skipped, 1, `应当跳过 1 条：${result.items.join(' | ')}`)
+    assert.equal(result.deleted, 1, `超管可以直接删已发布的：${result.items.join(' | ')}`)
+    assert.equal(result.skipped, 0)
     assert.equal(result.failed, 0)
-    assert.match(String(result.items[0]), /已跳过/)
-    assert.match(String(result.items[0]), /撤回/, '跳过原因要告诉管理员下一步怎么做')
-
+    assert.match(String(result.items[0]), /成功/)
+    assert.match(String(result.items[0]), /已撤回/, '结果要如实说明先记成了已撤回')
     await closeBulkResult()
-    await applyFilters({ status: '' }, TOTAL - 2, '复位')
+
+    // 数据库：状态变成已撤回，而且确实进了回收站
+    const row = await resourceRow(ids.published)
+    assert.notEqual(row.deleted_at, null, '已发布的资源确实进了回收站')
+    assert.equal(row.status, 'RECALLED', '删之前必须先记为已撤回')
+    assert.equal(row.files, 1, '文件记录不能被动')
+
+    // 审核时间线：留下"为什么下线"
+    const reviews = await withSql((sql) => sql`
+      SELECT action, from_status, to_status, comment FROM resource_reviews
+      WHERE resource_id = ${ids.published} ORDER BY created_at`)
+    const recall = reviews.find((r) => r.action === 'review.recall')
+    assert.ok(recall, `时间线里要有撤回记录：${JSON.stringify(reviews)}`)
+    assert.equal(recall.from_status, 'PUBLISHED')
+    assert.equal(recall.to_status, 'RECALLED')
+
+    ids.publishedDeleted = true
+    await applyFilters({ status: '' }, TOTAL - 3, '复位（三条都进了回收站）')
   })
 
-  test('数据库核对：deleted_at 写上了，已发布那条没被动', async () => {
+  test('数据库核对：三条都写上了 deleted_at，文件记录都还在', async () => {
     for (const id of ids.bulkDeleted) {
       const row = await resourceRow(id)
       assert.ok(row, `${row.title} 的行必须还在 —— 这是"可恢复"的前提`)
       assert.notEqual(row.deleted_at, null, `${row.title} 必须是软删除（deleted_at 非空）`)
     }
-    const published = await resourceRow(ids.published)
-    assert.equal(published.deleted_at, null, '已发布的资源不该被删除')
-    assert.equal(published.status, 'PUBLISHED')
-    assert.equal(published.files, 1, '跳过的资源连文件都不该被动')
   })
 
   test('软删除没有碰文件记录（对象要到"能不能下载"那一步再证）', async () => {
@@ -723,20 +745,25 @@ describe('④ 批量软删除：进回收站、可恢复、已发布被跳过', 
 
   test('软删除的资源立刻从默认列表里消失，但回收站里有', async () => {
     await openAdminResources()
-    await waitForTotal(TOTAL - 2, '删掉两条之后')
+    // 三条都进了回收站（两条草稿 + 那条被直删的已发布）
+    await waitForTotal(TOTAL - 3, '删掉三条之后')
 
-    for (const id of ids.bulkDeleted) {
+    for (const id of [...ids.bulkDeleted, ids.published]) {
       assert.equal(
         await browser.exists(`[data-resource-id="${id}"]`),
         false,
         '被软删除的资源不该还出现在资源管理列表里',
       )
     }
-    assert.equal(await browser.exists(`[data-resource-id="${ids.published}"]`), true)
+    assert.equal(
+      await browser.exists(`[data-resource-id="${ids.published2}"]`),
+      true,
+      '没被删的那条已发布资源要还在',
+    )
 
     // ── 回收站（管理员的回收站接口返回**全部人**删掉的资源）──
     await openRecycleBin()
-    for (const id of ids.bulkDeleted) {
+    for (const id of [...ids.bulkDeleted, ids.published]) {
       await browser.waitFor(
         `!!document.querySelector('[data-resource-id="${id}"]')`,
         20000,
@@ -777,9 +804,40 @@ describe('⑤ 恢复：管理员能在回收站里把它救回来，文件也真
     assert.equal(row.deleted_at, null, '恢复必须真的把 deleted_at 清空')
 
     await openAdminResources()
-    await waitForTotal(TOTAL - 1, '恢复一条之后')
+    await waitForTotal(TOTAL - 2, '恢复一条之后（还剩两条在回收站）')
     assert.equal(await browser.exists(`[data-resource-id="${target}"]`), true)
     ids.restored = target
+  })
+
+  /**
+   * 这一条钉的是"先记为已撤回"的**全部意义**：
+   * 从回收站恢复一个被直接删掉的**已发布**资源之后，
+   * 它必须回到「已撤回」而不是「已发布」——
+   * 否则"删了再恢复"就等于悄悄重新发布了一次。
+   */
+  test('恢复被直删的已发布资源 → 回到「已撤回」，不会重新对全园可见', async () => {
+    await openRecycleBin()
+    await browser.click(
+      `[data-resource-id="${ids.published}"] [data-testid="my-resource-restore"]`,
+    )
+    await browser.waitFor(
+      `!document.querySelector('[data-resource-id="${ids.published}"]')`,
+      20000,
+      '恢复之后它应当离开回收站',
+    )
+
+    const row = await resourceRow(ids.published)
+    assert.equal(row.deleted_at, null, '恢复必须真的把 deleted_at 清空')
+    assert.equal(row.status, 'RECALLED', '恢复之后必须是「已撤回」，绝不是「已发布」')
+
+    // 界面上的状态徽标也要跟着是「已撤回」
+    await openAdminResources()
+    await browser.waitFor(
+      `document.querySelector('[data-resource-id="${ids.published}"] [data-testid="admin-resource-status"]')
+         ?.innerText.includes('已撤回')`,
+      20000,
+      '列表里应显示已撤回',
+    )
   })
 
   test('恢复之后文件能下载，字节与软删除之前逐字节一致', async () => {
@@ -957,6 +1015,198 @@ describe('⑦ 全局上传入口：先选目录，再传文件', () => {
     const saved = await browser.waitForDownload(DOWNLOAD_DIR, (n) => n.endsWith('.txt'))
     assert.equal(sha256(readFileSync(saved)), sha256(TXT_BYTES))
     rmSync(saved, { force: true })
+  })
+})
+
+
+describe('⑦.5 批量修改状态（超级管理员强制覆盖）', () => {
+  /**
+   * 这一组**自带夹具**，不复用前面几组留下的状态。
+   * 复用会让"上一条用例失败"变成"这一组连夹具都没有"，
+   * 而两组其实查的是完全不同的东西。
+   *
+   * 用 `ADM-状态` 这个唯一前缀搜索定位 —— 不靠"列表恰好怎么排序"，
+   * 也不受前面删了几条、恢复了几条的影响。
+   */
+  const STATUS_PREFIX = 'ADM-状态'
+
+  async function seedStatusFixtures() {
+    const api = client()
+    await api.login(ADMIN.username, ADMIN.password)
+    const made = []
+    for (const n of ['01', '02', '03']) {
+      const res = await api.post('/api/resources', {
+        directoryId: ids.resources,
+        title: `${STATUS_PREFIX} ${n}`,
+      })
+      assert.equal(res.status, 201, JSON.stringify(res.data))
+      made.push(res.data.id)
+    }
+    return made
+  }
+
+  async function fillStatusDialog(target, comment) {
+    await browser.waitFor(
+      `!!document.querySelector('[data-testid="admin-bulk-status-dialog"]')`,
+      15000,
+      '改状态弹窗',
+    )
+    await browser.select('[data-testid="admin-bulk-status-select"]', target)
+    if (comment !== undefined) {
+      await browser.fill('[data-testid="admin-bulk-status-comment"]', comment)
+    }
+    return browser.session.eval(
+      `document.querySelector('[data-testid="admin-bulk-status-confirm"]')?.disabled === true`,
+    )
+  }
+
+  async function runBulkStatus() {
+    await browser.click('[data-testid="admin-bulk-status-confirm"]')
+    await browser.waitFor(
+      `!!document.querySelector('[data-testid="admin-bulk-status-result-body"]')`,
+      25000,
+      '改状态结果弹窗',
+    )
+    return {
+      updated: Number(await browser.text('[data-testid="admin-bulk-status-result-ok"]')),
+      skipped: Number(await browser.text('[data-testid="admin-bulk-status-result-skipped"]')),
+      failed: Number(await browser.text('[data-testid="admin-bulk-status-result-failed"]')),
+      items: await browser.allTexts('[data-testid="admin-bulk-status-result-items"] li'),
+    }
+  }
+
+  test('改成「已发布」要二次确认：不勾选提交不了，而且明说绕过审核', async () => {
+    ids.statusFixtures = await seedStatusFixtures()
+
+    await openAdminResources()
+    await applyFilters({ q: STATUS_PREFIX }, 3, '只看这一组的夹具')
+    await clearSelection()
+
+    await selectRow(ids.statusFixtures[0])
+    await waitForSelectedTotal(1)
+    await browser.click('[data-testid="admin-resources-bulk-status"]')
+
+    const disabled = await fillStatusDialog('PUBLISHED')
+    assert.equal(disabled, true, '改成已发布但没勾确认时，提交按钮必须禁用')
+
+    const warning = String(
+      await browser.text('[data-testid="admin-bulk-status-publish-warning"]'),
+    )
+    assert.match(warning, /绕过审核流程/, '必须直说这一步绕过审核')
+    assert.match(warning, /不会/, '必须直说不会产生审核记录')
+
+    await browser.click('[data-testid="admin-bulk-status-publish-confirm"]')
+    const stillDisabled = await browser.session.eval(
+      `document.querySelector('[data-testid="admin-bulk-status-confirm"]')?.disabled === true`,
+    )
+    assert.equal(stillDisabled, false, '勾选确认之后应当可以提交')
+
+    const result = await runBulkStatus()
+    assert.equal(result.updated, 1, `应当成功：${result.items.join(' | ')}`)
+    assert.equal(result.failed, 0)
+    assert.match(String(result.items[0]), /草稿 → 已发布/, '结果要显示"从哪一格到哪一格"')
+    await browser.click('[data-testid="admin-bulk-status-result-close"]')
+
+    const row = await resourceRow(ids.statusFixtures[0])
+    assert.equal(row.status, 'PUBLISHED')
+    const [full] = await withSql((sql) => sql`
+      SELECT published_at FROM resources WHERE id = ${ids.statusFixtures[0]}`)
+    assert.notEqual(full.published_at, null, 'published_at 必须写上')
+  })
+
+  test('改成「已退回」必须写原因；写了之后教师端能看到那句话', async () => {
+    await openAdminResources()
+    await applyFilters({ q: STATUS_PREFIX }, 3, '只看这一组的夹具')
+    await clearSelection()
+
+    await selectRow(ids.statusFixtures[1])
+    await waitForSelectedTotal(1)
+    await browser.click('[data-testid="admin-resources-bulk-status"]')
+
+    const disabled = await fillStatusDialog('REJECTED')
+    assert.equal(disabled, true, '退回没写原因时提交按钮必须禁用')
+    assert.equal(
+      await browser.exists('[data-testid="admin-bulk-status-comment-error"]'),
+      true,
+      '要当面说清楚"退回必须写原因"',
+    )
+
+    await browser.fill('[data-testid="admin-bulk-status-comment"]', '封面图不清楚，请换一张')
+    const stillDisabled = await browser.session.eval(
+      `document.querySelector('[data-testid="admin-bulk-status-confirm"]')?.disabled === true`,
+    )
+    assert.equal(stillDisabled, false, '写了原因之后应当可以提交')
+
+    const result = await runBulkStatus()
+    assert.equal(result.updated, 1, `应当成功：${result.items.join(' | ')}`)
+    await browser.click('[data-testid="admin-bulk-status-result-close"]')
+
+    assert.equal((await resourceRow(ids.statusFixtures[1])).status, 'REJECTED')
+    // 教师端「我的资源」读的就是这一列
+    const [reason] = await withSql((sql) => sql`
+      SELECT comment FROM resource_reviews
+      WHERE resource_id = ${ids.statusFixtures[1]} AND action = 'review.reject'
+      ORDER BY created_at DESC LIMIT 1`)
+    assert.equal(reason.comment, '封面图不清楚，请换一张')
+  })
+
+  test('批量把多条一起改成同一状态：逐条如实，已经是目标状态的跳过', async () => {
+    await clearSelection()
+    // fixtures[0] 已经是已发布、fixtures[2] 还是草稿 → 一个跳过、一个成功
+    await selectRow(ids.statusFixtures[0])
+    await selectRow(ids.statusFixtures[2])
+    await waitForSelectedTotal(2)
+    await browser.click('[data-testid="admin-resources-bulk-status"]')
+    await fillStatusDialog('PUBLISHED')
+    await browser.click('[data-testid="admin-bulk-status-publish-confirm"]')
+
+    const result = await runBulkStatus()
+    assert.equal(result.updated, 1, `一条成功：${result.items.join(' | ')}`)
+    assert.equal(result.skipped, 1, `一条本来就一样：${result.items.join(' | ')}`)
+    assert.equal(result.failed, 0)
+    assert.equal(result.items.length, 2, '逐条如实（条数 = 提交条数）')
+    assert.equal(
+      result.items.some((t) => String(t).includes('已经是')),
+      true,
+      `跳过的原因要写出来：${result.items.join(' | ')}`,
+    )
+    await browser.click('[data-testid="admin-bulk-status-result-close"]')
+
+    assert.equal((await resourceRow(ids.statusFixtures[2])).status, 'PUBLISHED')
+  })
+
+  test('审计动作与流程动作分开：记成「强制修改状态」，不写成审核通过', async () => {
+    for (const [i, id] of ids.statusFixtures.entries()) {
+      const rows = await auditRowsFor(id)
+      const forced = rows.filter((r) => r.action === 'resource.status.force')
+      assert.ok(
+        forced.length >= 1,
+        `第 ${i + 1} 条被强制改过状态，必须有审计：${JSON.stringify(rows.map((r) => r.action))}`,
+      )
+      assert.equal(
+        rows.some((r) => r.action === 'resource.approve' || r.action === 'resource.reject'),
+        false,
+        '强制改状态不能被记成流程动作 —— 否则审计读起来像真有人审过',
+      )
+      for (const r of forced) {
+        assert.equal(r.detail.via, 'bulk')
+        assert.equal(typeof r.detail.from, 'string')
+        assert.equal(typeof r.detail.to, 'string')
+      }
+    }
+  })
+
+  test('普通教师连这个接口都够不到（服务端 403，且状态一点没变）', async () => {
+    const before = await resourceRow(ids.statusFixtures[2])
+    const teacherApi = client()
+    await teacherApi.login(TEACHER.username, TEACHER.password)
+    const res = await teacherApi.post('/api/resources/bulk-status', {
+      ids: [ids.statusFixtures[2]],
+      status: 'DRAFT',
+    })
+    assert.equal(res.status, 403, JSON.stringify(res.data))
+    allowedNoise.push('/api/resources/bulk-status')
+    assert.equal((await resourceRow(ids.statusFixtures[2])).status, before.status, '被拒的请求不能改状态')
   })
 })
 

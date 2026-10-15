@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestj
 import { ResourcesService, type ResourceFilters } from './resources.service'
 import {
   BulkDeleteResourcesDto,
+  BulkUpdateStatusDto,
   CreateResourceDto,
   ListResourcesDto,
   RecallResourceDto,
@@ -98,6 +99,34 @@ export class ResourcesController {
   @RequireSuperAdmin()
   async bulkDelete(@CurrentUser() actor: AuthUser, @Body() dto: BulkDeleteResourcesDto) {
     return this.resources.bulkSoftDelete(actor, dto.ids)
+  }
+
+  /**
+   * 批量**强制修改状态**（超级管理员专用，业主 2026-10-15 新增）。
+   *
+   * 与六条合法转换是**两条不同的路**：那六条是流程（有前置状态、有权限码、
+   * 有所有权要求，只能一格一格走）；这里是管理员直接覆盖，五个状态都能设。
+   * 之所以敢开这个口子，是因为它被三件事围住：身份（双层超管判定）、
+   * 留痕（独立的审计动作 + 审核时间线）、代价明确（退回必须写原因，
+   * 改成已发布在界面上要二次确认，因为那一步绕过审核）。
+   *
+   * 门槛与 `bulk-delete` 同构的两层：
+   *   1. `@RequirePermission('resource.update.own')` —— 声明"这是修改动作"；
+   *   2. `@RequireSuperAdmin()` —— 真正的门槛（**不可授予**，身份自带）。
+   * service 里还会再判一次 `assertSuperAdmin()`（纵深防御）。
+   *
+   * ⚠️ 必须声明在 `:id` 系列之前，否则 `bulk-status` 会被当成一个资源 id。
+   */
+  @Post('bulk-status')
+  @RequirePermission('resource.update.own')
+  @RequireSuperAdmin()
+  async bulkStatus(@CurrentUser() actor: AuthUser, @Body() dto: BulkUpdateStatusDto) {
+    return this.resources.bulkForceStatus(
+      actor,
+      dto.ids,
+      dto.status as ResourceStatus,
+      dto.comment ?? null,
+    )
   }
 
   @Get('recycle-bin')

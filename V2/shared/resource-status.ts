@@ -204,6 +204,67 @@ export const DELETABLE_STATUSES: readonly ResourceStatus[] = [
 ]
 
 /**
+ * 超级管理员可以**强制**把资源改成任何一个状态（业主 2026-10-15 的决定）。
+ *
+ * 这是一次**绕过状态机**的操作，与教师/审核员走的六条合法转换是两回事：
+ *   · 它不检查 `TRANSITIONS`；
+ *   · 它必须留下与流程动作**不同**的审计（`resource.status.force`）；
+ *   · 界面上对"改成已发布"多要一次确认（那一步会绕过审核）。
+ *
+ * ⚠️ 它不改变"普通角色"的任何行为：六条合法转换、`DELETABLE_STATUSES`
+ * 对一个只持权限码的教师**完全照旧**。
+ */
+export const FORCE_STATUS_TARGETS: readonly ResourceStatus[] = RESOURCE_STATUSES
+
+/**
+ * 强制改到这些状态时**必须**写原因。
+ *
+ * 只有 `REJECTED`：教师端"我的资源"卡片上直接显示退回原因，
+ * 不写原因的话教师只会看到"已退回"而不知道为什么
+ * （数据库上也有同名 CHECK 约束，见 `resource_reviews_reject_needs_comment`）。
+ */
+export const FORCE_STATUS_REQUIRES_COMMENT: readonly ResourceStatus[] = ['REJECTED']
+
+/**
+ * 目标状态 → 写进 `resource_reviews.action` 的那个动作。
+ *
+ * 为什么需要这张表：`resource_reviews.action` 有 CHECK 约束，只接受
+ * `submit / review.approve / review.reject / review.recall` 四种
+ * —— 所以"改成 DRAFT"**没有**对应的流程动作（教师编辑回草稿走的是
+ * `resource.update` 审计，本来就不写 review 行）。
+ *
+ * `null` = 不写 review 行，只写审计。
+ */
+export const FORCE_STATUS_REVIEW_ACTION: Readonly<
+  Record<ResourceStatus, 'submit' | 'review.approve' | 'review.reject' | 'review.recall' | null>
+> = Object.freeze({
+  DRAFT: null,
+  PENDING_REVIEW: 'submit',
+  PUBLISHED: 'review.approve',
+  REJECTED: 'review.reject',
+  RECALLED: 'review.recall',
+})
+
+/**
+ * 强制改状态时，写进 review 行的说明。
+ *
+ * 时间线上必须一眼看出"这一步不是审核出来的" —— 否则一条
+ * "审核通过并发布"会让人以为有人真审过。
+ */
+export const FORCE_STATUS_COMMENT_PREFIX = '超级管理员强制修改状态'
+
+/**
+ * 软删除一条**已发布**资源时，先记下来的那一步。
+ *
+ * 业主 2026-10-15 的决定：超管可以直接删除已发布的资源，
+ * 但**要先记为「已撤回」再进回收站** —— 于是
+ *   · 审核时间线里留下"这东西为什么下线了"；
+ *   · 从回收站恢复之后是「已撤回」而不是「已发布」，
+ *     不会一恢复就重新对全园可见（要重新编辑 / 提交）。
+ */
+export const PUBLISHED_DELETE_VIA_RECALL = true
+
+/**
  * 编辑一个**已发布**的资源不允许原地覆盖：
  * 必须 `version += 1` 并回到 DRAFT，重新走审核。
  * 业主：「如果用户修改已经发布的资源，不要直接覆盖。」
