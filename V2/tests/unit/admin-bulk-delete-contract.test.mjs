@@ -21,24 +21,13 @@
  */
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { bodyOf as body, readSource } from '../helpers/source.mjs'
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
-
-/** 去注释再去匹配：注释里提到 `purge` / `DELETE FROM` 是正常的（而且应该被鼓励）。 */
-function sourceWithoutComments(relativePath) {
-  return readFileSync(join(ROOT, relativePath), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/[^\n]*/g, '')
-}
-
-const SERVICE = sourceWithoutComments('server/resources/resources.service.ts')
-const DTO = sourceWithoutComments('server/resources/resources.dto.ts')
-const CLIENT_API = sourceWithoutComments('client/src/api/resources.ts')
-const ADMIN_PAGE = sourceWithoutComments('client/src/pages/AdminResourcesPage.tsx')
-const CONTROLLER = sourceWithoutComments('server/resources/resources.controller.ts')
+const SERVICE = readSource('server/resources/resources.service.ts')
+const DTO = readSource('server/resources/resources.dto.ts')
+const CLIENT_API = readSource('client/src/api/resources.ts')
+const ADMIN_PAGE = readSource('client/src/pages/AdminResourcesPage.tsx')
+const CONTROLLER = readSource('server/resources/resources.controller.ts')
 
 /**
  * 截出某个方法体的花括号区间。
@@ -48,58 +37,6 @@ const CONTROLLER = sourceWithoutComments('server/resources/resources.controller.
  * 就会"出现" `purge()` 的 `DELETE FROM resources`，测试**假红**。
  * 花括号配对不依赖注释，而且配不上会抛（不会静默返回半截内容）。
  */
-function body(source, signature) {
-  const start = source.indexOf(signature)
-  assert.notEqual(start, -1, `源码里找不到「${signature}」—— 方法被改名了？请同步更新本测试`)
-
-  /*
-    找方法体的 `{` 之前必须先跳过**参数表与装饰器**：
-    `@DirectoryScope({ kind: 'resource', param: 'id' })` 里的 `{` 也在签名之后，
-    直接 `indexOf('{')` 会切出一段 `{ kind: 'resource', param: 'id' }` ——
-    断言于是报"控制器少了超管门槛"，而真实原因是切错了地方（一次假红）。
-    办法：只在**圆括号深度为 0** 的时候认 `{`。
-  */
-  let paren = 0
-  let open = -1
-  for (let i = start + signature.length; i < source.length; i += 1) {
-    const ch = source[i]
-    if (ch === '(') paren += 1
-    else if (ch === ')') paren = Math.max(0, paren - 1)
-    else if (ch === '{' && paren === 0) {
-      open = i
-      break
-    }
-  }
-  assert.notEqual(open, -1, `「${signature}」后面找不到方法体的 {`)
-
-  let depth = 0
-  for (let i = open; i < source.length; i += 1) {
-    if (source[i] === '{') depth += 1
-    else if (source[i] === '}') {
-      depth -= 1
-      if (depth === 0) {
-        /*
-          从 `start` 切、而不是从方法体的 `{` 切：装饰器（`@RequireSuperAdmin()` 等）
-          在方法体**外面**，而它们恰恰是本测试要看的东西。
-        */
-        const text = source.slice(start, i + 1)
-        /*
-          防御：截出来的区间里只应该有**它自己**那一个方法签名。
-          出现两个就说明花括号配对切过了头（吞掉了后面的方法），
-          那时后面的断言会在错误的地盘上求值 —— 那种假红最难查。
-        */
-        const found = text.match(/async (?:softDeleteOne|purge|bulkSoftDelete)\(/g) ?? []
-        assert.ok(
-          found.length <= 1,
-          `「${signature}」截出来的区间越界了（吞掉了后面的方法）：${found.join(' / ')}`,
-        )
-        return text
-      }
-    }
-  }
-  throw new Error(`「${signature}」的花括号没有配对`)
-}
-
 const NUMBER = (text, name) => {
   const match = new RegExp(`${name}\\s*=\\s*(\\d+)`).exec(text)
   assert.notEqual(match, null, `找不到常量 ${name}`)
