@@ -343,6 +343,16 @@ export class AuthorizationService {
     canPublish: boolean
     canViewAudit: boolean
     canUpload: boolean
+    /**
+     * 全局资源管理（跨上传者的列表 / 批量软删除 / 全局上传入口）。
+     *
+     * 与 `canManageUsers` 同类：**它是身份自带的，不由权限码授予**。
+     * 普通教师即使被误配了一堆权限码，也不该拿到"删别人的资源"这种能力，
+     * 所以这里判的是 `admin` 而不是 `codes.has(...)`。
+     * 界面据此显示/隐藏入口；真正的门槛在服务端（`@RequireSuperAdmin()` +
+     * `assertSuperAdmin()`），前端只负责不把必然失败的操作摆出来。
+     */
+    canManageAllResources: boolean
   }> {
     const grants = await this.grantsOf(user.id)
     const codes = new Set(grants.map((g) => g.permission))
@@ -357,6 +367,7 @@ export class AuthorizationService {
       canPublish: admin || codes.has('resource.publish'),
       canViewAudit: admin || codes.has('audit.view'),
       canUpload: admin || codes.has('resource.create'),
+      canManageAllResources: admin,
     }
   }
 
@@ -521,17 +532,20 @@ export class AuthorizationService {
   }
 
   /**
-   * 账号管理（列表/创建/编辑/停用/改口令/改权限）的**服务端硬门槛**。
+   * 超级管理员专属动作的**服务端硬门槛**（账号管理、永久删除…）。
    *
    * 与 `can()` 的关系：`can()` 回答"能不能做这个权限码对应的事"，
-   * 而"管理账号"这件事**不允许**由权限码授予 —— 它是身份自带的。
-   * 所以两者是叠加关系：控制器先过 `user.manage` 声明，再过这里，
+   * 而这类动作**不允许**由权限码授予 —— 它是身份自带的。
+   * 所以两者是叠加关系：控制器先过权限声明，再过这里，
    * 而 service 层也会再调一次（即使有人绕过控制器直接调 service，也拒绝）。
+   *
+   * `what` 只是错误文案里的动作名（默认保持历史文案「账号管理」不变）——
+   * 判定逻辑与角色字面量仍然**只在这一处**。
    */
-  assertSuperAdmin(user: AuthUser): void {
+  assertSuperAdmin(user: AuthUser, what = '账号管理'): void {
     if (!this.isSuperAdmin(user)) {
       throw AppError.forbidden(
-        '账号管理只有超级管理员可以操作。',
+        `${what}只有超级管理员可以操作。`,
         'SUPERADMIN_REQUIRED',
       )
     }

@@ -32,6 +32,15 @@ export interface Capabilities {
   readonly canPublish: boolean
   readonly canViewAudit: boolean
   readonly canUpload: boolean
+  /**
+   * 全局资源管理（跨上传者的列表 / 批量软删除 / 全局上传入口）。
+   *
+   * 与 `canManageUsers` 同类：**身份自带，不由权限码授予**。
+   * 它只决定"入口要不要摆出来"；真正的门槛在服务端
+   * （`@RequireSuperAdmin()` + `assertSuperAdmin()`），
+   * 普通教师直接访问 `/admin/resources` 或直接调接口都会被拒。
+   */
+  readonly canManageAllResources: boolean
 }
 
 /** 服务端算好的能力位。**前端不得自行推断**（否则按钮显隐与接口判定会分叉）。 */

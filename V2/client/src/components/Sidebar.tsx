@@ -70,13 +70,14 @@ export function SidebarNav({ onNavigate }: { readonly onNavigate?: () => void } 
   /**
    * 管理分组要不要出现。
    *
-   * 注意这里**没有**判断角色：三个能力位都是服务端算出来的
+   * 注意这里**没有**判断角色：能力位都是服务端算出来的
    * （`capabilitiesFor()`），前端只负责显示。
    */
   const showAdminGroup =
     capabilities?.canManageUsers === true ||
     capabilities?.canManageDirectories === true ||
-    capabilities?.canViewAudit === true
+    capabilities?.canViewAudit === true ||
+    capabilities?.canManageAllResources === true
   const location = useLocation()
   const currentPath = location.pathname.startsWith('/directory/')
     ? location.pathname.slice('/directory/'.length)
@@ -188,6 +189,20 @@ export function SidebarNav({ onNavigate }: { readonly onNavigate?: () => void } 
             管理
           </p>
           <nav className="px-3" data-testid="sidebar-admin-nav">
+            {/*
+              全局资源管理（超级管理员）。放在管理分组**第一位**：
+              它是"看全平台资源、批量整理"的主入口，比账号/目录配置更常进。
+              能力位 `canManageAllResources` 由服务端按身份算出（不由权限码授予），
+              普通教师即使被误配了权限码也不会看到它。
+            */}
+            {capabilities?.canManageAllResources === true && (
+              <NavItem
+                to="/admin/resources"
+                label="资源管理"
+                icon={<FolderTree className="size-5" />}
+                testId="nav-admin-resources"
+              />
+            )}
             {capabilities?.canManageUsers === true && (
               <>
                 <NavItem to="/admin/users" label="教师账号" icon={<Users className="size-5" />} testId="nav-admin-users" />

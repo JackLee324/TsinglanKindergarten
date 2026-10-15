@@ -34,6 +34,8 @@ export function UploadResourceDialog({
   directoryPath,
   onClose,
   onCreated,
+  directoryChoices,
+  onDirectoryChange,
 }: {
   readonly open: boolean
   readonly directoryId: string
@@ -41,6 +43,22 @@ export function UploadResourceDialog({
   readonly directoryPath: string
   readonly onClose: () => void
   readonly onCreated: (resourceId: string) => void
+  /**
+   * **可选的**目录下拉（全局入口用：管理员还没进任何目录）。
+   *
+   * 传了就把只读的「所在目录」换成下拉；不传则维持目录页那套只读显示 ——
+   * 现有调用方一个都不用改。
+   *
+   * 列表里的每一项都由调用方从**后端目录数据**筛出来
+   * （`capabilities.canUpload === true`，即服务端算出的"允许放文件且我有权建"），
+   * 前端不写死目录名，也不自己判断某目录能不能放文件。
+   */
+  readonly directoryChoices?: readonly {
+    readonly id: string
+    readonly path: string
+    readonly label: string
+  }[]
+  readonly onDirectoryChange?: (choice: { id: string; path: string }) => void
 }) {
   const { resolve } = useDirectory()
   const [title, setTitle] = useState('')
@@ -80,6 +98,12 @@ export function UploadResourceDialog({
   async function save() {
     if (title.trim() === '') {
       setCreateError('请输入资源标题')
+      return
+    }
+    // 全局入口下目录一开始是空的（管理员还没选）。这里必须拦住 ——
+    // 否则会拿着空 directoryId 去建资源，服务端只会回一个"目录不存在"。
+    if (directoryId === '') {
+      setCreateError('请选择要放入的目录')
       return
     }
     if (file === null) {
@@ -143,15 +167,46 @@ export function UploadResourceDialog({
         </div>
 
         {/*
-          「所在目录」是**只读**的：老师从目录里点进来，位置已经定了。
+          「所在目录」。
+          目录页进来时是**只读**的：老师从目录里点进来，位置已经定了 ——
           V1 的毛病正是让老师自己挑班型/科目/资料夹，然后没人知道东西去哪了。
+          全局入口（管理员）进来时才给下拉，那是他自己要决定的事。
         */}
-        <div className="rounded-lg bg-secondary px-3 py-2.5">
-          <p className="text-xs text-muted-foreground">所在目录</p>
-          <p className="mt-0.5 text-sm text-foreground" data-testid="upload-location">
-            {locationLabel}
-          </p>
-        </div>
+        {directoryChoices === undefined ? (
+          <div className="rounded-lg bg-secondary px-3 py-2.5">
+            <p className="text-xs text-muted-foreground">所在目录</p>
+            <p className="mt-0.5 text-sm text-foreground" data-testid="upload-location">
+              {locationLabel}
+            </p>
+          </div>
+        ) : (
+          <div>
+            <Label htmlFor="upload-directory" required>
+              所在目录
+            </Label>
+            <select
+              id="upload-directory"
+              className="mt-1 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground min-h-10"
+              value={directoryId}
+              disabled={busy}
+              onChange={(e) => {
+                const picked = directoryChoices.find((c) => c.id === e.target.value)
+                if (picked !== undefined) onDirectoryChange?.({ id: picked.id, path: picked.path })
+              }}
+              data-testid="upload-directory-select"
+            >
+              <option value="">请选择目录…</option>
+              {directoryChoices.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-muted-foreground">
+              只列出**可以放资源**且你**有权上传**的目录（由服务端判定）。
+            </p>
+          </div>
+        )}
 
         <div>
           <Label htmlFor="upload-file-input">文件</Label>

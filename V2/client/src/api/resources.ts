@@ -7,6 +7,33 @@ import type {
   ResourceStatus,
 } from './types'
 
+/** 单次批量软删除的上限 —— 与后端 `MAX_BULK_DELETE` 同一个数。 */
+export const MAX_BULK_DELETE = 100
+
+/**
+ * 批量软删除里**单条**的结果。
+ *
+ * 三种结局必须分开看：`skipped` 是"按规则不动"（不存在 / 已在回收站 / 已发布），
+ * **不是错误** —— 把它和 `failed` 混在一起，界面会把"这条本来就不该删"
+ * 显示成"删除失败"，用户就会去重试一件永远不会成功的事。
+ */
+export interface BulkDeleteItemResult {
+  readonly id: string
+  readonly outcome: 'deleted' | 'skipped' | 'failed'
+  readonly reason: string | null
+  readonly message: string
+}
+
+export interface BulkDeleteResult {
+  readonly requested: number
+  readonly unique: number
+  readonly duplicated: number
+  readonly deleted: number
+  readonly skipped: number
+  readonly failed: number
+  readonly items: readonly BulkDeleteItemResult[]
+}
+
 export interface ResourceListQuery {
   readonly directoryId?: string | null
   readonly includeSubtree?: boolean
@@ -93,6 +120,17 @@ export const resourcesApi = {
 
   /** 从回收站恢复。 */
   restore: (id: string) => api.post<ResourceDetail>(`/api/resources/${id}/restore`),
+
+  /**
+   * **批量软删除**（进回收站、可恢复）。超级管理员专用。
+   *
+   * 返回的是逐条结果，不是 `ok: true` —— 批量里"部分成功"是常态，
+   * 界面必须能分清哪条删了、哪条被跳过、哪条失败。
+   * 服务端会再校验一次身份（`@RequireSuperAdmin()`），
+   * 前端显示入口只是"不摆必然失败的操作"。
+   */
+  bulkDelete: (ids: readonly string[]) =>
+    api.post<BulkDeleteResult>('/api/resources/bulk-delete', { ids: [...ids] }),
 
   /** 回收站：教师看自己的，管理员看全部（服务端决定范围）。 */
   recycleBin: (query: { page?: number; pageSize?: number } = {}) => {

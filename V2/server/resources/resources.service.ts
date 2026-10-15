@@ -98,6 +98,38 @@ interface ResourceRow {
 }
 
 /**
+ * 批量软删除里**单条**的结果。
+ *
+ * 三种结局互斥且都要如实回报，不能合并成一个布尔量：
+ *   · `deleted` —— 这条真的进了回收站；
+ *   · `skipped` —— 输入合法但按规则不该动（不存在 / 已在回收站 / 已发布 / 并发抢先），
+ *                  **不是错误**，重试也不会变；
+ *   · `failed`  —— 处理过程中出了错，重试可能成功。
+ *
+ * `reason` 是给程序看的稳定标识，`message` 是给人看的中文说明 ——
+ * 前端据此分类展示，而不是去解析文案。
+ */
+export interface BulkDeleteItemResult {
+  readonly id: string
+  readonly outcome: 'deleted' | 'skipped' | 'failed'
+  readonly reason: string | null
+  readonly message: string
+}
+
+export interface BulkDeleteResult {
+  /** 请求里给的 ID 个数（含重复）。 */
+  readonly requested: number
+  /** 去重后实际处理的个数。 */
+  readonly unique: number
+  /** 被去掉的重复个数（`requested - unique`）。 */
+  readonly duplicated: number
+  readonly deleted: number
+  readonly skipped: number
+  readonly failed: number
+  readonly items: readonly BulkDeleteItemResult[]
+}
+
+/**
  * ResourcesService —— 资源与状态机
  * ============================================================================
  * 三条不变量（都由测试钉住）：
@@ -793,6 +825,123 @@ export class ResourcesService {
   }
 
   /**
+   * 批量**软**删除（进回收站、**可恢复**）。超级管理员专用。
+   *
+   * 与 `softDelete()` 是同一件事的批量形态：同样的状态规则
+   * （`DELETABLE_STATUSES`）、同样的条件更新、同样的审计动作
+   * （`resource.delete`），只是把"失败"翻译成逐条结果。
+   *
+   * ── 为什么必须逐条 ──────────────────────────────────────────────────────
+   * 批量操作的现实是"部分成功"：选中的 10 条里可能有 1 条已发布、1 条刚被别人删了。
+   * 所以返回值必须能让调用方分清 **成功 / 跳过 / 失败**，
+   * 而不是一个 `ok: true` —— 那会让界面把"9 条没删掉"显示成"全部删除成功"。
+   *
+   * ── 安全边界 ────────────────────────────────────────────────────────────
+   * · 身份：只有超级管理员。控制器已有 `@RequireSuperAdmin()`，这里再判一次
+   *   （纵深防御：直接调 service 的路径也绕不过去）。
+   * · 授权：逐条仍走 `assertCanActOn()` —— 唯一授权入口，不在批量路径上另开一套。
+   * · **不碰对象存储**：只写 `deleted_at`。文件对象、审核历史、审计全部保留，
+   *   回收站里能恢复。永久删除是另一个接口（`purge`），门槛更高。
+   */
+  async bulkSoftDelete(actor: AuthUser, ids: readonly string[]): Promise<BulkDeleteResult> {
+    this.authz.assertSuperAdmin(actor, '批量删除资源')
+
+    // 去重但保留首次出现的顺序 —— 结果要能按调用方给的顺序核对。
+    const unique = [...new Set(ids)]
+
+    const items: BulkDeleteItemResult[] = []
+    for (const id of unique) {
+      items.push(await this.softDeleteOne(actor, id))
+    }
+
+    const count = (outcome: BulkDeleteItemResult['outcome']) =>
+      items.filter((i) => i.outcome === outcome).length
+
+    return {
+      requested: ids.length,
+      unique: unique.length,
+      duplicated: ids.length - unique.length,
+      deleted: count('deleted'),
+      skipped: count('skipped'),
+      failed: count('failed'),
+      items,
+    }
+  }
+
+  /**
+   * 批量删除里的**单条**。
+   *
+   * 规则与 `softDelete()` 完全一致，唯一区别是**把失败翻译成结果对象**而不是抛异常：
+   * 批量操作必须逐条如实 —— 一条不合法不能让整批看起来全失败，
+   * 一条成功也不能让整批看起来全成功。
+   */
+  private async softDeleteOne(actor: AuthUser, id: string): Promise<BulkDeleteItemResult> {
+    try {
+      // 这里不复用 `requireResource()`：它遇到"不存在"会抛 404，
+      // 而批量场景要的是"这一条跳过、其余照常"。
+      const rows = await this.sql<ResourceRow[]>`
+        SELECT * FROM resources WHERE id = ${id}
+      `
+      if (rows.length === 0) {
+        return { id, outcome: 'skipped', reason: 'NOT_FOUND', message: '资源不存在' }
+      }
+      const row = rows[0]
+      if (row.deleted_at !== null) {
+        return { id, outcome: 'skipped', reason: 'ALREADY_DELETED', message: '资源已在回收站中' }
+      }
+      if (!DELETABLE_STATUSES.includes(row.status as ResourceStatus)) {
+        return {
+          id,
+          outcome: 'skipped',
+          reason: 'ILLEGAL_TRANSITION',
+          message: `已发布的资源不能直接删除，请先撤回（当前状态：${row.status}）`,
+        }
+      }
+      // 唯一授权入口：所有权 / 目录范围 / 管理员绕过都在 AuthorizationService 里判。
+      await this.assertCanActOn(actor, 'resource.delete.own', row)
+
+      /*
+        条件更新是**并发安全**的关键：`WHERE deleted_at IS NULL` 保证两个同时到达的
+        请求里只有一个能改到行，另一个拿到 0 行 → 报"跳过 · 并发抢先"。
+        没有它，两个请求都会回"成功"，而其中一次什么也没做。
+      */
+      const updated = await this.sql<{ id: string }[]>`
+        UPDATE resources SET deleted_at = now(), updated_at = now()
+        WHERE id = ${id} AND deleted_at IS NULL
+        RETURNING id
+      `
+      if (updated.length === 0) {
+        return { id, outcome: 'skipped', reason: 'CONFLICT', message: '资源已被并发删除' }
+      }
+
+      await this.audit.write({
+        actorId: actor.id,
+        actorName: actor.name,
+        action: 'resource.delete',
+        targetType: 'resource',
+        targetId: id,
+        result: 'success',
+        detail: { status: row.status, via: 'bulk' },
+      })
+      return { id, outcome: 'deleted', reason: null, message: '已移入回收站' }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误'
+      // 失败也留痕：批量里"这一条为什么没删掉"必须能从审计里查得到。
+      // `AuditService.write` 自己吞掉写失败，不会盖掉这里的真实原因。
+      await this.audit.write({
+        actorId: actor.id,
+        actorName: actor.name,
+        action: 'resource.delete',
+        targetType: 'resource',
+        targetId: id,
+        result: 'failed',
+        detail: { via: 'bulk', reason: message },
+      })
+      return { id, outcome: 'failed', reason: 'ERROR', message }
+    }
+  }
+
+  /**
    * 恢复。
    *
    * 原目录已被删除时**明确报错**，而不是把资源恢复到一个看不见的地方 ——
@@ -828,32 +977,77 @@ export class ResourcesService {
 
   /**
    * 永久删除：**数据库行 + 对象存储文件 + 审计**，三件都必须真的发生。
-   * 只允许 ADMIN（`resource.purge` 是全平台能力，实际上只有管理员持有）。
+   *
+   * 生命周期文档第 11 行：`软删除 → 永久删除`，门槛是 `resource.purge`（仅 ADMIN）。
+   * 所以这里有两道**服务端**约束，缺一不可：
+   *
+   *   ① 身份：只有超级管理员。控制器上已有 `@RequireSuperAdmin()`，
+   *      这里再判一次是**纵深防御** —— 任何直接调 service 的路径也绕不过去。
+   *   ② 状态：**只处理回收站里的资源**（`deleted_at IS NOT NULL`）。
+   *      以前传的是 `allowDeleted: true`，那是"允许"而不是"要求"，
+   *      于是没进回收站的资源也能被一步抹掉，正好绕过软删除这一步。
+   *
+   * ── 存储一致性（2026-10-12 修复）─────────────────────────────────────────
+   * 修复前这段有三个叠加缺陷：
+   *   · `head()` / `delete()` 都是 `async`，却**没有 await** ——
+   *     `Promise !== null` 恒为真（那个判断形同虚设），删对象在后台异步跑，
+   *     返回的 Promise 被丢弃（失败会变成 unhandled rejection）；
+   *   · `catch {}` **吞掉所有异常**，把"存储不可用 / 权限错误"
+   *     一律当成"对象不存在"放行；
+   *   · 于是**对象没删掉，数据库记录却已经删了** ——
+   *     R2 上留下永远无法回收的孤儿文件（生命周期文档明令禁止），
+   *     而界面显示的是"删除成功"。
+   *
+   * 现在的规则（与 `files.service` 那条注释同一条）：
+   *   1. **先删对象，再删数据库行**。反过来则存储失败时记录已删，孤儿无人认领。
+   *   2. `head()` 返回 `null` = 对象本就不在 → **幂等**，跳过并继续；
+   *      `head()` / `delete()` **抛异常** = 真实故障 → 整体失败，不碰数据库。
+   *   3. 删完数据库行后**回查对象是否真的不在了** —— 把"承诺"变成"核验"。
    */
   async purge(actor: AuthUser, id: string) {
+    this.authz.assertSuperAdmin(actor, '永久删除资源')
+
     const row = await this.requireResource(id, { allowDeleted: true })
+    await this.assertCanActOn(actor, 'resource.delete.own', row)
+
+    if (row.deleted_at === null) {
+      throw AppError.conflict(
+        '只能永久删除回收站中的资源：请先删除（进回收站）再永久删除',
+        'ILLEGAL_TRANSITION',
+      )
+    }
+
     const files = await this.sql<{ storage_key: string }[]>`
       SELECT storage_key FROM resource_files WHERE resource_id = ${id}
     `
 
+    // ① 先把对象删干净。任何一步抛异常都在这里中止 —— 数据库记录保持不动。
     let removedObjects = 0
+    let alreadyMissing = 0
     for (const f of files) {
-      try {
-        if (this.storage.head(f.storage_key) !== null) {
-          this.storage.delete(f.storage_key)
-          removedObjects += 1
-        }
-      } catch {
-        // 对象不存在不算失败：目标是"删干净"，而不是"必须删到东西"。
+      const stat = await this.storage.head(f.storage_key)
+      if (stat === null) {
+        // 对象本来就不在：这是**幂等**情形（上次删到一半、或人工清理过），
+        // 不是故障。只有这一种情况允许继续。
+        alreadyMissing += 1
+        continue
       }
+      await this.storage.delete(f.storage_key)
+      removedObjects += 1
     }
 
+    // ② 条件删除数据库行。影响 0 行 → 报错，绝不写"成功"。
     const deleted = await this.sql<{ id: string }[]>`
       DELETE FROM resources WHERE id = ${id} RETURNING id
     `
     if (deleted.length === 0) {
-      // 条件删除影响 0 行 → 报错，绝不写"成功"。
       throw AppError.conflict('永久删除没有生效（资源可能已被删除）', 'CONFLICT')
+    }
+
+    // ③ 回查：数据库记录已删，关联对象是不是真的不在了。
+    const leftover: string[] = []
+    for (const f of files) {
+      if ((await this.storage.head(f.storage_key)) !== null) leftover.push(f.storage_key)
     }
 
     await this.audit.write({
@@ -862,9 +1056,25 @@ export class ResourcesService {
       action: 'resource.purge',
       targetType: 'resource',
       targetId: id,
-      result: 'success',
-      detail: { title: row.title, removedFiles: files.length, removedObjects },
+      // 核验没过就不写 success —— 审计说"成功"而桶里还有东西，是最坏的一种记录。
+      result: leftover.length === 0 ? 'success' : 'failed',
+      detail: {
+        title: row.title,
+        removedFiles: files.length,
+        removedObjects,
+        alreadyMissing,
+        leftoverObjects: leftover.length,
+      },
     })
+
+    if (leftover.length > 0) {
+      // 记录已删但对象仍在：如实报错。返回"成功"会把孤儿的排查线索一起丢掉。
+      throw AppError.serviceUnavailable(
+        `资源记录已永久删除，但有 ${leftover.length} 个文件对象未能确认清理，请检查对象存储`,
+        'STORAGE_UNAVAILABLE',
+      )
+    }
+
     return { ok: true, removedFiles: files.length, removedObjects }
   }
 

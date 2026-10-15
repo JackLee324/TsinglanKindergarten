@@ -1,13 +1,19 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common'
 import { ResourcesService, type ResourceFilters } from './resources.service'
 import {
+  BulkDeleteResourcesDto,
   CreateResourceDto,
   ListResourcesDto,
   RecallResourceDto,
   ReviewResourceDto,
   UpdateResourceDto,
 } from './resources.dto'
-import { CurrentUser, DirectoryScope, RequirePermission } from '../common/decorators'
+import {
+  CurrentUser,
+  DirectoryScope,
+  RequirePermission,
+  RequireSuperAdmin,
+} from '../common/decorators'
 import type { AuthUser } from '../common/auth-user'
 import type { ResourceStatus } from '../../shared/resource-status'
 
@@ -68,6 +74,30 @@ export class ResourcesController {
       page: query.page ?? 1,
       pageSize: query.pageSize ?? 20,
     })
+  }
+
+  /**
+   * 批量**软**删除（进回收站、**可恢复**）。超级管理员专用。
+   *
+   * 两层门槛，都在服务端（与 `users.controller` 同一套写法）：
+   *   1. `@RequirePermission('resource.delete.own')` —— 声明"这是删除动作"；
+   *   2. `@RequireSuperAdmin()` —— 真正的门槛：只有超级管理员能调。
+   *
+   * WHY 必须两层：`resource.delete.own` 是**可授予**的权限。只靠第一层时，
+   * 任何一个拿到它的老师都能批量删掉**别人**的资源（界面上没有入口挡不住直接调 API）。
+   * service 里还会再调一次 `assertSuperAdmin()` —— 纵深防御，见 `bulkSoftDelete`。
+   *
+   * ⚠️ 这是**软**删除：只写 `deleted_at`，不碰对象存储、不删审核历史。
+   *    永久删除是另一个接口（`POST :id/purge`），门槛更高。
+   *
+   * 路由声明在 `:id/...` 之前：`bulk-delete` 是静态段，
+   * 放在后面会被 `:id` 抢先匹配（与 `mine` 的处理同一个原因）。
+   */
+  @Post('bulk-delete')
+  @RequirePermission('resource.delete.own')
+  @RequireSuperAdmin()
+  async bulkDelete(@CurrentUser() actor: AuthUser, @Body() dto: BulkDeleteResourcesDto) {
+    return this.resources.bulkSoftDelete(actor, dto.ids)
   }
 
   @Get('recycle-bin')
@@ -157,9 +187,25 @@ export class ResourcesController {
     return this.resources.restore(actor, id)
   }
 
-  /** 永久删除：数据库 + 对象存储 + 审计。 */
+  /**
+   * 永久删除（数据库行 + 对象存储文件 + 审计）。
+   *
+   * ⚠️ **两层门槛缺一不可**（修复于 2026-10-12 的越权缺口）：
+   *   1. `@RequirePermission('resource.delete.own')` —— 声明"这是删除动作"；
+   *   2. `@RequireSuperAdmin()` —— 真正的门槛。
+   *
+   * 修复前这里**只有第 1 层**：`resource.delete.own` 是可授予的权限，
+   * 于是任何持有它的老师都能直接 `POST /api/resources/:id/purge`
+   * 把自己（以及通过目录范围能触及）的资源**永久抹掉**，包括对象存储里的文件 ——
+   * 这与 `RESOURCE_LIFECYCLE.md` 第 11 行「`resource.purge`（仅 ADMIN）」不符。
+   * 界面上没有这个按钮**不能**作为安全依据：直接构造请求一样能打进来。
+   *
+   * service 层（`ResourcesService.purge`）也会再调一次 `assertSuperAdmin()`,
+   * 所以就算有人绕过控制器直接调 service，门槛仍在。
+   */
   @Post(':id/purge')
   @RequirePermission('resource.delete.own')
+  @RequireSuperAdmin()
   @DirectoryScope({ kind: 'resource', param: 'id' })
   async purge(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
     return this.resources.purge(actor, id)

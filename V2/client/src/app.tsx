@@ -14,6 +14,7 @@ import { ReviewQueuePage } from './pages/ReviewQueuePage'
 import { AdminUsersPage } from './pages/AdminUsersPage'
 import { AdminPermissionsPage } from './pages/AdminPermissionsPage'
 import { AdminAuditPage } from './pages/AdminAuditPage'
+import { AdminResourcesPage } from './pages/AdminResourcesPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { Spinner } from './components/ui/Spinner'
 import { EmptyState } from './components/ui/EmptyState'
@@ -67,6 +68,14 @@ export function App() {
               <Route path="admin/users" element={<AdminUsersPage />} />
               <Route path="admin/permissions" element={<AdminPermissionsPage />} />
               <Route path="admin/audit" element={<AdminAuditPage />} />
+              {/*
+                全局资源管理（超级管理员）。
+                路由本身不做权限判断 —— 页面内部按服务端的
+                `capabilities.canManageAllResources` 显示"没有权限"，
+                而真正的门槛在后端（列表走统一授权，批量/永久删除要求 SuperAdmin）。
+                在这里加一层前端守卫只会造成"前端以为拦住了"的错觉。
+              */}
+              <Route path="admin/resources" element={<AdminResourcesPage />} />
               <Route
                 path="admin/directories"
                 element={

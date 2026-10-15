@@ -1,4 +1,7 @@
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
   IsBoolean,
   Matches,
   IsIn,
@@ -13,6 +16,29 @@ import {
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import { RESOURCE_STATUSES } from '../../shared/resource-status'
+
+/** 单次批量软删除的上限。超过就拒绝整批，而不是悄悄截断。 */
+export const MAX_BULK_DELETE = 100
+
+/**
+ * 批量**软**删除的入参。
+ *
+ * 只接受一批资源 ID。输入层面的错误在这一层全部挡掉（fail closed）：
+ *   · 不是数组 / 空数组          → 400
+ *   · 有条目不是 UUID v4         → 400（`each: true` 逐条校验）
+ *   · 超过 `MAX_BULK_DELETE`     → 400（**不截断**：悄悄只删前 100 条
+ *                                   会让调用方以为全删了）
+ *
+ * **重复 ID 不在这里拒绝**，而是交给 service 去重并在结果里如实说明 ——
+ * "重复"是调用方自己就能修正的输入瑕疵，没必要让整批失败。
+ */
+export class BulkDeleteResourcesDto {
+  @IsArray({ message: 'ids 必须是数组' })
+  @ArrayNotEmpty({ message: '请至少选择一条资源' })
+  @ArrayMaxSize(MAX_BULK_DELETE, { message: `单次最多删除 ${MAX_BULK_DELETE} 条资源` })
+  @IsUUID('4', { each: true, message: '资源 ID 不合法' })
+  ids!: string[]
+}
 
 export class CreateResourceDto {
   /**
