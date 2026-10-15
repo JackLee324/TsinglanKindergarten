@@ -215,7 +215,7 @@ describe('§5.1 永久删除只有超级管理员可以做', () => {
 
     const res = await admin.post(`/api/resources/${id}/purge`)
     assert.equal(res.status, 409, `应当 409，实际 ${res.status}：${JSON.stringify(res.data)}`)
-    assert.match(JSON.stringify(res.data), /回收站|ILLEGAL_TRANSITION/)
+    assert.match(JSON.stringify(res.data), /回收站|RESOURCE_NOT_IN_RECYCLE_BIN/)
     assert.equal(await resourceExists(id), true)
     assert.equal(await objectExists(key), true, '被拒的 purge 不能顺手把对象删了')
   })

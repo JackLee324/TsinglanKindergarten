@@ -214,7 +214,8 @@ export function AdminResourcesPage() {
             资源管理
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            平台上的**全部**资源（含别人上传的草稿、待审核、已退回）。共 {total} 条。
+            平台上的<strong className="text-foreground">全部</strong>资源（含别人上传的草稿、待审核、
+            已退回）。共 {total} 条。
           </p>
         </div>
         <Button
@@ -490,7 +491,8 @@ export function AdminResourcesPage() {
           即将删除 <strong>{selected.size}</strong> 条资源。
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          这是**可恢复**的操作：资源会被移入回收站，文件、审核记录与审计都会保留，之后可以恢复。
+          这是<strong className="text-foreground">可恢复</strong>的操作：资源会被移入回收站，文件、
+          审核记录与审计都会保留，之后可以恢复。
           {selected.size > MAX_BULK_DELETE && (
             <span className="mt-1 block text-destructive">
               一次最多删除 {MAX_BULK_DELETE} 条，请分批操作。
@@ -555,6 +557,9 @@ export function AdminResourcesPage() {
                 </li>
               ))}
             </ul>
+            <p className="mt-3 text-sm text-muted-foreground" data-testid="admin-bulk-recover-hint">
+              删除是可恢复的：到「我的资源 → 回收站」就能看到并恢复它们。
+            </p>
             <div className="mt-5 flex justify-end">
               <Button type="button" onClick={() => setBulkResult(null)} data-testid="admin-bulk-result-close">
                 知道了

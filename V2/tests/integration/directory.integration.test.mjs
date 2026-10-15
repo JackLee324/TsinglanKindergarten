@@ -289,9 +289,19 @@ describe('删除保护', () => {
     const still = await admin.get(`/api/resources/${created.data.id}`)
     assert.equal(still.status, 200)
 
-    await admin.post(`/api/resources/${created.data.id}/purge`)
+    // 永久删除的契约（2026-10-12 加固）：**必须先软删除（进回收站）再 purge**。
+    // 于是"永久删除"永远是「可恢复的那一步」之后的第二步，而不是一次调用
+    // 就能把线上正在用的东西抹掉。这两条断言把该契约钉住：
+    //   · 未进回收站 → 409（另有专门用例，见 admin-resource-management）
+    //   · 进回收站之后 → 真的删掉，GET 读不到
+    const softDeleted = await admin.del(`/api/resources/${created.data.id}`)
+    assert.equal(softDeleted.status, 200, JSON.stringify(softDeleted.data))
+
+    const purged = await admin.post(`/api/resources/${created.data.id}/purge`)
+    assert.equal(purged.status, 201, JSON.stringify(purged.data))
+
     const gone = await admin.get(`/api/resources/${created.data.id}`)
-    assert.equal(gone.status, 404)
+    assert.equal(gone.status, 404, '永久删除之后必须真的读不到了')
 
     // 清干净之后可以删（这里验证的是"空目录可删"这条路径本身是通的）
     const removable = await admin.post('/api/directories', {
@@ -484,8 +494,18 @@ describe('阶段 3：删除保护（三种保护，缺一不可）', () => {
     assert.equal(res.status, 409, JSON.stringify(res.data))
     assert.equal(res.data.code, 'DIRECTORY_HAS_RESOURCES')
 
-    // 清干净：先永久删资源，再删目录
-    await admin.post(`/api/resources/${created.data.id}/purge`)
+    // 清干净：先软删除（进回收站）→ 再永久删资源 → 才能删目录。
+    // 这里顺带钉住"目录的删除保护把**回收站里**的资源也算上"：
+    // 只软删除是不够的，必须真的 purge 掉，目录才允许删除。
+    const softDeleted = await admin.del(`/api/resources/${created.data.id}`)
+    assert.equal(softDeleted.status, 200, JSON.stringify(softDeleted.data))
+
+    const stillBlocked = await admin.del(`/api/directories/${holder.data.id}`)
+    assert.equal(stillBlocked.status, 409, '回收站里的资源仍然算"这个目录下还有资源"')
+
+    const purged = await admin.post(`/api/resources/${created.data.id}/purge`)
+    assert.equal(purged.status, 201, JSON.stringify(purged.data))
+
     const after = await admin.del(`/api/directories/${holder.data.id}`)
     assert.equal(after.status, 200, JSON.stringify(after.data))
   })

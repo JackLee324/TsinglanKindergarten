@@ -364,8 +364,30 @@ export class ResourcesService {
         SELECT r.*
         FROM resources r
         LEFT JOIN dir_path dp ON dp.id = r.directory_id
-        WHERE (${opt.recycled} = true AND r.deleted_at IS NOT NULL)
-           OR (${opt.recycled} = false AND r.deleted_at IS NULL)
+        WHERE /*
+                ⚠️ 「在不在回收站」必须写成**一个**布尔比较，不能写成两个析取项。
+                2026-10-15 之前这里是：
+
+                  WHERE (recycled = true AND deleted_at IS NOT NULL)
+                     OR (recycled = false AND deleted_at IS NULL)
+                    AND (...目录范围...) AND (...上传者...) AND (...可见性...)
+
+                SQL 里 AND 比 OR 结合得紧，于是它实际等价于
+                「回收站那一支**绕过后面所有过滤条件**」——
+                老师在自己的回收站里能看到**全平台**所有被删的资源
+                （标题、目录路径、上传者姓名），目录范围与可见性判定一条都没生效。
+                普通列表走 recycled = false 那一支（第一个析取项恒假），
+                所以只有回收站这一条路是坏的，一直没被发现。
+                （回归：tests/integration/my-resources.integration.test.mjs
+                  「回收站也只看得到自己的」）
+
+                写成相等比较之后，"哪个分支"与"后面的过滤条件"之间
+                不再有优先级可踩 —— 这类缺陷在结构上消失了。
+
+                ⚠️ 这段注释是**模板字符串里的文本**，不能出现反引号
+                （会提前结束模板字符串，报一堆莫名其妙的 TS1005）。
+              */
+              (r.deleted_at IS NOT NULL) = ${opt.recycled}
           AND (${opt.scope}::uuid[] IS NULL OR r.directory_id = ANY(${opt.scope}::uuid[]))
           AND (${opt.directoryIds}::uuid[] IS NULL OR r.directory_id = ANY(${opt.directoryIds}::uuid[]))
           AND (${opt.status}::text IS NULL OR r.status = ${opt.status}::text)
@@ -484,8 +506,8 @@ export class ResourcesService {
       )
       SELECT count(*)::int AS n
       FROM resources r
-      WHERE (${opt.recycled} = true AND r.deleted_at IS NOT NULL)
-         OR (${opt.recycled} = false AND r.deleted_at IS NULL)
+      WHERE -- 同上：回收站判定必须是**一个**布尔比较，见 queryResources 里的说明
+            (r.deleted_at IS NOT NULL) = ${opt.recycled}
         AND (${opt.scope}::uuid[] IS NULL OR r.directory_id = ANY(${opt.scope}::uuid[]))
         AND (${opt.directoryIds}::uuid[] IS NULL OR r.directory_id = ANY(${opt.directoryIds}::uuid[]))
         AND (${opt.status}::text IS NULL OR r.status = ${opt.status}::text)
@@ -1010,10 +1032,21 @@ export class ResourcesService {
     const row = await this.requireResource(id, { allowDeleted: true })
     await this.assertCanActOn(actor, 'resource.delete.own', row)
 
+    /*
+      「永久删除」的前置条件：目标必须**已经在回收站里**（`deleted_at` 非空）。
+
+      为什么要这条：`purge` 是不可逆的（删行 + 删对象）。业主的规则是
+      「已发布的资源要先撤回、再删除」——那次删除是软删除、**可恢复**的。
+      有了这条前置条件，"永久删除"就永远是**软删除之后的第二步**，
+      而不是一次调用就能把线上正在用的东西直接抹掉。
+
+      界面侧不提供 purge 入口（阶段 8 的范围决定），所以这条只影响直接调
+      API 的运维脚本：先 `DELETE /api/resources/:id`，再 `POST :id/purge`。
+    */
     if (row.deleted_at === null) {
       throw AppError.conflict(
-        '只能永久删除回收站中的资源：请先删除（进回收站）再永久删除',
-        'ILLEGAL_TRANSITION',
+        '只能永久删除回收站里的资源：请先删除（进回收站），再永久删除',
+        'RESOURCE_NOT_IN_RECYCLE_BIN',
       )
     }
 

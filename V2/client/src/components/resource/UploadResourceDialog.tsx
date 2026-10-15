@@ -203,7 +203,8 @@ export function UploadResourceDialog({
               ))}
             </select>
             <p className="mt-2 text-xs text-muted-foreground">
-              只列出**可以放资源**且你**有权上传**的目录（由服务端判定）。
+              只列出<strong className="text-foreground">可以放资源</strong>且你
+              <strong className="text-foreground">有权上传</strong>的目录（由服务端判定）。
             </p>
           </div>
         )}
