@@ -1,4 +1,5 @@
-import { Controller, Get, Inject } from '@nestjs/common'
+import { Controller, Get, HttpStatus, Inject, Res } from '@nestjs/common'
+import type { Response } from 'express'
 import type { Sql } from 'postgres'
 import { SQL } from './db/database.module'
 import { Public, RequirePermission } from './common/decorators'
@@ -42,15 +43,32 @@ export class HealthController {
     return this.storage.health()
   }
 
-  /** 就绪检查：数据库真的能查。 */
+  /**
+   * 就绪检查：数据库真的能查。
+   *
+   * ⚠️ 这里**必须**用 503 表达"不可接流量"，不能用 200 + body 说 degraded。
+   * 原因很具体：负载均衡 / Render 健康检查 / K8s readinessProbe 这类探针
+   * **只看状态码**，不会解析 body。之前这个分支返回 200 + `{status:'degraded'}`，
+   * 于是数据库挂了、应用照样被判定"就绪"，流量被送进一个查不了库的实例。
+   * 这是"运行就绪性"级别的缺陷，不是文案问题。
+   *
+   * 为什么用 `@Res({passthrough:true})` 而不是抛 `ServiceUnavailableException`：
+   * 全局 `AppExceptionFilter` 会把 HttpException 的 body 重写成
+   * `{statusCode, code, message}`，`database` 这类**探针要读的字段会被丢掉**。
+   * 这里自己设状态码 + 返回结构化 body，既保住 503 语义，也保住字段可断言性。
+   */
   @Public()
   @Get('health/ready')
-  async ready() {
+  async ready(@Res({ passthrough: true }) res: Response) {
     try {
       await this.sql`SELECT 1 AS ok`
       return { status: 'ready', database: 'ok' }
     } catch (error) {
-      return { status: 'degraded', database: 'unreachable', detail: (error as Error).message }
+      // 非生产环境才带 detail（可能含 SQL 片段/主机名）；生产只给状态，避免内部信息外泄。
+      const detail =
+        process.env.NODE_ENV === 'production' ? undefined : (error as Error).message
+      res.status(HttpStatus.SERVICE_UNAVAILABLE)
+      return { status: 'unavailable', database: 'unreachable', detail }
     }
   }
 }

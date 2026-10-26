@@ -36,6 +36,7 @@ export const aiSiteRules = require(join(ROOT, 'dist/server/ai/site-rules.js'))
 export const aiQueryTerms = require(join(ROOT, 'dist/server/ai/query-terms.js'))
 export const aiPdf = require(join(ROOT, 'dist/server/ai/pdf.js'))
 export const aiPrompt = require(join(ROOT, 'dist/server/ai/prompt.js'))
+export const healthController = require(join(ROOT, 'dist/server/health.controller.js'))
 
 /**
  * 迁移脚本（阶段 9）。
